@@ -19,7 +19,9 @@ const CONFIG = {
   VERSION: 'v23.0',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
-  ACCOUNT_PAUSE_MS: 8000, // extra pause between accounts
+  ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
+  ACCOUNT_BATCH_SIZE: 5,        // pause for longer every N accounts
+  ACCOUNT_BATCH_PAUSE_MS: 300000, // 5 min pause after every BATCH_SIZE accounts
   BACKOFF_BASE_MS: 20000,
   MAX_RETRIES: 5
 };
@@ -1085,8 +1087,15 @@ function mountGenerator(container) {
           progressBar.style.width = (base + pct / targetAccIds.length) + '%';
         });
         if (i < targetAccIds.length - 1) {
-          log(`⏳ Pausing ${CONFIG.ACCOUNT_PAUSE_MS / 1000}s before next account to avoid API rate limits…`, 'warning');
-          await sleep(CONFIG.ACCOUNT_PAUSE_MS);
+          const accountsDone = i + 1;
+          if (accountsDone % CONFIG.ACCOUNT_BATCH_SIZE === 0) {
+            const mins = CONFIG.ACCOUNT_BATCH_PAUSE_MS / 60000;
+            log(`⏳ Processed ${accountsDone} accounts — pausing ${mins} min to avoid FB rate limit…`, 'warning');
+            await sleep(CONFIG.ACCOUNT_BATCH_PAUSE_MS);
+          } else {
+            log(`⏳ Pausing ${CONFIG.ACCOUNT_PAUSE_MS / 1000}s before next account…`, 'warning');
+            await sleep(CONFIG.ACCOUNT_PAUSE_MS);
+          }
         }
       }
 
