@@ -5,34 +5,37 @@
 JS bookmarklet для Facebook Ads Manager — автоматизация правил паузирования/включения кампаний, column presets, аналитика, inspector. Генерирует FB API v23.0 autorules через adrules_library.
 
 **Статус:** Production  
-**Live:** http://192.248.190.182/install-page.html
+**Live (primary):** https://harvertalex.github.io/metactrl-pro/  
+**Live (backup):** http://192.248.190.182/
 
 ---
 
-## Сервер деплоя
+## Где живёт проект
+
+| Место | Адрес | Назначение |
+|-------|-------|-----------|
+| **GitHub** | https://github.com/harvertalex/metactrl-pro | Source of truth, git history |
+| **GitHub Pages** | https://harvertalex.github.io/metactrl-pro/ | Primary хостинг (HTTPS, CDN) |
+| **Локально** | `c:/Users/harve/claude-workspace/code/metactrl-pro/` | Разработка |
+| **Сервер backup** | `http://192.248.190.182/` | Fallback, tessa-bot |
+
+**Remote:** `https://github.com/harvertalex/metactrl-pro.git`  
+**Branch:** `main` — GitHub Pages деплоит автоматически при каждом пуше
+
+---
+
+## Сервер (backup)
 
 | Параметр | Значение |
 |----------|----------|
 | **IP** | `192.248.190.182` (tessa-bot) |
 | **SSH ключ** | `~/.ssh/tessa-bot` |
 | **Web root** | `/var/www/metactrl-pro` |
-| **Web server** | Apache2 + PHP 8.1/8.3 |
-| **OS** | Ubuntu |
-| **Доступ** | `http://192.248.190.182/install-page.html` |
-
-### SSH команды (если нужны ручные операции)
+| **Web server** | Apache2 |
 
 ```bash
-# Подключение к серверу
 ssh -i ~/.ssh/tessa-bot root@192.248.190.182
-
-# Проверка статуса Apache
-ssh -i ~/.ssh/tessa-bot root@192.248.190.182 "systemctl status apache2"
-
-# Перезагрузка Apache
 ssh -i ~/.ssh/tessa-bot root@192.248.190.182 "systemctl restart apache2"
-
-# Просмотр логов
 ssh -i ~/.ssh/tessa-bot root@192.248.190.182 "tail -f /var/log/apache2/metactrl-pro-error.log"
 ```
 
@@ -42,54 +45,51 @@ ssh -i ~/.ssh/tessa-bot root@192.248.190.182 "tail -f /var/log/apache2/metactrl-
 
 ### 1. Изменения в коде (bookmarklet.js)
 
-Когда меняем логику правил, UI, или конфиг:
-
 ```bash
 # Отредактировать код
 code/metactrl-pro/bookmarklet.js
 
-# Тестировать локально в браузере через install-page.html
+# Тестировать локально в браузере через index.html
 ```
 
 ### 2. Регенерация Base64 (обязательно перед деплоем)
 
-Bookmarklet работает как B64-кодированная строка в install-page.html.
+Bookmarklet работает как B64-кодированная строка. B64 хранится в **двух файлах**: `install-page.html` и `index.html`.
 
 ```bash
 cd code/metactrl-pro && node -e "
 const fs = require('fs');
 const code = fs.readFileSync('bookmarklet.js', 'utf8');
 const b64 = Buffer.from(code, 'utf8').toString('base64');
-const html = fs.readFileSync('install-page.html', 'utf8');
-fs.writeFileSync('install-page.html', html.replace(/var B64 = '[^']*'/, \"var B64 = '\" + b64 + \"'\"), 'utf8');
-console.log('✓ B64 updated, length:', b64.length);
+const tag = \"var B64 = '\" + b64 + \"'\";
+['install-page.html', 'index.html'].forEach(f => {
+  fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/var B64 = '[^']*'/, tag), 'utf8');
+});
+console.log('B64 updated in both files, length:', b64.length);
 "
 ```
 
-**Или используй скрипт:** после каждого изменения bookmarklet.js запусти команду выше.
+### 3. Пуш на GitHub → GitHub Pages (primary)
 
-### 3. Деплой на сервер
+```bash
+cd code/metactrl-pro
+git add bookmarklet.js install-page.html index.html
+git commit -m "Update bookmarklet: [описание]"
+git push
+# GitHub Pages задеплоит за 1-2 минуты автоматически
+```
+
+### 4. Опционально: обновить backup сервер
 
 ```bash
 cd code/metactrl-pro && bun deploy.ts
 ```
 
-**Что делает:**
-- Проверяет SSH доступ
-- Загружает все файлы на `/var/www/metactrl-pro`
-- Устанавливает права доступа (www-data)
-- Перезагружает Apache
-- Проверяет что сайт доступен
+### 5. Проверка
 
-**Результат:** Сайт обновляется на http://192.248.190.182/install-page.html
-
-### 4. Проверка после деплоя
-
-Просто открыть http://192.248.190.182/ в браузере и убедиться что install-page.html загружается.
-
-Или проверить через SSH:
 ```bash
-ssh -i ~/.ssh/tessa-bot root@192.248.190.182 "curl -s http://localhost/install-page.html | head -c 200"
+curl -s -o /dev/null -w "%{http_code}" https://harvertalex.github.io/metactrl-pro/
+# 200 = OK
 ```
 
 ---

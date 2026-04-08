@@ -17,10 +17,9 @@ Thumbs.db
 *.swp
 *.swo
 
-# Deployment
+# Deployment (server scripts — not needed for GitHub Pages users)
 deploy-check.ts
 deploy.ts
-deploy.bat
 makefile.sh
 
 # Node/Bun
