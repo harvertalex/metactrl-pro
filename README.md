@@ -11,7 +11,7 @@
 
 ## Установка
 
-1. Открыть http://192.248.190.182/install-page.html
+1. Открыть 
 2. Нажать "Copy Bookmarklet"
 3. Создать новую закладку в браузере
 4. Вставить код в URL закладки
@@ -121,9 +121,6 @@ A: Да — используй кнопку **Export** в Manager, потом **
 
 Контекст проекта: `code/metactrl-pro/CLAUDE.md`
 Быстрый старт: `code/metactrl-pro/QUICKSTART.md`
-
-Сервер: http://192.248.190.182/
-SSH: `ssh -i ~/.ssh/tessa-bot root@192.248.190.182`
 
 ---
 
