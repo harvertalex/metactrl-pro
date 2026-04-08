@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Deployment
+deploy-check.ts
+deploy.ts
+deploy.bat
+makefile.sh
+
+# Node/Bun
+.bun/
+dist/
+build/
+
+# Temp
+*.tmp
+.env
+.env.local
