@@ -1610,7 +1610,7 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
     if (exec) {
       await addRule(
         `ROAS Cut ${artype} if website_purchase_roas < ${roas.budget.roasLowCut}`,
-        [...roasBase, { field:'website_purchase_roas',operator:'LESS_THAN',value:roas.budget.roasLowCut }],
+        [...roasBase, { field:'spent',operator:'GREATER_THAN',value:roas.budget.roasMinSpend }, { field:'website_purchase_roas',operator:'LESS_THAN',value:roas.budget.roasLowCut }],
         exec, scheduleAtHours([13, 16])
       );
     }
@@ -1653,7 +1653,7 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
     } else {
       await addRule(
         `UNPAUSE ${artype} — Cheap CPL ≤ ${(cheapCPL/100).toFixed(2)} & no regs/purch`,
-        kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'link_click',operator:'GREATER_THAN',value:2 },{ field:'offsite_conversion.fb_pixel_lead',operator:'GREATER_THAN',value:0 },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'LESS_THAN',value:1 },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },{ field:'cost_per_lead_fb',operator:'LESS_THAN',value:cheapCPL },tdy]),
+        kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_lead',operator:'GREATER_THAN',value:0 },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'LESS_THAN',value:1 },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },{ field:'cost_per_lead_fb',operator:'LESS_THAN',value:cheapCPL },tdy]),
         execUnpause(), guardedUnpauseSchedule
       );
     }
@@ -1665,7 +1665,7 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
     } else {
       await addRule(
         `UNPAUSE ${artype} — Cheap CPA(Reg) ≤ ${(cheapCPA/100).toFixed(2)} & no purchases`,
-        kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'link_click',operator:'GREATER_THAN',value:3 },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'GREATER_THAN',value:0 },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },{ field:'cost_per_complete_registration_fb',operator:'LESS_THAN',value:cheapCPA },tdy]),
+        kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'GREATER_THAN',value:0 },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },{ field:'cost_per_complete_registration_fb',operator:'LESS_THAN',value:cheapCPA },tdy]),
         execUnpause(), guardedUnpauseSchedule
       );
     }
@@ -1677,7 +1677,7 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
     } else {
       await addRule(
         `UNPAUSE ${artype} — Cheap CPP ≤ ${(cheapCPP/100).toFixed(2)}`,
-        kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'link_click',operator:'GREATER_THAN',value:5 },{ field:'offsite_conversion.fb_pixel_purchase',operator:'GREATER_THAN',value:0 },{ field:'cost_per_purchase_fb',operator:'LESS_THAN',value:cheapCPP },tdy]),
+        kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_purchase',operator:'GREATER_THAN',value:0 },{ field:'cost_per_purchase_fb',operator:'LESS_THAN',value:cheapCPP },tdy]),
         execUnpause(), guardedUnpauseSchedule
       );
     }
@@ -1710,7 +1710,7 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
         execUnpause(), guardedUnpauseSchedule
       );
     } else {
-      const spendGuard = Math.round(maxLeadCost * 1.5);
+      const spendGuard = Math.round(maxLeadCost * 1.5); // matches TurnOff Without Leads threshold
       await addRule(
         `UNPAUSE ${artype} — Leads>0 & spent<${(spendGuard/100).toFixed(2)}`,
         kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_lead',operator:'GREATER_THAN',value:0 },{ field:'spent',operator:'LESS_THAN',value:spendGuard },tdy]),
@@ -1727,7 +1727,7 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
         execUnpause(), guardedUnpauseSchedule
       );
     } else {
-      const spendGuard = Math.round(maxCPARegistration * 1.5);
+      const spendGuard = Math.round(maxCPARegistration * 2.5); // matches TurnOff Expensive Registrations threshold
       await addRule(
         `UNPAUSE ${artype} — Reg>0 & spent<${(spendGuard/100).toFixed(2)}`,
         kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'GREATER_THAN',value:0 },{ field:'spent',operator:'LESS_THAN',value:spendGuard },tdy]),
@@ -1744,7 +1744,7 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
         execUnpause(), guardedUnpauseSchedule
       );
     } else {
-      const spendGuard = Math.round(maxDepositCost * 1.5);
+      const spendGuard = Math.round(maxDepositCost * 2.5); // matches TurnOff Expensive Purchases threshold
       await addRule(
         `UNPAUSE ${artype} — Purchases>0 & spent<${(spendGuard/100).toFixed(2)}`,
         kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_purchase',operator:'GREATER_THAN',value:0 },{ field:'spent',operator:'LESS_THAN',value:spendGuard },tdy]),
