@@ -1345,8 +1345,8 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
   if (selectedRules.includes('TurnOff Without Leads')) {
     const spendForLeadRule = Math.round(maxLeadCost * 1.5);
     await addRule(
-      `TurnOff ${artype} Without Leads (3+ clicks & spend≥${(spendForLeadRule/100).toFixed(2)})`,
-      kw([{ field:'link_click',operator:'GREATER_THAN',value:2 },{ field:'spent',operator:'GREATER_THAN',value:spendForLeadRule },{ field:'offsite_conversion.fb_pixel_lead',operator:'LESS_THAN',value:1 },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
+      `TurnOff ${artype} Without Leads (spend≥${(spendForLeadRule/100).toFixed(2)} & 0 leads)`,
+      kw([{ field:'spent',operator:'GREATER_THAN',value:spendForLeadRule },{ field:'offsite_conversion.fb_pixel_lead',operator:'LESS_THAN',value:1 },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
       execPause(), schedSemi
     );
   }
@@ -1367,8 +1367,8 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
   if (selectedRules.includes('TurnOff Without Registrations')) {
     const spendForRegRule = Math.round(maxCPARegistration * 1.5);
     await addRule(
-      `TurnOff ${artype} Without Registrations (3+ clicks, 2+ leads & spend≥${(spendForRegRule/100).toFixed(2)})`,
-      kw([{ field:'link_click',operator:'GREATER_THAN',value:2 },{ field:'offsite_conversion.fb_pixel_lead',operator:'GREATER_THAN',value:1 },{ field:'spent',operator:'GREATER_THAN',value:spendForRegRule },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'LESS_THAN',value:1 },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
+      `TurnOff ${artype} Without Registrations (1+ lead & spend≥${(spendForRegRule/100).toFixed(2)} & 0 regs)`,
+      kw([{ field:'offsite_conversion.fb_pixel_lead',operator:'GREATER_THAN',value:0 },{ field:'spent',operator:'GREATER_THAN',value:spendForRegRule },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'LESS_THAN',value:1 },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
       execPause(), schedSemi
     );
   }
