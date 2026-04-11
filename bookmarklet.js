@@ -956,15 +956,21 @@ function mountGenerator(container) {
     ['TurnOff High Impressions No Leads',                     'Pause if N+ impressions & min spend but zero leads — traffic without conversions', true],
     ['TurnOff High Impressions No Purchases',                 'Pause if N+ impressions & min spend but zero purchases — traffic without deposits', true],
     ['TurnOff Daily Budget Exhaustion',                       'Pause when total spend today exceeds your set threshold — acts as a manual per-entity daily budget cap', true],
-    // ▶️ Resume / Unpause
-    ['__group__', '▶️ Resume / Unpause'],
-    ['TurnOn If Cheap Lead (CPL)',                            'Unpause when CPL is within recovery threshold of target', false],
-    ['TurnOn If Cheap Registration (CPA)',                    'Unpause when CPA(reg) is within recovery threshold', false],
-    ['TurnOn If Cheap Purchase (CPP)',                        'Unpause when CPP is within recovery threshold', false],
-    ['TurnOn If Clicks Present (>0)',                         'Unpause when clicks arrive with CPC within limit', false],
-    ['TurnOn If Leads Present (>0)',                          'Unpause when leads arrive at acceptable CPL', false],
-    ['TurnOn If Registrations Present (>0)',                  'Unpause when registrations arrive at acceptable CPA', false],
-    ['TurnOn If Purchases Present (>0)',                      'Unpause when purchases arrive at acceptable CPP', false],
+    // ▶️ Resume / Unpause — with cost check (CAMPAIGN only)
+    ['__group__', '▶️ Resume / Unpause — with cost check (CAMPAIGN only)'],
+    ['TurnOn If Cheap Lead (CPL)',                            'Unpause when CPL is within recovery threshold of target — CAMPAIGN only', false],
+    ['TurnOn If Cheap Registration (CPA)',                    'Unpause when CPA(reg) is within recovery threshold — CAMPAIGN only', false],
+    ['TurnOn If Cheap Purchase (CPP)',                        'Unpause when CPP is within recovery threshold — CAMPAIGN only', false],
+    ['TurnOn If Clicks Present (>0)',                         'Unpause when clicks arrive with CPC within limit — CAMPAIGN only', false],
+    ['TurnOn If Leads Present (>0)',                          'Unpause when leads arrive at acceptable CPL — CAMPAIGN only', false],
+    ['TurnOn If Registrations Present (>0)',                  'Unpause when registrations arrive at acceptable CPA — CAMPAIGN only', false],
+    ['TurnOn If Purchases Present (>0)',                      'Unpause when purchases arrive at acceptable CPP — CAMPAIGN only', false],
+    // ▶️ Resume / Unpause — by count only (all levels: CAMPAIGN / ADSET / AD)
+    ['__group__', '▶️ Resume / Unpause — by count only (CAMPAIGN / ADSET / AD)'],
+    ['TurnOn If Any Click (no cost check)',                   'Unpause when 1+ click appears — no cost condition, works on all levels', true],
+    ['TurnOn If Any Lead (no cost check)',                    'Unpause when 1+ lead appears — no cost condition, works on all levels', true],
+    ['TurnOn If Any Registration (no cost check)',            'Unpause when 1+ registration appears — no cost condition, works on all levels', true],
+    ['TurnOn If Any Purchase (no cost check)',                'Unpause when 1+ purchase appears — no cost condition, works on all levels', true],
     // 📅 Schedule
     ['__group__', '📅 Schedule'],
     ['TurnOn by Name at Time',                                'Enable entities whose name contains ON keyword at set time', false],
@@ -1664,6 +1670,39 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
         execUnpause(), guardedUnpauseSchedule
       );
     }
+  }
+
+  /* ------- Unpause by count only (all levels) ------- */
+  if (selectedRules.includes('TurnOn If Any Click (no cost check)')) {
+    await addRule(
+      `UNPAUSE ${artype} — 1+ click (no cost check)`,
+      kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'link_click',operator:'GREATER_THAN',value:0 },presetToday]),
+      execUnpause(), guardedUnpauseSchedule
+    );
+  }
+
+  if (selectedRules.includes('TurnOn If Any Lead (no cost check)')) {
+    await addRule(
+      `UNPAUSE ${artype} — 1+ lead (no cost check)`,
+      kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_lead',operator:'GREATER_THAN',value:0 },presetToday]),
+      execUnpause(), guardedUnpauseSchedule
+    );
+  }
+
+  if (selectedRules.includes('TurnOn If Any Registration (no cost check)')) {
+    await addRule(
+      `UNPAUSE ${artype} — 1+ registration (no cost check)`,
+      kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'GREATER_THAN',value:0 },presetToday]),
+      execUnpause(), guardedUnpauseSchedule
+    );
+  }
+
+  if (selectedRules.includes('TurnOn If Any Purchase (no cost check)')) {
+    await addRule(
+      `UNPAUSE ${artype} — 1+ purchase (no cost check)`,
+      kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_purchase',operator:'GREATER_THAN',value:0 },presetToday]),
+      execUnpause(), guardedUnpauseSchedule
+    );
   }
 
   /* ------- Budget boost on purchases ------- */
