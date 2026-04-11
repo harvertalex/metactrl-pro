@@ -994,6 +994,7 @@ function mountGenerator(container) {
     ['TurnOff Daily Budget Exhaustion',                       'Pause when total spend today exceeds your set threshold — acts as a manual per-entity daily budget cap', true],
     // ▶️ Resume / Unpause — smart (cost check on CAMPAIGN, spend guard on ADSET/AD)
     ['__group__', '▶️ Resume / Unpause — smart (cost on CAMPAIGN · spend guard on ADSET/AD)'],
+    ['TurnOn If Cheap Click (CPC)',                           'Unpause when CPC is within recovery threshold — CAMPAIGN only', false],
     ['TurnOn If Cheap Lead (CPL)',                            'Unpause when CPL is within recovery threshold of target — CAMPAIGN only', false],
     ['TurnOn If Cheap Registration (CPA)',                    'Unpause when CPA(reg) is within recovery threshold — CAMPAIGN only', false],
     ['TurnOn If Cheap Purchase (CPP)',                        'Unpause when CPP is within recovery threshold — CAMPAIGN only', false],
@@ -1640,6 +1641,19 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
   const cheapCPA = Math.round(maxCPARegistration * recoveryMult);
   const cheapCPP = Math.round(maxDepositCost     * recoveryMult);
   const tdy = presetToday;
+
+  if (selectedRules.includes('TurnOn If Cheap Click (CPC)')) {
+    if (artype !== 'CAMPAIGN') {
+      log(`⚠️ TurnOn If Cheap Click — skipped for ${artype}: FB API does not allow cost_per_link_click conditions on ADSET/AD level.`, 'warning');
+    } else {
+      const cheapCPC = Math.round(maxCPC * recoveryMult);
+      await addRule(
+        `UNPAUSE ${artype} — Cheap CPC ≤ ${(cheapCPC/100).toFixed(2)} & no leads/regs/purch`,
+        kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'link_click',operator:'GREATER_THAN',value:0 },{ field:'cost_per_link_click',operator:'LESS_THAN',value:cheapCPC },{ field:'offsite_conversion.fb_pixel_lead',operator:'LESS_THAN',value:1 },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'LESS_THAN',value:1 },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },tdy]),
+        execUnpause(), guardedUnpauseSchedule
+      );
+    }
+  }
 
   if (selectedRules.includes('TurnOn If Cheap Lead (CPL)')) {
     if (artype !== 'CAMPAIGN') {
