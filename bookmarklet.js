@@ -980,13 +980,13 @@ function mountGenerator(container) {
     // ⏸️ Pause / Protection
     ['__group__', '⏸️ Pause / Protection'],
     ['TurnOff Without Clicks with spent maxCPC',              '0 link clicks after spending max CPC budget', false],
-    ['TurnOff With Expensive CPC',                            'CPC > max & no conversions — срабатывает с 1-го клика', false],
+    ['TurnOff With Expensive CPC',                            'CAMPAIGN: CPC>max & no conversions. ADSET/AD: spent≥maxCPC×2 & clicks<2', false],
     ['TurnOff Without Leads',                                 '5+ clicks but zero leads today', false],
-    ['TurnOff With Expensive Leads and No Registrations or Purchase', 'CPL > max & no downstream conversions', false],
+    ['TurnOff With Expensive Leads and No Registrations or Purchase', 'CAMPAIGN: CPL>max & no regs/purch. ADSET/AD: spent≥maxCPL×1.5 & leads<2', false],
     ['TurnOff Without Registrations',                         '5+ leads but zero registrations', false],
-    ['TurnOff With Expensive Registrations',                  'CPA(reg) > max & no purchases — срабатывает с 3-й регистрации', false],
+    ['TurnOff With Expensive Registrations',                  'CAMPAIGN: CPA>max & 1+ reg & no purch. ADSET/AD: spent≥maxCPA×1.5 & regs<2', false],
     ['TurnOff Without Purchases',                             'Spent ≥ target CPP with zero purchases', false],
-    ['TurnOff With Expensive Purchases',                      'CPP > max AND ROAS < low — срабатывает с 1-й покупки', false],
+    ['TurnOff With Expensive Purchases',                      'CAMPAIGN: CPP>max & 1+ purchase. ADSET/AD: spent≥maxCPP & purchases<2', false],
     ['CTR Guard',                                             'Pause if CTR is too low after min spend — weak creative', true],
     ['Frequency Burn',                                        'Pause if frequency too high & no leads/purchases — audience fatigue', true],
     ['TurnOff High Impressions No Leads',                     'Pause if N+ impressions & min spend but zero leads — traffic without conversions', true],
@@ -1380,13 +1380,17 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
   }
 
   if (selectedRules.includes('TurnOff With Expensive CPC')) {
-    if (artype !== 'CAMPAIGN') {
-      log(`⚠️ TurnOff With Expensive CPC — skipped for ${artype}: FB API does not allow cost_per_link_click conditions on ADSET/AD level.`, 'warning');
-    } else {
-      const spendForCPCRule = maxCPC * 2;
+    const spendForCPCRule = maxCPC * 2;
+    if (artype === 'CAMPAIGN') {
       await addRule(
         `TurnOff ${artype} With Expensive CPC (CPC>${(maxCPC/100).toFixed(2)} & spend≥${(spendForCPCRule/100).toFixed(2)})`,
         kw([{ field:'link_click',operator:'GREATER_THAN',value:0 },{ field:'spent',operator:'GREATER_THAN',value:spendForCPCRule },{ field:'cost_per_link_click',operator:'GREATER_THAN',value:maxCPC },{ field:'offsite_conversion.fb_pixel_lead',operator:'LESS_THAN',value:1 },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'LESS_THAN',value:1 },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
+        execPause(), schedSemi
+      );
+    } else {
+      await addRule(
+        `TurnOff ${artype} With Expensive CPC (spent≥${(spendForCPCRule/100).toFixed(2)} & clicks<2)`,
+        kw([{ field:'spent',operator:'GREATER_THAN',value:spendForCPCRule },{ field:'link_click',operator:'LESS_THAN',value:2 },{ field:'offsite_conversion.fb_pixel_lead',operator:'LESS_THAN',value:1 },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'LESS_THAN',value:1 },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
         execPause(), schedSemi
       );
     }
@@ -1402,13 +1406,17 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
   }
 
   if (selectedRules.includes('TurnOff With Expensive Leads and No Registrations or Purchase')) {
-    if (artype !== 'CAMPAIGN') {
-      log(`⚠️ TurnOff With Expensive Leads — skipped for ${artype}: FB API does not allow cost_per_lead_fb conditions on ADSET/AD level.`, 'warning');
-    } else {
-      const spendForLeadRule = Math.round(maxLeadCost * 1.5);
+    const spendForLeadRule = Math.round(maxLeadCost * 1.5);
+    if (artype === 'CAMPAIGN') {
       await addRule(
         `TurnOff ${artype} With Expensive Leads (CPL>${(maxLeadCost/100).toFixed(2)} & spend≥${(spendForLeadRule/100).toFixed(2)})`,
         kw([{ field:'offsite_conversion.fb_pixel_lead',operator:'GREATER_THAN',value:1 },{ field:'spent',operator:'GREATER_THAN',value:spendForLeadRule },{ field:'cost_per_lead_fb',operator:'GREATER_THAN',value:maxLeadCost },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'LESS_THAN',value:1 },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
+        execPause(), schedSemi
+      );
+    } else {
+      await addRule(
+        `TurnOff ${artype} With Expensive Leads (spent≥${(spendForLeadRule/100).toFixed(2)} & leads<2 & no regs/purch)`,
+        kw([{ field:'spent',operator:'GREATER_THAN',value:spendForLeadRule },{ field:'offsite_conversion.fb_pixel_lead',operator:'LESS_THAN',value:2 },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'LESS_THAN',value:1 },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
         execPause(), schedSemi
       );
     }
@@ -1424,12 +1432,17 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
   }
 
   if (selectedRules.includes('TurnOff With Expensive Registrations')) {
-    if (artype !== 'CAMPAIGN') {
-      log(`⚠️ TurnOff With Expensive Registrations — skipped for ${artype}: FB API does not allow cost_per_complete_registration_fb conditions on ADSET/AD level.`, 'warning');
-    } else {
+    const spendForRegExpRule = Math.round(maxCPARegistration * 1.5);
+    if (artype === 'CAMPAIGN') {
       await addRule(
         `TurnOff ${artype} With Expensive Registrations (CPA>${(maxCPARegistration/100).toFixed(2)} & 1+ reg & no purchases)`,
         kw([{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'GREATER_THAN',value:0 },{ field:'cost_per_complete_registration_fb',operator:'GREATER_THAN',value:maxCPARegistration },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
+        execPause(), schedSemi
+      );
+    } else {
+      await addRule(
+        `TurnOff ${artype} With Expensive Registrations (spent≥${(spendForRegExpRule/100).toFixed(2)} & regs<2 & no purchases)`,
+        kw([{ field:'spent',operator:'GREATER_THAN',value:spendForRegExpRule },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'LESS_THAN',value:2 },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
         execPause(), schedSemi
       );
     }
@@ -1444,12 +1457,16 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
   }
 
   if (selectedRules.includes('TurnOff With Expensive Purchases')) {
-    if (artype !== 'CAMPAIGN') {
-      log(`⚠️ TurnOff With Expensive Purchases — skipped for ${artype}: FB API does not allow cost_per_purchase_fb / website_purchase_roas conditions on ADSET/AD level.`, 'warning');
-    } else {
+    if (artype === 'CAMPAIGN') {
       await addRule(
         `TurnOff ${artype} With Expensive Purchases (CPP>${(maxDepositCost/100).toFixed(2)} & 1+ purchase)`,
         kw([{ field:'offsite_conversion.fb_pixel_purchase',operator:'GREATER_THAN',value:0 },{ field:'cost_per_purchase_fb',operator:'GREATER_THAN',value:maxDepositCost },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
+        execPause(), schedSemi
+      );
+    } else {
+      await addRule(
+        `TurnOff ${artype} With Expensive Purchases (spent≥${(maxDepositCost/100).toFixed(2)} & purchases<2)`,
+        kw([{ field:'spent',operator:'GREATER_THAN',value:maxDepositCost },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:2 },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
         execPause(), schedSemi
       );
     }
