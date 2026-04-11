@@ -992,15 +992,15 @@ function mountGenerator(container) {
     ['TurnOff High Impressions No Leads',                     'Pause if N+ impressions & min spend but zero leads — traffic without conversions', true],
     ['TurnOff High Impressions No Purchases',                 'Pause if N+ impressions & min spend but zero purchases — traffic without deposits', true],
     ['TurnOff Daily Budget Exhaustion',                       'Pause when total spend today exceeds your set threshold — acts as a manual per-entity daily budget cap', true],
-    // ▶️ Resume / Unpause — with cost check (CAMPAIGN only)
-    ['__group__', '▶️ Resume / Unpause — with cost check (CAMPAIGN only)'],
+    // ▶️ Resume / Unpause — smart (cost check on CAMPAIGN, spend guard on ADSET/AD)
+    ['__group__', '▶️ Resume / Unpause — smart (cost on CAMPAIGN · spend guard on ADSET/AD)'],
     ['TurnOn If Cheap Lead (CPL)',                            'Unpause when CPL is within recovery threshold of target — CAMPAIGN only', false],
     ['TurnOn If Cheap Registration (CPA)',                    'Unpause when CPA(reg) is within recovery threshold — CAMPAIGN only', false],
     ['TurnOn If Cheap Purchase (CPP)',                        'Unpause when CPP is within recovery threshold — CAMPAIGN only', false],
-    ['TurnOn If Clicks Present (>0)',                         'Unpause when clicks arrive with CPC within limit — CAMPAIGN only', false],
-    ['TurnOn If Leads Present (>0)',                          'Unpause when leads arrive at acceptable CPL — CAMPAIGN only', false],
-    ['TurnOn If Registrations Present (>0)',                  'Unpause when registrations arrive at acceptable CPA — CAMPAIGN only', false],
-    ['TurnOn If Purchases Present (>0)',                      'Unpause when purchases arrive at acceptable CPP — CAMPAIGN only', false],
+    ['TurnOn If Clicks Present (>0)',                         'CAMPAIGN: clicks>0 & CPC≤max. ADSET/AD: clicks>0 & spent<maxCPC×1.5', false],
+    ['TurnOn If Leads Present (>0)',                          'CAMPAIGN: leads>0 & CPL≤max. ADSET/AD: leads>0 & spent<maxCPL×1.5', false],
+    ['TurnOn If Registrations Present (>0)',                  'CAMPAIGN: regs>0 & CPA≤max. ADSET/AD: regs>0 & spent<maxCPA×1.5', false],
+    ['TurnOn If Purchases Present (>0)',                      'CAMPAIGN: purchases>0 & CPP≤max. ADSET/AD: purchases>0 & spent<maxCPP×1.5', false],
     // ▶️ Resume / Unpause — by count only (all levels: CAMPAIGN / ADSET / AD)
     ['__group__', '▶️ Resume / Unpause — by count only (CAMPAIGN / ADSET / AD)'],
     ['TurnOn If Any Click (no cost check)',                   'Unpause when 1+ click appears — no cost condition, works on all levels', true],
@@ -1666,60 +1666,80 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
     }
   }
 
-  /* ------- Unpause activity-based ------- */
+  /* ------- Unpause activity-based (smart: cost check on CAMPAIGN, spend guard on ADSET/AD) ------- */
   if (selectedRules.includes('TurnOn If Clicks Present (>0)')) {
-    if (artype !== 'CAMPAIGN') {
-      log(`⚠️ TurnOn If Clicks Present — skipped for ${artype}: FB API does not allow cost_per_link_click conditions on ADSET/AD level.`, 'warning');
-    } else {
+    if (artype === 'CAMPAIGN') {
       const spendForClickRule = maxCPC * 2;
       await addRule(
-        `UNPAUSE ${artype} — Clicks>0 & spend≥${(spendForClickRule/100).toFixed(2)} & CPC≤${(maxCPC/100).toFixed(2)} & no leads/regs/purch`,
-        kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'link_click',operator:'GREATER_THAN',value:0 },{ field:'spent',operator:'GREATER_THAN',value:spendForClickRule },{ field:'offsite_conversion.fb_pixel_lead',operator:'LESS_THAN',value:1 },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'LESS_THAN',value:1 },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },{ field:'cost_per_link_click',operator:'LESS_THAN',value:maxCPC },tdy]),
+        `UNPAUSE ${artype} — Clicks>0 & CPC≤${(maxCPC/100).toFixed(2)} & no leads/regs/purch`,
+        kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'link_click',operator:'GREATER_THAN',value:0 },{ field:'cost_per_link_click',operator:'LESS_THAN',value:maxCPC },{ field:'offsite_conversion.fb_pixel_lead',operator:'LESS_THAN',value:1 },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'LESS_THAN',value:1 },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },tdy]),
+        execUnpause(), guardedUnpauseSchedule
+      );
+    } else {
+      const spendGuard = maxCPC * 1.5;
+      await addRule(
+        `UNPAUSE ${artype} — Clicks>0 & spent<${(spendGuard/100).toFixed(2)}`,
+        kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'link_click',operator:'GREATER_THAN',value:0 },{ field:'spent',operator:'LESS_THAN',value:spendGuard },tdy]),
         execUnpause(), guardedUnpauseSchedule
       );
     }
   }
 
   if (selectedRules.includes('TurnOn If Leads Present (>0)')) {
-    if (artype !== 'CAMPAIGN') {
-      log(`⚠️ TurnOn If Leads Present — skipped for ${artype}: FB API does not allow cost_per_lead_fb conditions on ADSET/AD level.`, 'warning');
-    } else {
+    if (artype === 'CAMPAIGN') {
       await addRule(
-        `UNPAUSE ${artype} — Leads>0 & CPL ≤ ${(maxLeadCost/100).toFixed(2)} & no regs/purch`,
-        kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_lead',operator:'GREATER_THAN',value:0 },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'LESS_THAN',value:1 },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },{ field:'cost_per_lead_fb',operator:'LESS_THAN',value:maxLeadCost },tdy]),
+        `UNPAUSE ${artype} — Leads>0 & CPL≤${(maxLeadCost/100).toFixed(2)} & no regs/purch`,
+        kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_lead',operator:'GREATER_THAN',value:0 },{ field:'cost_per_lead_fb',operator:'LESS_THAN',value:maxLeadCost },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'LESS_THAN',value:1 },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },tdy]),
+        execUnpause(), guardedUnpauseSchedule
+      );
+    } else {
+      const spendGuard = Math.round(maxLeadCost * 1.5);
+      await addRule(
+        `UNPAUSE ${artype} — Leads>0 & spent<${(spendGuard/100).toFixed(2)}`,
+        kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_lead',operator:'GREATER_THAN',value:0 },{ field:'spent',operator:'LESS_THAN',value:spendGuard },tdy]),
         execUnpause(), guardedUnpauseSchedule
       );
     }
   }
 
   if (selectedRules.includes('TurnOn If Registrations Present (>0)')) {
-    if (artype !== 'CAMPAIGN') {
-      log(`⚠️ TurnOn If Registrations Present — skipped for ${artype}: FB API does not allow cost_per_complete_registration_fb conditions on ADSET/AD level.`, 'warning');
-    } else {
+    if (artype === 'CAMPAIGN') {
       await addRule(
-        `UNPAUSE ${artype} — Reg>0 & CPA(Reg) ≤ ${(maxCPARegistration/100).toFixed(2)} & no purchases`,
-        kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'GREATER_THAN',value:0 },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },{ field:'cost_per_complete_registration_fb',operator:'LESS_THAN',value:maxCPARegistration },tdy]),
+        `UNPAUSE ${artype} — Reg>0 & CPA≤${(maxCPARegistration/100).toFixed(2)} & no purchases`,
+        kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'GREATER_THAN',value:0 },{ field:'cost_per_complete_registration_fb',operator:'LESS_THAN',value:maxCPARegistration },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },tdy]),
+        execUnpause(), guardedUnpauseSchedule
+      );
+    } else {
+      const spendGuard = Math.round(maxCPARegistration * 1.5);
+      await addRule(
+        `UNPAUSE ${artype} — Reg>0 & spent<${(spendGuard/100).toFixed(2)}`,
+        kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'GREATER_THAN',value:0 },{ field:'spent',operator:'LESS_THAN',value:spendGuard },tdy]),
         execUnpause(), guardedUnpauseSchedule
       );
     }
   }
 
   if (selectedRules.includes('TurnOn If Purchases Present (>0)')) {
-    if (artype !== 'CAMPAIGN') {
-      log(`⚠️ TurnOn If Purchases Present — skipped for ${artype}: FB API does not allow cost_per_purchase_fb conditions on ADSET/AD level.`, 'warning');
-    } else {
+    if (artype === 'CAMPAIGN') {
       await addRule(
-        `UNPAUSE ${artype} — Purchases>0 & CPP ≤ ${(maxDepositCost/100).toFixed(2)}`,
+        `UNPAUSE ${artype} — Purchases>0 & CPP≤${(maxDepositCost/100).toFixed(2)}`,
         kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_purchase',operator:'GREATER_THAN',value:0 },{ field:'cost_per_purchase_fb',operator:'LESS_THAN',value:maxDepositCost },tdy]),
+        execUnpause(), guardedUnpauseSchedule
+      );
+    } else {
+      const spendGuard = Math.round(maxDepositCost * 1.5);
+      await addRule(
+        `UNPAUSE ${artype} — Purchases>0 & spent<${(spendGuard/100).toFixed(2)}`,
+        kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_purchase',operator:'GREATER_THAN',value:0 },{ field:'spent',operator:'LESS_THAN',value:spendGuard },tdy]),
         execUnpause(), guardedUnpauseSchedule
       );
     }
   }
 
-  /* ------- Unpause by count only (all levels) ------- */
+  /* ------- Unpause by count only (all levels, no spend guard) ------- */
   if (selectedRules.includes('TurnOn If Any Click (no cost check)')) {
     await addRule(
-      `UNPAUSE ${artype} — 1+ click (no cost check)`,
+      `UNPAUSE ${artype} — 1+ click (no cost/spend check)`,
       kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'link_click',operator:'GREATER_THAN',value:0 },presetToday]),
       execUnpause(), guardedUnpauseSchedule
     );
@@ -1727,7 +1747,7 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
 
   if (selectedRules.includes('TurnOn If Any Lead (no cost check)')) {
     await addRule(
-      `UNPAUSE ${artype} — 1+ lead (no cost check)`,
+      `UNPAUSE ${artype} — 1+ lead (no cost/spend check)`,
       kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_lead',operator:'GREATER_THAN',value:0 },presetToday]),
       execUnpause(), guardedUnpauseSchedule
     );
@@ -1735,7 +1755,7 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
 
   if (selectedRules.includes('TurnOn If Any Registration (no cost check)')) {
     await addRule(
-      `UNPAUSE ${artype} — 1+ registration (no cost check)`,
+      `UNPAUSE ${artype} — 1+ registration (no cost/spend check)`,
       kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'GREATER_THAN',value:0 },presetToday]),
       execUnpause(), guardedUnpauseSchedule
     );
@@ -1743,7 +1763,7 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
 
   if (selectedRules.includes('TurnOn If Any Purchase (no cost check)')) {
     await addRule(
-      `UNPAUSE ${artype} — 1+ purchase (no cost check)`,
+      `UNPAUSE ${artype} — 1+ purchase (no cost/spend check)`,
       kw([{ field:'entity_type',operator:'EQUAL',value:artype },{ field:'offsite_conversion.fb_pixel_purchase',operator:'GREATER_THAN',value:0 },presetToday]),
       execUnpause(), guardedUnpauseSchedule
     );
