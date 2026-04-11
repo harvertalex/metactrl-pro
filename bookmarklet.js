@@ -319,6 +319,19 @@ function scheduleAtHours(hoursArr) {
   };
 }
 
+// Convert total minutes → "HH:MM" string for rule title display
+function minutesToTimeStr(m) {
+  if (m == null) return '??:??';
+  const h = Math.floor(m / 60) % 24;
+  const mi = m % 60;
+  return `${String(h).padStart(2,'0')}:${String(mi).padStart(2,'0')}`;
+}
+
+// One-shot daily schedule: fires once per day at the given minute slot
+function scheduleAtMinute(minute) {
+  return allWeekCustomSchedule(minute);
+}
+
 function semiHourlyWindow(onMinute, offMinute) {
   const hasOn  = onMinute  != null && !isNaN(onMinute);
   const hasOff = offMinute != null && !isNaN(offMinute);
@@ -730,6 +743,34 @@ function mountGenerator(container) {
   let offNameInput = field(schGrid, 'Turn OFF if name contains', inp('HOLD', 'e.g. HOLD'));
   let offTimeInput = field(schGrid, 'Turn OFF at time (HH or HH:MM)', inp('20', '20 or 20:00'));
 
+  // TurnOff All at Time (no name filter)
+  const schAllHdr = document.createElement('div');
+  schAllHdr.style.cssText = 'grid-column:span 2;font-weight:700;font-size:12px;color:var(--muted);margin-top:8px';
+  schAllHdr.textContent = '— Kill Switch — turn OFF all entities at time (no name filter) —';
+  schGrid.appendChild(schAllHdr);
+  const schAllInfo = document.createElement('div');
+  schAllInfo.className = 'ar-info';
+  schAllInfo.style.gridColumn = 'span 2';
+  schAllInfo.textContent = 'Safety rule: pauses ALL entities of selected type at specified time. No name filter. Use as end-of-day kill switch.';
+  schGrid.appendChild(schAllInfo);
+
+  let killTimeInput = field(schGrid, 'Kill switch time (HH or HH:MM)', inp('23', '23 or 23:00'));
+  Object.assign(killTimeInput.parentElement.style, { gridColumn: 'span 2' });
+
+  // Morning Reset (LAST_7D)
+  const schResetHdr = document.createElement('div');
+  schResetHdr.style.cssText = 'grid-column:span 2;font-weight:700;font-size:12px;color:var(--muted);margin-top:8px';
+  schResetHdr.textContent = '— Morning Reset — unpause if last 7-day CPL is within target —';
+  schGrid.appendChild(schResetHdr);
+  const schResetInfo = document.createElement('div');
+  schResetInfo.className = 'ar-info';
+  schResetInfo.style.gridColumn = 'span 2';
+  schResetInfo.textContent = 'Unpause entities paused by automation if their 7-day CPL is acceptable. Fires once in the morning. CAMPAIGN level only (cost_per_lead_fb).';
+  schGrid.appendChild(schResetInfo);
+
+  let morningResetTimeInput = field(schGrid, 'Morning reset at time (HH or HH:MM)', inp('08', '08 or 08:00'));
+  let morningResetCPLInput  = field(schGrid, 'Max acceptable CPL last 7 days (currency)', inp('', 'e.g. 5.00'));
+
   // ---- 4. Pause Triggers ----
   const protSec  = section(container, '⏸️', 'Pause Triggers', false);
   const protGrid = document.createElement('div');
@@ -753,6 +794,7 @@ function mountGenerator(container) {
 
   let maxFrequencyInput    = field(protGrid, 'Max frequency (pause if above)', inp('3.5', '3.5'));
   let minSpendFreqInput    = field(protGrid, 'Min spend before firing (currency)', inp('20.00', 'e.g. 20.00'));
+  let minImpressionsFreqInput = field(protGrid, 'Min impressions before firing', inp('100', 'e.g. 100'));
 
   // Impressions Guard
   const impHdr = document.createElement('div');
@@ -804,6 +846,16 @@ function mountGenerator(container) {
   let boostPurchCountInput  = field(pbGrid, 'Min purchases to trigger', inp('3', 'e.g. 3'));
   let boostPurchAmtInput    = field(pbGrid, 'Increase budget by %', inp('20', 'e.g. 20'));
   let boostPurchCapInput    = field(pbGrid, 'Max daily budget cap (currency)', inp('200.00', 'e.g. 200.00'));
+
+  // Boost by % on good CPL (leads)
+  const boostLeadHdr = document.createElement('div');
+  boostLeadHdr.style.cssText = 'grid-column:span 2;font-weight:700;font-size:12px;color:var(--muted);margin-top:8px';
+  boostLeadHdr.textContent = '— Increase budget by % when N+ leads at good CPL —';
+  pbGrid.appendChild(boostLeadHdr);
+
+  let boostLeadCountInput = field(pbGrid, 'Min leads to trigger', inp('5', 'e.g. 5'));
+  let boostLeadAmtInput   = field(pbGrid, 'Increase budget by %', inp('20', 'e.g. 20'));
+  let boostLeadCapInput   = field(pbGrid, 'Max daily budget cap (currency)', inp('200.00', 'e.g. 200.00'));
 
   // ROAS Budget Boost/Cut
   const roasBudScaleHdr = document.createElement('div');
@@ -870,10 +922,13 @@ function mountGenerator(container) {
     ['__group__', '📅 Schedule'],
     ['TurnOn by Name at Time',                                'Enable entities whose name contains ON keyword at set time', false],
     ['TurnOff by Name at Time',                               'Pause entities whose name contains OFF keyword at set time', false],
+    ['Kill Switch: TurnOff All at Time',                      'Safety: pause ALL entities of selected type at set time — no name filter', true],
+    ['Morning Reset: TurnOn by 7-day CPL',                    'Unpause at set time if last-7-day CPL is within target — CAMPAIGN only', true],
     // 💰 Budget Scaling
     ['__group__', '💰 Budget Scaling'],
     ['Budget: Increase budget by amount after N purchases',   'Scale budget by fixed amount when purchase count hits N', false],
     ['Budget: Boost % after N purchases with good CPP',       'Scale budget % when N+ purchases arrive at acceptable CPP', true],
+    ['Budget: Boost % after N leads with good CPL',           'Scale budget % when N+ leads arrive at acceptable CPL — CAMPAIGN only', true],
     ['ROAS: Boost budget if high',                            'Boost budget at 09:00 & 12:00 when ROAS exceeds high threshold', false],
     ['ROAS: Cut budget if low',                               'Cut budget at 13:00 & 16:00 when ROAS is below low threshold', false],
     // 📊 ROAS Pause / Unpause
@@ -1061,16 +1116,23 @@ function mountGenerator(container) {
           maxBudgetCap: (pbCapInput.value||'').trim() ? Math.round(+(pbCapInput.value) * 100) : null
         },
         protection: {
-          minCTR:              +(minCTRInput.value||'0.5'),
-          minSpendCTR:         Math.round(+(minSpendCTRInput.value||'10') * 100),
-          maxFrequency:        +(maxFrequencyInput.value||'3.5'),
-          minSpendFreq:        Math.round(+(minSpendFreqInput.value||'20') * 100),
-          minImpressionsLead:  Math.max(1, parseInt(minImpressionsLeadInput.value||'3000', 10) || 3000),
-          minSpendImpressions: Math.round(+(minSpendImpressionsInput.value||'15') * 100),
-          budgetExhaustion:    Math.round(+(budgetExhaustionInput.value||'80') * 100),
-          boostPurchCount:     Math.max(1, parseInt(boostPurchCountInput.value||'3', 10) || 3),
-          boostPurchCap:       Math.round(+(boostPurchCapInput.value||'200') * 100),
-          boostPurchPct:       Math.max(1, +(boostPurchAmtInput.value||'20'))
+          minCTR:                +(minCTRInput.value||'0.5'),
+          minSpendCTR:           Math.round(+(minSpendCTRInput.value||'10') * 100),
+          maxFrequency:          +(maxFrequencyInput.value||'3.5'),
+          minSpendFreq:          Math.round(+(minSpendFreqInput.value||'20') * 100),
+          minImpressionsFreq:    Math.max(1, parseInt(minImpressionsFreqInput.value||'100', 10) || 100),
+          minImpressionsLead:    Math.max(1, parseInt(minImpressionsLeadInput.value||'3000', 10) || 3000),
+          minSpendImpressions:   Math.round(+(minSpendImpressionsInput.value||'15') * 100),
+          budgetExhaustion:      Math.round(+(budgetExhaustionInput.value||'80') * 100),
+          boostPurchCount:       Math.max(1, parseInt(boostPurchCountInput.value||'3', 10) || 3),
+          boostPurchCap:         Math.round(+(boostPurchCapInput.value||'200') * 100),
+          boostPurchPct:         Math.max(1, +(boostPurchAmtInput.value||'20')),
+          boostLeadCount:        Math.max(1, parseInt(boostLeadCountInput.value||'5', 10) || 5),
+          boostLeadCap:          Math.round(+(boostLeadCapInput.value||'200') * 100),
+          boostLeadPct:          Math.max(1, +(boostLeadAmtInput.value||'20')),
+          killMinute:            parseTimeToMinutes(killTimeInput.value),
+          morningResetMinute:    parseTimeToMinutes(morningResetTimeInput.value),
+          morningResetCPL:       (morningResetCPLInput.value||'').trim() ? Math.round(+(morningResetCPLInput.value) * 100) : null
         }
       };
 
@@ -1314,12 +1376,14 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
     if (artype !== 'CAMPAIGN') {
       log(`⚠️ Frequency Burn — skipped for ${artype}: FB API does not allow frequency conditions on ADSET/AD level.`, 'warning');
     } else {
+      const freqMinImpr = protection.minImpressionsFreq || 100;
       await addRule(
-        `TurnOff ${artype} Frequency Burn (freq > ${protection.maxFrequency} & no purchases)`,
+        `TurnOff ${artype} Frequency Burn (freq > ${protection.maxFrequency}, ${freqMinImpr}+ impr)`,
         kw([
           { field:'entity_type', operator:'EQUAL',        value: artype },
           { field:'frequency',   operator:'GREATER_THAN', value: protection.maxFrequency },
           { field:'spent',       operator:'GREATER_THAN', value: protection.minSpendFreq },
+          { field:'impressions', operator:'GREATER_THAN', value: freqMinImpr - 1 },
           { field:'offsite_conversion.fb_pixel_lead',     operator:'LESS_THAN', value:1 },
           { field:'offsite_conversion.fb_pixel_purchase', operator:'LESS_THAN', value:1 },
           presetToday
@@ -1593,6 +1657,77 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
             presetToday
           ]),
           exec, scheduleAtHours([9, 12, 15])
+        );
+      }
+    }
+  }
+
+  /* ------- NEW: Budget Boost % after N leads with good CPL ------- */
+  if (selectedRules.includes('Budget: Boost % after N leads with good CPL')) {
+    if (artype === 'AD') {
+      log('Skip "Budget Boost % after N leads" — AD entity cannot change budget.', 'warning');
+    } else if (artype !== 'CAMPAIGN') {
+      log(`⚠️ Budget Boost % after N leads — skipped for ${artype}: FB API does not allow cost_per_lead_fb conditions on ADSET/AD level.`, 'warning');
+    } else {
+      const N   = Math.max(1, protection.boostLeadCount || 5);
+      const pct = protection.boostLeadPct || 20;
+      const cap = protection.boostLeadCap || null;
+      const exec = execChangeBudgetPct(artype, pct, cap || undefined);
+      if (exec) {
+        await addRule(
+          `BUDGET +${pct}% after ${N} lead(s) good CPL ≤ ${(maxLeadCost/100).toFixed(2)}${cap ? ` (cap ${(cap/100).toFixed(2)})` : ''}`,
+          kw([
+            { field:'entity_type',                     operator:'EQUAL',       value: artype },
+            { field:'offsite_conversion.fb_pixel_lead', operator:'GREATER_THAN', value: Math.max(0, N-1) },
+            { field:'cost_per_lead_fb',                operator:'LESS_THAN',   value: maxLeadCost },
+            presetToday
+          ]),
+          exec, scheduleAtHours([9, 12, 15])
+        );
+      }
+    }
+  }
+
+  /* ------- NEW: Kill Switch — TurnOff ALL at time ------- */
+  if (selectedRules.includes('Kill Switch: TurnOff All at Time')) {
+    const km = protection.killMinute;
+    if (!km && km !== 0) {
+      log('⚠️ Kill Switch — no time set, skipped.', 'warning');
+    } else {
+      await addRule(
+        `KILL SWITCH — Pause ALL ${artype}s at ${minutesToTimeStr(km)}`,
+        [
+          { field:'entity_type', operator:'EQUAL', value: artype },
+          presetToday
+        ],
+        execPause(),
+        scheduleAtMinute(km)
+      );
+    }
+  }
+
+  /* ------- NEW: Morning Reset — TurnOn by 7-day CPL ------- */
+  if (selectedRules.includes('Morning Reset: TurnOn by 7-day CPL')) {
+    if (artype !== 'CAMPAIGN') {
+      log(`⚠️ Morning Reset — skipped for ${artype}: FB API does not allow cost_per_lead_fb on ADSET/AD level.`, 'warning');
+    } else {
+      const mm = protection.morningResetMinute;
+      const cpl = protection.morningResetCPL;
+      if (!mm && mm !== 0) {
+        log('⚠️ Morning Reset — no time set, skipped.', 'warning');
+      } else if (!cpl) {
+        log('⚠️ Morning Reset — no max CPL set, skipped.', 'warning');
+      } else {
+        const preset7d = { field: 'time_preset', value: 'LAST_7D', operator: 'EQUAL' };
+        await addRule(
+          `MORNING RESET — Unpause ${artype} at ${minutesToTimeStr(mm)} if 7-day CPL ≤ ${(cpl/100).toFixed(2)}`,
+          kw([
+            { field:'entity_type',    operator:'EQUAL',      value: artype },
+            { field:'cost_per_lead_fb', operator:'LESS_THAN', value: cpl },
+            preset7d
+          ]),
+          execUnpause(),
+          scheduleAtMinute(mm)
         );
       }
     }
