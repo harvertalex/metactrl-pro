@@ -982,11 +982,11 @@ function mountGenerator(container) {
     ['TurnOff Without Clicks with spent maxCPC',              '0 link clicks after spending max CPC budget', false],
     ['TurnOff With Expensive CPC',                            'CAMPAIGN: CPC>max & no conversions. ADSET/AD: spent≥maxCPC×2 & clicks<2', false],
     ['TurnOff Without Leads',                                 '5+ clicks but zero leads today', false],
-    ['TurnOff With Expensive Leads and No Registrations or Purchase', 'CAMPAIGN: CPL>max & no regs/purch. ADSET/AD: spent≥maxCPL×1.5 & leads<2', false],
+    ['TurnOff With Expensive Leads and No Registrations or Purchase', 'CAMPAIGN: CPL>max & no regs/purch. ADSET/AD: spent≥maxCPL×2.5 & leads<2', false],
     ['TurnOff Without Registrations',                         '5+ leads but zero registrations', false],
-    ['TurnOff With Expensive Registrations',                  'CAMPAIGN: CPA>max & 1+ reg & no purch. ADSET/AD: spent≥maxCPA×1.5 & regs<2', false],
+    ['TurnOff With Expensive Registrations',                  'CAMPAIGN: CPA>max & 1+ reg & no purch. ADSET/AD: spent≥maxCPA×2.5 & regs<2', false],
     ['TurnOff Without Purchases',                             'Spent ≥ target CPP with zero purchases', false],
-    ['TurnOff With Expensive Purchases',                      'CAMPAIGN: CPP>max & 1+ purchase. ADSET/AD: spent≥maxCPP & purchases<2', false],
+    ['TurnOff With Expensive Purchases',                      'CAMPAIGN: CPP>max & 1+ purchase. ADSET/AD: spent≥maxCPP×2.5 & purchases<2', false],
     ['CTR Guard',                                             'Pause if CTR is too low after min spend — weak creative', true],
     ['Frequency Burn',                                        'Pause if frequency too high & no leads/purchases — audience fatigue', true],
     ['TurnOff High Impressions No Leads',                     'Pause if N+ impressions & min spend but zero leads — traffic without conversions', true],
@@ -1415,8 +1415,8 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
       );
     } else {
       await addRule(
-        `TurnOff ${artype} With Expensive Leads (spent≥${(spendForLeadRule/100).toFixed(2)} & leads<2 & no regs/purch)`,
-        kw([{ field:'spent',operator:'GREATER_THAN',value:spendForLeadRule },{ field:'offsite_conversion.fb_pixel_lead',operator:'LESS_THAN',value:2 },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'LESS_THAN',value:1 },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
+        `TurnOff ${artype} With Expensive Leads (spent≥${(Math.round(maxLeadCost*2.5)/100).toFixed(2)} & leads<2 & no regs/purch)`,
+        kw([{ field:'spent',operator:'GREATER_THAN',value:Math.round(maxLeadCost*2.5) },{ field:'offsite_conversion.fb_pixel_lead',operator:'LESS_THAN',value:2 },{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'LESS_THAN',value:1 },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
         execPause(), schedSemi
       );
     }
@@ -1432,7 +1432,7 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
   }
 
   if (selectedRules.includes('TurnOff With Expensive Registrations')) {
-    const spendForRegExpRule = Math.round(maxCPARegistration * 1.5);
+    const spendForRegExpRule = Math.round(maxCPARegistration * 2.5);
     if (artype === 'CAMPAIGN') {
       await addRule(
         `TurnOff ${artype} With Expensive Registrations (CPA>${(maxCPARegistration/100).toFixed(2)} & 1+ reg & no purchases)`,
@@ -1465,8 +1465,8 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
       );
     } else {
       await addRule(
-        `TurnOff ${artype} With Expensive Purchases (spent≥${(maxDepositCost/100).toFixed(2)} & purchases<2)`,
-        kw([{ field:'spent',operator:'GREATER_THAN',value:maxDepositCost },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:2 },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
+        `TurnOff ${artype} With Expensive Purchases (spent≥${(Math.round(maxDepositCost*2.5)/100).toFixed(2)} & purchases<2)`,
+        kw([{ field:'spent',operator:'GREATER_THAN',value:Math.round(maxDepositCost*2.5) },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:2 },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
         execPause(), schedSemi
       );
     }
