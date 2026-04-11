@@ -1014,7 +1014,7 @@ function mountGenerator(container) {
     ['Budget: Boost % after N purchases with good CPP',       'Scale budget % when N+ purchases arrive at acceptable CPP', true],
     ['Budget: Boost % after N leads with good CPL',           'Scale budget % when N+ leads arrive at acceptable CPL — CAMPAIGN only', true],
     ['ROAS: Boost budget if high',                            'Boost budget at 09:00 & 12:00 when ROAS exceeds high threshold', false],
-    ['ROAS: Cut budget if low',                               'Cut budget at 13:00 & 16:00 when ROAS is below low threshold', false],
+    ['ROAS: Cut budget if low',                               'Cut budget at 13:00 when ROAS is below low threshold', false],
     // 📊 ROAS Pause / Unpause
     ['__group__', '📊 ROAS Pause / Unpause'],
     ['ROAS: Pause if low & spend reached',                    'Pause when ROAS is critically low after minimum spend', false],
@@ -1595,7 +1595,7 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
       await addRule(
         `ROAS Boost ${artype} if website_purchase_roas > ${roas.budget.roasHigh}`,
         [...roasBase, { field:'spent',operator:'GREATER_THAN',value:roas.budget.roasMinSpend }, { field:'website_purchase_roas',operator:'GREATER_THAN',value:roas.budget.roasHigh }],
-        exec, scheduleAtHours([9, 12])
+        exec, scheduleAtHours([0, 14])
       );
     }
   }
@@ -1606,7 +1606,7 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
       await addRule(
         `ROAS Cut ${artype} if website_purchase_roas < ${roas.budget.roasLowCut}`,
         [...roasBase, { field:'spent',operator:'GREATER_THAN',value:roas.budget.roasMinSpend }, { field:'website_purchase_roas',operator:'LESS_THAN',value:roas.budget.roasLowCut }],
-        exec, scheduleAtHours([13, 16])
+        exec, scheduleAtHours([13])
       );
     }
   }
@@ -1817,6 +1817,7 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
       const cap = protection.boostPurchCap || null;
       const exec = execChangeBudgetPct(artype, pct, cap || undefined);
       if (exec) {
+        if (!cap) log('⚠️ Budget Boost % after N purchases: no cap set — rule will fire every 30 min until end of day!', 'warning');
         await addRule(
           `BUDGET +${pct}% after ${N} purchase(s) good CPP ≤ ${(maxDepositCost/100).toFixed(2)}${cap ? ` (cap ${(cap/100).toFixed(2)})` : ''}`,
           kw([
@@ -1825,7 +1826,7 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
             { field:'cost_per_purchase_fb',               operator:'LESS_THAN',    value: maxDepositCost },
             presetToday
           ]),
-          exec, scheduleAtHours([9, 12, 15])
+          exec, schedSemi
         );
       }
     }
@@ -1851,8 +1852,9 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
             { field:'cost_per_lead_fb',                operator:'LESS_THAN',   value: maxLeadCost },
             presetToday
           ]),
-          exec, scheduleAtHours([9, 12, 15])
+          exec, schedSemi
         );
+        if (!cap) log('⚠️ Budget Boost % after N leads: no cap set — rule will fire every 30 min until end of day!', 'warning');
       }
     }
   }
