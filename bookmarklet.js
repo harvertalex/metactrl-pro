@@ -668,7 +668,49 @@ function mountGenerator(container) {
   const PRESETS = {
     conservative: { maxCPC:'7.00', maxLeadCost:'7.00', maxCPARegistration:'7.00', maxDepositCost:'40.00', roasHigh:'1.6', roasBoostPct:'15', roasBoostCap:'200.00', roasLowCut:'0.8', roasCutPct:'15', roasMinDailyBudget:'15.00', roasMinSpend:'10.00', roasLowPause:'0.6', roasSpendLimitPause:'80.00', roasRecover:'1.1', recoveryMult:'0.85', minCTR:'0.3', maxFrequency:'5.0' },
     moderate:     { maxCPC:'5.00', maxLeadCost:'5.00', maxCPARegistration:'5.00', maxDepositCost:'30.00', roasHigh:'1.4', roasBoostPct:'20', roasBoostCap:'300.00', roasLowCut:'0.9', roasCutPct:'20', roasMinDailyBudget:'10.00', roasMinSpend:'5.00',  roasLowPause:'0.7', roasSpendLimitPause:'50.00', roasRecover:'1.0', recoveryMult:'0.9',  minCTR:'0.5', maxFrequency:'3.5' },
-    aggressive:   { maxCPC:'3.00', maxLeadCost:'3.00', maxCPARegistration:'3.00', maxDepositCost:'20.00', roasHigh:'1.2', roasBoostPct:'30', roasBoostCap:'500.00', roasLowCut:'1.0', roasCutPct:'25', roasMinDailyBudget:'8.00',  roasMinSpend:'3.00',  roasLowPause:'0.9', roasSpendLimitPause:'30.00', roasRecover:'1.0', recoveryMult:'0.95', minCTR:'0.7', maxFrequency:'2.5' }
+    aggressive:   { maxCPC:'3.00', maxLeadCost:'3.00', maxCPARegistration:'3.00', maxDepositCost:'20.00', roasHigh:'1.2', roasBoostPct:'30', roasBoostCap:'500.00', roasLowCut:'1.0', roasCutPct:'25', roasMinDailyBudget:'8.00',  roasMinSpend:'3.00',  roasLowPause:'0.9', roasSpendLimitPause:'30.00', roasRecover:'1.0', recoveryMult:'0.95', minCTR:'0.7', maxFrequency:'2.5' },
+    leadgen: {
+      // thresholds
+      maxCPC:'5.00', maxLeadCost:'0', maxCPARegistration:'0', maxDepositCost:'11.00',
+      roasLowPause:'0.8', roasSpendLimitPause:'50.00', roasRecover:'1.0',
+      // not used in leadgen — kept at defaults
+      roasHigh:'1.4', roasBoostPct:'20', roasBoostCap:'70.00', roasLowCut:'0.9', roasCutPct:'20',
+      roasMinDailyBudget:'10.00', roasMinSpend:'5.00', recoveryMult:'0.9',
+      minCTR:'0.5', maxFrequency:'3.5',
+      boostPurchCount:'5', boostPurchCap:'70.00', boostPurchPct:'20',
+      // Budget fixed: +$21 after 30 purchases
+      _pbCount:'30', _pbAmount:'21.00',
+      // entity
+      _entity: 'AD',
+      _entityKeyword: 'CTRL',
+      // schedule
+      _onName: 'RESUME', _onTime: '05',
+      _offName: 'HOLD',  _offTime: '20',
+      _killTime: '20',
+      _morningResetTime: '05',
+      _morningResetWindow: 'LAST_7D',
+      _mrCntClick: '1',
+      // rules to enable (all others disabled)
+      _rules: [
+        'TurnOff Without Clicks with spent maxCPC',
+        'TurnOff With Expensive CPC',
+        'TurnOff Without Purchases',
+        'TurnOff With Expensive Purchases',
+        'TurnOff High Impressions No Purchases',
+        'TurnOn If Cheap Click (CPC)',
+        'TurnOn If Cheap Purchase (CPP)',
+        'TurnOn If Clicks Present (>0)',
+        'TurnOn If Purchases Present (>0)',
+        'TurnOn by Name at Time',
+        'TurnOff by Name at Time',
+        'Kill Switch: TurnOff All at Time',
+        'Morning Reset: TurnOn by 7-day CPL',
+        'Budget: Increase budget by amount after N purchases',
+        'Budget: Boost % after N purchases with good CPP',
+        'ROAS: Pause if low & spend reached',
+        'ROAS: Unpause if recovered',
+      ]
+    }
   };
 
   // ---- preset row ----
@@ -1131,16 +1173,60 @@ function mountGenerator(container) {
     boostPurchCount: boostPurchCountInput, boostPurchCap: boostPurchCapInput, boostPurchPct: boostPurchAmtInput
   };
 
+  function applyPreset(level) {
+    const p = PRESETS[level];
+    // numeric/text inputs
+    Object.entries(p).forEach(([k, v]) => { if (!k.startsWith('_') && inputMap[k]) inputMap[k].value = v; });
+    // entity type
+    if (p._entity) {
+      Object.values(entityPills).forEach(pl => pl.classList.remove('sel'));
+      if (entityPills[p._entity]) entityPills[p._entity].classList.add('sel');
+    }
+    // entity keyword
+    if (p._entityKeyword !== undefined) entityKwInput.value = p._entityKeyword;
+    // schedule fields
+    if (p._onName   !== undefined) onNameInput.value   = p._onName;
+    if (p._onTime   !== undefined) onTimeInput.value   = p._onTime;
+    if (p._offName  !== undefined) offNameInput.value  = p._offName;
+    if (p._offTime  !== undefined) offTimeInput.value  = p._offTime;
+    if (p._killTime !== undefined) killTimeInput.value = p._killTime;
+    if (p._morningResetTime   !== undefined) morningResetTimeInput.value = p._morningResetTime;
+    if (p._morningResetWindow !== undefined) mrWindowSel.value = p._morningResetWindow;
+    // morning reset count conditions
+    if (p._mrCntClick !== undefined) {
+      mrCntVars.mrCntClickCb.checked = true; mrCntVars.mrCntClickInput.disabled = false; mrCntVars.mrCntClickInput.value = p._mrCntClick;
+      mrCntVars.mrCntLeadCb.checked  = false; mrCntVars.mrCntLeadInput.disabled  = true;
+      mrCntVars.mrCntRegCb.checked   = false; mrCntVars.mrCntRegInput.disabled   = true;
+      mrCntVars.mrCntPurchCb.checked = false; mrCntVars.mrCntPurchInput.disabled = true;
+    }
+    // budget fixed boost fields
+    if (p._pbCount  !== undefined) pbCountInput.value  = p._pbCount;
+    if (p._pbAmount !== undefined) pbAmountInput.value = p._pbAmount;
+    // rule checkboxes
+    if (p._rules) {
+      const enabledSet = new Set(p._rules);
+      Object.entries(ruleCbs).forEach(([name, cb]) => {
+        cb.checked = enabledSet.has(name);
+        cb.dispatchEvent(new Event('change'));
+      });
+    }
+  }
+
   ['conservative','moderate','aggressive'].forEach(level => {
     const btn = document.createElement('button');
     btn.className = 'ar-preset-btn';
     btn.textContent = level.charAt(0).toUpperCase() + level.slice(1);
-    btn.onclick = () => {
-      const p = PRESETS[level];
-      Object.entries(p).forEach(([k, v]) => { if (inputMap[k]) inputMap[k].value = v; });
-    };
+    btn.onclick = () => applyPreset(level);
     presetRow.appendChild(btn);
   });
+
+  // Leadgen preset button (highlighted)
+  const leadgenBtn = document.createElement('button');
+  leadgenBtn.className = 'ar-preset-btn';
+  leadgenBtn.style.cssText = 'border-color:#3b82f6;color:#3b82f6;font-weight:700';
+  leadgenBtn.textContent = '🎯 Leadgen';
+  leadgenBtn.onclick = () => applyPreset('leadgen');
+  presetRow.appendChild(leadgenBtn);
 
   // ---- generate ----
   btnGen.onclick = async () => {
