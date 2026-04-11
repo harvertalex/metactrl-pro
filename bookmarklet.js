@@ -1378,8 +1378,8 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
       log(`⚠️ TurnOff With Expensive Registrations — skipped for ${artype}: FB API does not allow cost_per_complete_registration_fb conditions on ADSET/AD level.`, 'warning');
     } else {
       await addRule(
-        `TurnOff ${artype} With Expensive Registrations`,
-        kw([{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'GREATER_THAN',value:2 },{ field:'cost_per_complete_registration_fb',operator:'GREATER_THAN',value:maxCPARegistration },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
+        `TurnOff ${artype} With Expensive Registrations (CPA>${(maxCPARegistration/100).toFixed(2)} & 1+ reg & no purchases)`,
+        kw([{ field:'offsite_conversion.fb_pixel_complete_registration',operator:'GREATER_THAN',value:0 },{ field:'cost_per_complete_registration_fb',operator:'GREATER_THAN',value:maxCPARegistration },{ field:'offsite_conversion.fb_pixel_purchase',operator:'LESS_THAN',value:1 },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
         execPause(), schedSemi
       );
     }
@@ -1398,8 +1398,8 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
       log(`⚠️ TurnOff With Expensive Purchases — skipped for ${artype}: FB API does not allow cost_per_purchase_fb / website_purchase_roas conditions on ADSET/AD level.`, 'warning');
     } else {
       await addRule(
-        `TurnOff ${artype} With Expensive Purchases (CPP high & ROAS low)`,
-        kw([{ field:'offsite_conversion.fb_pixel_purchase',operator:'GREATER_THAN',value:0 },{ field:'cost_per_purchase_fb',operator:'GREATER_THAN',value:maxDepositCost },{ field:'website_purchase_roas',operator:'LESS_THAN',value:roas.sw.roasLowPause },{ field:'spent',operator:'GREATER_THAN',value:roas.sw.roasSpendLimitPause },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
+        `TurnOff ${artype} With Expensive Purchases (CPP>${(maxDepositCost/100).toFixed(2)} & 1+ purchase)`,
+        kw([{ field:'offsite_conversion.fb_pixel_purchase',operator:'GREATER_THAN',value:0 },{ field:'cost_per_purchase_fb',operator:'GREATER_THAN',value:maxDepositCost },{ field:'entity_type',operator:'EQUAL',value:artype },presetToday]),
         execPause(), schedSemi
       );
     }
