@@ -765,7 +765,7 @@ function mountGenerator(container) {
   const schResetInfo = document.createElement('div');
   schResetInfo.className = 'ar-info';
   schResetInfo.style.gridColumn = 'span 2';
-  schResetInfo.textContent = 'Unpause at set time if ALL checked conditions are met. CPC works on any level; CPL/CPA/CPP — CAMPAIGN only (FB API restriction).';
+  schResetInfo.textContent = 'Unpause at set time if ALL checked conditions are met. Cost conditions: CPC any level, CPL/CPA/CPP — CAMPAIGN only. Count conditions: work on all levels.';
   schGrid.appendChild(schResetInfo);
 
   let morningResetTimeInput = field(schGrid, 'Fire at time (HH or HH:MM)', inp('08', '08 or 08:00'));
@@ -817,6 +817,42 @@ function mountGenerator(container) {
     mrCondVars[inpKey] = inputEl;
   });
   schGrid.appendChild(mrCondBlock);
+
+  // Count conditions subheader
+  const mrCountHdr = document.createElement('div');
+  mrCountHdr.style.cssText = 'grid-column:span 2;font-size:11px;font-weight:700;color:var(--muted);margin-top:8px;letter-spacing:.03em';
+  mrCountHdr.textContent = 'MIN COUNT CONDITIONS (all levels: CAMPAIGN / ADSET / AD)';
+  schGrid.appendChild(mrCountHdr);
+
+  // Count condition rows: [cbKey, inpKey, label, placeholder, fb_field, operator]
+  const mrCntDefs = [
+    ['mrCntClickCb',  'mrCntClickInput',  'Min clicks',        'e.g. 1',  'link_click',                                       'GREATER_THAN'],
+    ['mrCntLeadCb',   'mrCntLeadInput',   'Min leads',         'e.g. 1',  'offsite_conversion.fb_pixel_lead',                  'GREATER_THAN'],
+    ['mrCntRegCb',    'mrCntRegInput',    'Min registrations', 'e.g. 1',  'offsite_conversion.fb_pixel_complete_registration', 'GREATER_THAN'],
+    ['mrCntPurchCb',  'mrCntPurchInput',  'Min purchases',     'e.g. 1',  'offsite_conversion.fb_pixel_purchase',              'GREATER_THAN'],
+  ];
+  const mrCntVars = {};
+  const mrCntBlock = document.createElement('div');
+  mrCntBlock.style.cssText = 'grid-column:span 2;display:flex;flex-direction:column;gap:4px;margin-top:2px';
+  mrCntDefs.forEach(([cbKey, inpKey, lbl, ph]) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.style.cssText = 'accent-color:var(--acc);flex-shrink:0;width:13px;height:13px';
+    const labelEl = document.createElement('span');
+    labelEl.style.cssText = 'font-size:12px;color:var(--txt);flex:1;min-width:0';
+    labelEl.textContent = lbl;
+    const inputEl = document.createElement('input');
+    inputEl.placeholder = ph; inputEl.value = '1';
+    inputEl.style.cssText = 'width:80px;flex-shrink:0;background:var(--card);color:var(--txt);border:1px solid var(--bdr);border-radius:6px;padding:3px 6px;font-size:12px';
+    inputEl.disabled = true;
+    cb.onchange = () => { inputEl.disabled = !cb.checked; };
+    row.appendChild(cb); row.appendChild(labelEl); row.appendChild(inputEl);
+    mrCntBlock.appendChild(row);
+    mrCntVars[cbKey] = cb;
+    mrCntVars[inpKey] = inputEl;
+  });
+  schGrid.appendChild(mrCntBlock);
 
   // ---- 4. Pause Triggers ----
   const protSec  = section(container, '⏸️', 'Pause Triggers', false);
@@ -1190,9 +1226,17 @@ function mountGenerator(container) {
             .filter(([cbKey]) => mrCondVars[cbKey].checked)
             .map(([cbKey, inpKey,, , fbField]) => ({
               field: fbField,
-              value: Math.round(+(mrCondVars[inpKey].value||'0') * 100)
+              value: Math.round(+(mrCondVars[inpKey].value||'0') * 100),
+              isCost: true
             }))
-            .filter(c => c.value > 0)
+            .filter(c => c.value > 0),
+          morningResetCountConditions: mrCntDefs
+            .filter(([cbKey]) => mrCntVars[cbKey].checked)
+            .map(([cbKey, inpKey,, , fbField, op]) => ({
+              field: fbField,
+              operator: op,
+              value: Math.max(0, parseInt(mrCntVars[inpKey].value||'1', 10) || 1) - 1
+            }))
         }
       };
 
@@ -1801,39 +1845,49 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
 
   /* ------- NEW: Morning Reset — configurable conditions ------- */
   if (selectedRules.includes('Morning Reset: TurnOn by 7-day CPL')) {
-    const mm   = protection.morningResetMinute;
-    const conds = protection.morningResetConditions || [];
-    const win  = protection.morningResetWindow || 'LAST_7D';
+    const mm        = protection.morningResetMinute;
+    const costConds = protection.morningResetConditions || [];
+    const cntConds  = protection.morningResetCountConditions || [];
+    const win       = protection.morningResetWindow || 'LAST_7D';
 
     if (!mm && mm !== 0) {
       log('⚠️ Morning Reset — no time set, skipped.', 'warning');
-    } else if (!conds.length) {
+    } else if (!costConds.length && !cntConds.length) {
       log('⚠️ Morning Reset — no conditions selected, skipped.', 'warning');
     } else {
-      // Campaign-only FB fields — skip on ADSET/AD
+      // Cost conditions: filter out campaign-only fields on ADSET/AD
       const campaignOnlyFields = ['cost_per_lead_fb','cost_per_complete_registration_fb','cost_per_purchase_fb'];
-      const allowed = conds.filter(c => {
+      const allowedCost = costConds.filter(c => {
         if (campaignOnlyFields.includes(c.field) && artype !== 'CAMPAIGN') {
-          log(`⚠️ Morning Reset — condition "${c.field}" skipped for ${artype} (CAMPAIGN only).`, 'warning');
+          log(`⚠️ Morning Reset — cost condition "${c.field}" skipped for ${artype} (CAMPAIGN only).`, 'warning');
           return false;
         }
         return true;
       });
 
-      if (!allowed.length) {
+      // Count conditions work on all levels — no filtering needed
+      const allAllowed = [...allowedCost, ...cntConds];
+
+      if (!allAllowed.length) {
         log('⚠️ Morning Reset — all conditions require CAMPAIGN level, skipped.', 'warning');
       } else {
         const winLabel = { YESTERDAY: 'yesterday', LAST_3D: 'last 3d', LAST_7D: 'last 7d' }[win] || win;
-        const condDesc = allowed.map(c => {
+        const costDesc = allowedCost.map(c => {
           const label = { cost_per_link_click:'CPC', cost_per_lead_fb:'CPL', cost_per_complete_registration_fb:'CPA', cost_per_purchase_fb:'CPP' }[c.field] || c.field;
           return `${label}≤${(c.value/100).toFixed(2)}`;
-        }).join(', ');
+        });
+        const cntDesc = cntConds.map(c => {
+          const label = { link_click:'clicks', 'offsite_conversion.fb_pixel_lead':'leads', 'offsite_conversion.fb_pixel_complete_registration':'regs', 'offsite_conversion.fb_pixel_purchase':'purch' }[c.field] || c.field;
+          return `${label}≥${c.value + 1}`;
+        });
+        const condDesc = [...costDesc, ...cntDesc].join(', ');
         const presetWin = { field: 'time_preset', value: win, operator: 'EQUAL' };
         await addRule(
           `MORNING RESET — Unpause ${artype} at ${minutesToTimeStr(mm)} [${winLabel}]: ${condDesc}`,
           kw([
             { field:'entity_type', operator:'EQUAL', value: artype },
-            ...allowed.map(c => ({ field: c.field, operator: 'LESS_THAN', value: c.value })),
+            ...allowedCost.map(c => ({ field: c.field, operator: 'LESS_THAN',    value: c.value })),
+            ...cntConds.map(c =>    ({ field: c.field, operator: c.operator, value: c.value })),
             presetWin
           ]),
           execUnpause(),
