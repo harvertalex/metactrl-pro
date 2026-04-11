@@ -757,19 +757,66 @@ function mountGenerator(container) {
   let killTimeInput = field(schGrid, 'Kill switch time (HH or HH:MM)', inp('23', '23 or 23:00'));
   Object.assign(killTimeInput.parentElement.style, { gridColumn: 'span 2' });
 
-  // Morning Reset (LAST_7D)
+  // Morning Reset — configurable conditions
   const schResetHdr = document.createElement('div');
   schResetHdr.style.cssText = 'grid-column:span 2;font-weight:700;font-size:12px;color:var(--muted);margin-top:8px';
-  schResetHdr.textContent = '— Morning Reset — unpause if last 7-day CPL is within target —';
+  schResetHdr.textContent = '— Morning Reset — unpause if performance metrics are within target —';
   schGrid.appendChild(schResetHdr);
   const schResetInfo = document.createElement('div');
   schResetInfo.className = 'ar-info';
   schResetInfo.style.gridColumn = 'span 2';
-  schResetInfo.textContent = 'Unpause entities paused by automation if their 7-day CPL is acceptable. Fires once in the morning. CAMPAIGN level only (cost_per_lead_fb).';
+  schResetInfo.textContent = 'Unpause at set time if ALL checked conditions are met. CPC works on any level; CPL/CPA/CPP — CAMPAIGN only (FB API restriction).';
   schGrid.appendChild(schResetInfo);
 
-  let morningResetTimeInput = field(schGrid, 'Morning reset at time (HH or HH:MM)', inp('08', '08 or 08:00'));
-  let morningResetCPLInput  = field(schGrid, 'Max acceptable CPL last 7 days (currency)', inp('', 'e.g. 5.00'));
+  let morningResetTimeInput = field(schGrid, 'Fire at time (HH or HH:MM)', inp('08', '08 or 08:00'));
+
+  // Time window selector (YESTERDAY / LAST_3D / LAST_7D)
+  const mrWindowWrap = document.createElement('div');
+  mrWindowWrap.className = 'ar-field';
+  const mrWindowLbl = document.createElement('label');
+  mrWindowLbl.className = 'ar-label';
+  mrWindowLbl.textContent = 'Evaluation window';
+  const mrWindowSel = document.createElement('select');
+  mrWindowSel.style.cssText = 'width:100%;background:var(--card);color:var(--txt);border:1px solid var(--bdr);border-radius:6px;padding:3px 6px;font-size:12px';
+  [['YESTERDAY','Yesterday'],['LAST_3D','Last 3 days'],['LAST_7D','Last 7 days']].forEach(([v,t]) => {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = t;
+    if (v === 'LAST_7D') o.selected = true;
+    mrWindowSel.appendChild(o);
+  });
+  mrWindowWrap.appendChild(mrWindowLbl);
+  mrWindowWrap.appendChild(mrWindowSel);
+  schGrid.appendChild(mrWindowWrap);
+
+  // Condition rows: [cbVar, inputVar, label, placeholder, field_key]
+  const mrCondDefs = [
+    ['mrCpcCb',  'mrCpcInput',  'Max CPC (any level)',         'e.g. 0.50', 'cost_per_link_click'],
+    ['mrCplCb',  'mrCplInput',  'Max CPL — CAMPAIGN only',    'e.g. 5.00',  'cost_per_lead_fb'],
+    ['mrCpaCb',  'mrCpaInput',  'Max CPA registration — CAMPAIGN only', 'e.g. 8.00', 'cost_per_complete_registration_fb'],
+    ['mrCppCb',  'mrCppInput',  'Max CPP (purchase) — CAMPAIGN only',   'e.g. 25.00', 'cost_per_purchase_fb'],
+  ];
+  const mrCondVars = {};
+  const mrCondBlock = document.createElement('div');
+  mrCondBlock.style.cssText = 'grid-column:span 2;display:flex;flex-direction:column;gap:4px;margin-top:2px';
+  mrCondDefs.forEach(([cbKey, inpKey, lbl, ph]) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.style.cssText = 'accent-color:var(--acc);flex-shrink:0;width:13px;height:13px';
+    const labelEl = document.createElement('span');
+    labelEl.style.cssText = 'font-size:12px;color:var(--txt);flex:1;min-width:0';
+    labelEl.textContent = lbl;
+    const inputEl = document.createElement('input');
+    inputEl.placeholder = ph;
+    inputEl.style.cssText = 'width:80px;flex-shrink:0;background:var(--card);color:var(--txt);border:1px solid var(--bdr);border-radius:6px;padding:3px 6px;font-size:12px';
+    inputEl.disabled = true;
+    cb.onchange = () => { inputEl.disabled = !cb.checked; };
+    row.appendChild(cb); row.appendChild(labelEl); row.appendChild(inputEl);
+    mrCondBlock.appendChild(row);
+    mrCondVars[cbKey] = cb;
+    mrCondVars[inpKey] = inputEl;
+  });
+  schGrid.appendChild(mrCondBlock);
 
   // ---- 4. Pause Triggers ----
   const protSec  = section(container, '⏸️', 'Pause Triggers', false);
@@ -923,7 +970,7 @@ function mountGenerator(container) {
     ['TurnOn by Name at Time',                                'Enable entities whose name contains ON keyword at set time', false],
     ['TurnOff by Name at Time',                               'Pause entities whose name contains OFF keyword at set time', false],
     ['Kill Switch: TurnOff All at Time',                      'Safety: pause ALL entities of selected type at set time — no name filter', true],
-    ['Morning Reset: TurnOn by 7-day CPL',                    'Unpause at set time if last-7-day CPL is within target — CAMPAIGN only', true],
+    ['Morning Reset: TurnOn by 7-day CPL',                    'Unpause at set time if selected metrics (CPC/CPL/CPA/CPP) are within target — window: yesterday / 3d / 7d', true],
     // 💰 Budget Scaling
     ['__group__', '💰 Budget Scaling'],
     ['Budget: Increase budget by amount after N purchases',   'Scale budget by fixed amount when purchase count hits N', false],
@@ -1132,7 +1179,14 @@ function mountGenerator(container) {
           boostLeadPct:          Math.max(1, +(boostLeadAmtInput.value||'20')),
           killMinute:            parseTimeToMinutes(killTimeInput.value),
           morningResetMinute:    parseTimeToMinutes(morningResetTimeInput.value),
-          morningResetCPL:       (morningResetCPLInput.value||'').trim() ? Math.round(+(morningResetCPLInput.value) * 100) : null
+          morningResetWindow:    mrWindowSel.value,
+          morningResetConditions: mrCondDefs
+            .filter(([cbKey]) => mrCondVars[cbKey].checked)
+            .map(([cbKey, inpKey,, , fbField]) => ({
+              field: fbField,
+              value: Math.round(+(mrCondVars[inpKey].value||'0') * 100)
+            }))
+            .filter(c => c.value > 0)
         }
       };
 
@@ -1706,25 +1760,42 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
     }
   }
 
-  /* ------- NEW: Morning Reset — TurnOn by 7-day CPL ------- */
+  /* ------- NEW: Morning Reset — configurable conditions ------- */
   if (selectedRules.includes('Morning Reset: TurnOn by 7-day CPL')) {
-    if (artype !== 'CAMPAIGN') {
-      log(`⚠️ Morning Reset — skipped for ${artype}: FB API does not allow cost_per_lead_fb on ADSET/AD level.`, 'warning');
+    const mm   = protection.morningResetMinute;
+    const conds = protection.morningResetConditions || [];
+    const win  = protection.morningResetWindow || 'LAST_7D';
+
+    if (!mm && mm !== 0) {
+      log('⚠️ Morning Reset — no time set, skipped.', 'warning');
+    } else if (!conds.length) {
+      log('⚠️ Morning Reset — no conditions selected, skipped.', 'warning');
     } else {
-      const mm = protection.morningResetMinute;
-      const cpl = protection.morningResetCPL;
-      if (!mm && mm !== 0) {
-        log('⚠️ Morning Reset — no time set, skipped.', 'warning');
-      } else if (!cpl) {
-        log('⚠️ Morning Reset — no max CPL set, skipped.', 'warning');
+      // Campaign-only FB fields — skip on ADSET/AD
+      const campaignOnlyFields = ['cost_per_lead_fb','cost_per_complete_registration_fb','cost_per_purchase_fb'];
+      const allowed = conds.filter(c => {
+        if (campaignOnlyFields.includes(c.field) && artype !== 'CAMPAIGN') {
+          log(`⚠️ Morning Reset — condition "${c.field}" skipped for ${artype} (CAMPAIGN only).`, 'warning');
+          return false;
+        }
+        return true;
+      });
+
+      if (!allowed.length) {
+        log('⚠️ Morning Reset — all conditions require CAMPAIGN level, skipped.', 'warning');
       } else {
-        const preset7d = { field: 'time_preset', value: 'LAST_7D', operator: 'EQUAL' };
+        const winLabel = { YESTERDAY: 'yesterday', LAST_3D: 'last 3d', LAST_7D: 'last 7d' }[win] || win;
+        const condDesc = allowed.map(c => {
+          const label = { cost_per_link_click:'CPC', cost_per_lead_fb:'CPL', cost_per_complete_registration_fb:'CPA', cost_per_purchase_fb:'CPP' }[c.field] || c.field;
+          return `${label}≤${(c.value/100).toFixed(2)}`;
+        }).join(', ');
+        const presetWin = { field: 'time_preset', value: win, operator: 'EQUAL' };
         await addRule(
-          `MORNING RESET — Unpause ${artype} at ${minutesToTimeStr(mm)} if 7-day CPL ≤ ${(cpl/100).toFixed(2)}`,
+          `MORNING RESET — Unpause ${artype} at ${minutesToTimeStr(mm)} [${winLabel}]: ${condDesc}`,
           kw([
-            { field:'entity_type',    operator:'EQUAL',      value: artype },
-            { field:'cost_per_lead_fb', operator:'LESS_THAN', value: cpl },
-            preset7d
+            { field:'entity_type', operator:'EQUAL', value: artype },
+            ...allowed.map(c => ({ field: c.field, operator: 'LESS_THAN', value: c.value })),
+            presetWin
           ]),
           execUnpause(),
           scheduleAtMinute(mm)
