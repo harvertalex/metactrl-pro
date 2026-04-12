@@ -1663,7 +1663,7 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
       `TurnOff ${artype} CPM Guard (CPM > ${(protection.maxCPM/100).toFixed(2)})`,
       kw([
         { field:'entity_type',             operator:'EQUAL',        value: artype },
-        { field:'cost_per_1000_impressions', operator:'GREATER_THAN', value: protection.maxCPM },
+        { field:'cpm', operator:'GREATER_THAN', value: protection.maxCPM },
         { field:'spent',                   operator:'GREATER_THAN', value: protection.minSpendCPM },
         presetToday
       ]),
