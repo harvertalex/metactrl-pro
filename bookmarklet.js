@@ -673,6 +673,7 @@ function mountGenerator(container) {
       // thresholds
       maxCPC:'5.00', maxLeadCost:'0', maxCPARegistration:'0', maxDepositCost:'11.00',
       roasLowPause:'0.8', roasSpendLimitPause:'50.00', roasRecover:'1.0',
+      maxCPM:'150.00', minSpendCPM: '5.00',
       // not used in leadgen — kept at defaults
       roasHigh:'1.4', roasBoostPct:'20', roasBoostCap:'70.00', roasLowCut:'0.9', roasCutPct:'20',
       roasMinDailyBudget:'10.00', roasMinSpend:'5.00', recoveryMult:'0.9',
@@ -697,6 +698,7 @@ function mountGenerator(container) {
         'TurnOff Without Purchases',
         'TurnOff With Expensive Purchases',
         'TurnOff High Impressions No Purchases',
+        'CPM Guard',
         'TurnOn If Cheap Click (CPC)',
         'TurnOn If Cheap Purchase (CPP)',
         'TurnOn If Clicks Present (>0)',
@@ -945,6 +947,19 @@ function mountGenerator(container) {
   let budgetExhaustionInput = field(protGrid, 'Pause if spent today exceeds (currency)', inp('80.00', 'e.g. 80.00'));
   Object.assign(budgetExhaustionInput.parentElement.style, { gridColumn: 'span 2' });
 
+  // CPM Guard
+  const cpmHdr = document.createElement('div');
+  cpmHdr.style.cssText = 'grid-column:span 2;font-weight:700;font-size:12px;color:var(--muted);margin-top:8px';
+  cpmHdr.textContent = '— CPM Guard — pause if CPM is too high (expensive traffic) —';
+  protGrid.appendChild(cpmHdr);
+  const cpmInfo = document.createElement('div');
+  cpmInfo.className = 'ar-info';
+  cpmInfo.style.gridColumn = 'span 2';
+  cpmInfo.textContent = 'Works on all levels (CAMPAIGN / ADSET / AD). Fires every 30 min. Recommended: maxCPM $100–150 for leadgen.';
+  protGrid.appendChild(cpmInfo);
+  let maxCPMInput       = field(protGrid, 'Max CPM — pause if above (currency)', inp('150.00', 'e.g. 150.00'));
+  let minSpendCPMInput  = field(protGrid, 'Min spend before firing (currency)', inp('5.00', 'e.g. 5.00'));
+
   // ---- 5. Budget Scaling ----
   const pbSec  = section(container, '🚀', 'Budget Scaling', false);
   const pbGrid = document.createElement('div');
@@ -1034,6 +1049,7 @@ function mountGenerator(container) {
     ['TurnOff High Impressions No Leads',                     'Pause if N+ impressions & min spend but zero leads — traffic without conversions', true],
     ['TurnOff High Impressions No Purchases',                 'Pause if N+ impressions & min spend but zero purchases — traffic without deposits', true],
     ['TurnOff Daily Budget Exhaustion',                       'Pause when total spend today exceeds your set threshold — acts as a manual per-entity daily budget cap', true],
+    ['CPM Guard',                                             'Pause if CPM is too high after min spend — expensive traffic, all levels', true],
     // ▶️ Resume / Unpause — smart (cost check on CAMPAIGN, spend guard on ADSET/AD)
     ['__group__', '▶️ Resume / Unpause — smart (cost on CAMPAIGN · spend guard on ADSET/AD)'],
     ['TurnOn If Cheap Click (CPC)',                           'CAMPAIGN: clicks>0 & CPC≤max×recovMult. ADSET/AD: clicks>1 & spent<maxCPC×2', false],
@@ -1169,6 +1185,7 @@ function mountGenerator(container) {
     roasRecover: roasRecoverInput, recoveryMult: recovMultInput,
     minCTR: minCTRInput, maxFrequency: maxFrequencyInput,
     minImpressionsLead: minImpressionsLeadInput, minSpendImpressions: minSpendImpressionsInput,
+    maxCPM: maxCPMInput, minSpendCPM: minSpendCPMInput,
     budgetExhaustion: budgetExhaustionInput,
     boostPurchCount: boostPurchCountInput, boostPurchCap: boostPurchCapInput, boostPurchPct: boostPurchAmtInput
   };
@@ -1294,6 +1311,8 @@ function mountGenerator(container) {
           minImpressionsLead:    Math.max(1, parseInt(minImpressionsLeadInput.value||'3000', 10) || 3000),
           minSpendImpressions:   Math.round(+(minSpendImpressionsInput.value||'15') * 100),
           budgetExhaustion:      Math.round(+(budgetExhaustionInput.value||'80') * 100),
+          maxCPM:                Math.round(+(maxCPMInput.value||'150') * 100),
+          minSpendCPM:           Math.round(+(minSpendCPMInput.value||'5') * 100),
           boostPurchCount:       Math.max(1, parseInt(boostPurchCountInput.value||'3', 10) || 3),
           boostPurchCap:         Math.round(+(boostPurchCapInput.value||'200') * 100),
           boostPurchPct:         Math.max(1, +(boostPurchAmtInput.value||'20')),
@@ -1632,6 +1651,20 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
       kw([
         { field:'entity_type', operator:'EQUAL',        value: artype },
         { field:'spent',       operator:'GREATER_THAN', value: protection.budgetExhaustion },
+        presetToday
+      ]),
+      execPause(), schedSemi
+    );
+  }
+
+  /* ------- CPM Guard ------- */
+  if (selectedRules.includes('CPM Guard')) {
+    await addRule(
+      `TurnOff ${artype} CPM Guard (CPM > ${(protection.maxCPM/100).toFixed(2)})`,
+      kw([
+        { field:'entity_type',             operator:'EQUAL',        value: artype },
+        { field:'cost_per_1000_impressions', operator:'GREATER_THAN', value: protection.maxCPM },
+        { field:'spent',                   operator:'GREATER_THAN', value: protection.minSpendCPM },
         presetToday
       ]),
       execPause(), schedSemi
