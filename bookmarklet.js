@@ -677,9 +677,9 @@ function mountGenerator(container) {
       roasHigh:'1.4', roasBoostPct:'20', roasBoostCap:'70.00', roasLowCut:'0.9', roasCutPct:'20',
       roasMinDailyBudget:'10.00', roasMinSpend:'5.00', recoveryMult:'0.9',
       minCTR:'0.5', maxFrequency:'3.5',
-      boostPurchCount:'5', boostPurchCap:'70.00', boostPurchPct:'20',
-      // Budget fixed: +$21 after 30 purchases
-      _pbCount:'30', _pbAmount:'21.00',
+      boostPurchCount:'5', boostPurchCap:'7000.00', boostPurchPct:'20',
+      // Budget fixed: +$2100 after 30 purchases
+      _pbCount:'30', _pbAmount:'2100.00',
       // entity
       _entity: 'AD',
       _entityKeyword: 'CTRL',
