@@ -959,6 +959,11 @@ function mountGenerator(container) {
   protGrid.appendChild(cpmInfo);
   let maxCPMInput       = field(protGrid, 'Max CPM — pause if above (currency)', inp('150.00', 'e.g. 150.00'));
   let minSpendCPMInput  = field(protGrid, 'Min spend before firing (currency)', inp('5.00', 'e.g. 5.00'));
+  const cpmLimitInfo = document.createElement('div');
+  cpmLimitInfo.className = 'ar-info';
+  cpmLimitInfo.style.gridColumn = 'span 2';
+  cpmLimitInfo.textContent = '⚠️ CPM Guard works on CAMPAIGN level only — will be skipped on ADSET/AD due to FB API limitations.';
+  protGrid.appendChild(cpmLimitInfo);
 
   // ---- 5. Budget Scaling ----
   const pbSec  = section(container, '🚀', 'Budget Scaling', false);
@@ -1049,7 +1054,7 @@ function mountGenerator(container) {
     ['TurnOff High Impressions No Leads',                     'Pause if N+ impressions & min spend but zero leads — traffic without conversions', true],
     ['TurnOff High Impressions No Purchases',                 'Pause if N+ impressions & min spend but zero purchases — traffic without deposits', true],
     ['TurnOff Daily Budget Exhaustion',                       'Pause when total spend today exceeds your set threshold — acts as a manual per-entity daily budget cap', true],
-    ['CPM Guard',                                             'Pause if CPM is too high after min spend — expensive traffic, all levels', true],
+    ['CPM Guard',                                             'Pause if CPM is too high after min spend — weak creative — CAMPAIGN only', true],
     // ▶️ Resume / Unpause — smart (cost check on CAMPAIGN, spend guard on ADSET/AD)
     ['__group__', '▶️ Resume / Unpause — smart (cost on CAMPAIGN · spend guard on ADSET/AD)'],
     ['TurnOn If Cheap Click (CPC)',                           'CAMPAIGN: clicks>0 & CPC≤max×recovMult. ADSET/AD: clicks>1 & spent<maxCPC×2', false],
@@ -1659,16 +1664,20 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
 
   /* ------- CPM Guard ------- */
   if (selectedRules.includes('CPM Guard')) {
-    await addRule(
-      `TurnOff ${artype} CPM Guard (CPM > ${(protection.maxCPM/100).toFixed(2)})`,
-      kw([
-        { field:'entity_type',             operator:'EQUAL',        value: artype },
-        { field:'cpm', operator:'GREATER_THAN', value: protection.maxCPM },
-        { field:'spent',                   operator:'GREATER_THAN', value: protection.minSpendCPM },
-        presetToday
-      ]),
-      execPause(), schedSemi
-    );
+    if (artype !== 'CAMPAIGN') {
+      log(`⚠️ CPM Guard — skipped for ${artype}: FB API does not allow cpm conditions on ADSET/AD level.`, 'warning');
+    } else {
+      await addRule(
+        `TurnOff ${artype} CPM Guard (CPM > ${(protection.maxCPM/100).toFixed(2)})`,
+        kw([
+          { field:'entity_type', operator:'EQUAL',        value: artype },
+          { field:'cpm',         operator:'GREATER_THAN', value: protection.maxCPM },
+          { field:'spent',       operator:'GREATER_THAN', value: protection.minSpendCPM },
+          presetToday
+        ]),
+        execPause(), schedSemi
+      );
+    }
   }
 
   /* ------- Name / Time ON/OFF ------- */
