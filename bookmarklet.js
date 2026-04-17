@@ -749,12 +749,12 @@ function mountGenerator(container) {
       budgetExhaustion:'80.00',
       // CPM Guard
       maxCPM:'200.00', minSpendCPM:'5.00',
-      // Budget boost % purchases
-      boostPurchCount:'5', boostPurchCap:'7000.00', boostPurchPct:'20',
+      // Budget boost % purchases: +20% after 1 purchase, cap $7000
+      boostPurchCount:'1', boostPurchCap:'7000.00', boostPurchPct:'20',
       // Budget boost % leads
       boostLeadCount:'5', boostLeadCap:'200.00', boostLeadPct:'20',
-      // Budget fixed
-      _pbCount:'30', _pbAmount:'2100.00',
+      // Budget fixed: +$2100 after 1 purchase
+      _pbCount:'1', _pbAmount:'2100.00',
       // entity
       _entity: 'AD',
       _entityKeyword: 'CTRL',
@@ -789,6 +789,8 @@ function mountGenerator(container) {
         'TurnOff by Name at Time',
         'Kill Switch: TurnOff All at Time',
         'Morning Reset: TurnOn by 7-day CPL',
+        'Budget: Increase budget by amount after N purchases',
+        'Budget: Boost % after N purchases with good CPP',
       ]
     },
     gambling_minus7: {
@@ -802,9 +804,9 @@ function mountGenerator(container) {
       minImpressionsLead:'1000', minSpendImpressions:'15.00',
       budgetExhaustion:'80.00',
       maxCPM:'200.00', minSpendCPM:'5.00',
-      boostPurchCount:'5', boostPurchCap:'7000.00', boostPurchPct:'20',
+      boostPurchCount:'1', boostPurchCap:'7000.00', boostPurchPct:'20',
       boostLeadCount:'5', boostLeadCap:'200.00', boostLeadPct:'20',
-      _pbCount:'30', _pbAmount:'2100.00',
+      _pbCount:'1', _pbAmount:'2100.00',
       _entity: 'AD',
       _entityKeyword: 'CTRL',
       // schedule: TZ UTC-7 — ON at 00:00, OFF at 23:00 cabinet time
@@ -838,6 +840,8 @@ function mountGenerator(container) {
         'TurnOff by Name at Time',
         'Kill Switch: TurnOff All at Time',
         'Morning Reset: TurnOn by 7-day CPL',
+        'Budget: Increase budget by amount after N purchases',
+        'Budget: Boost % after N purchases with good CPP',
       ]
     }
   };
