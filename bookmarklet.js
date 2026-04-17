@@ -731,6 +731,114 @@ function mountGenerator(container) {
         'ROAS: Pause if low & spend reached',
         'ROAS: Unpause if recovered',
       ]
+    },
+    gambling_plus3: {
+      // thresholds (CPC cents, Lead $20, Reg $60, Deposit $220)
+      maxCPC:'8.00', maxLeadCost:'20.00', maxCPARegistration:'60.00', maxDepositCost:'220.00',
+      // ROAS
+      roasLowPause:'0.6', roasSpendLimitPause:'50.00', roasRecover:'1.0', recoveryMult:'0.9',
+      roasHigh:'1.4', roasBoostPct:'20', roasBoostCap:'7000.00', roasLowCut:'0.9', roasCutPct:'20',
+      roasMinDailyBudget:'10.00', roasMinSpend:'5.00',
+      // CTR Guard
+      minCTR:'0.7', minSpendCTR:'10.00',
+      // Frequency Burn
+      maxFrequency:'2', minSpendFreq:'20.00', minImpressionsFreq:'100',
+      // Impressions Guard
+      minImpressionsLead:'1000', minSpendImpressions:'15.00',
+      // Daily Spend Cap
+      budgetExhaustion:'80.00',
+      // CPM Guard
+      maxCPM:'200.00', minSpendCPM:'5.00',
+      // Budget boost % purchases
+      boostPurchCount:'5', boostPurchCap:'7000.00', boostPurchPct:'20',
+      // Budget boost % leads
+      boostLeadCount:'5', boostLeadCap:'200.00', boostLeadPct:'20',
+      // Budget fixed
+      _pbCount:'30', _pbAmount:'2100.00',
+      // entity
+      _entity: 'AD',
+      _entityKeyword: 'CTRL',
+      // schedule: TZ UTC+3 — ON at 00:00, OFF at 23:00 cabinet time
+      _onName: 'RESUME', _onTime: '00',
+      _offName: 'HOLD',  _offTime: '23',
+      _killTime: '23',
+      _morningResetTime: '00',
+      _morningResetWindow: 'LAST_7D',
+      _mrCntClick: '1',
+      _mrSpA: { click: [true, '1', '2'],  lead: [false,'1','1.5'], reg: [false,'1','1.5'], purch: [false,'1','1'] },
+      _mrSpB: { click: [true, '2', '1'],  lead: [false,'1','1'],   reg: [false,'1','1'],   purch: [false,'1','1'] },
+      _rules: [
+        'TurnOff Without Clicks with spent maxCPC',
+        'TurnOff With Expensive CPC',
+        'TurnOff Without Leads',
+        'TurnOff With Expensive Leads',
+        'TurnOff Without Purchases',
+        'TurnOff With Expensive Purchases',
+        'TurnOff High Impressions No Purchases',
+        'TurnOff Daily Budget Exhaustion',
+        'CPM Guard',
+        'CTR Guard',
+        'Frequency Burn',
+        'TurnOn If Cheap Click (CPC)',
+        'TurnOn If Cheap Lead (CPL)',
+        'TurnOn If Cheap Purchase (CPP)',
+        'TurnOn If Clicks Present (>0)',
+        'TurnOn If Leads Present (>0)',
+        'TurnOn If Purchases Present (>0)',
+        'TurnOn by Name at Time',
+        'TurnOff by Name at Time',
+        'Kill Switch: TurnOff All at Time',
+        'Morning Reset: TurnOn by 7-day CPL',
+      ]
+    },
+    gambling_minus7: {
+      // Same thresholds as gambling_plus3
+      maxCPC:'8.00', maxLeadCost:'20.00', maxCPARegistration:'60.00', maxDepositCost:'220.00',
+      roasLowPause:'0.6', roasSpendLimitPause:'50.00', roasRecover:'1.0', recoveryMult:'0.9',
+      roasHigh:'1.4', roasBoostPct:'20', roasBoostCap:'7000.00', roasLowCut:'0.9', roasCutPct:'20',
+      roasMinDailyBudget:'10.00', roasMinSpend:'5.00',
+      minCTR:'0.7', minSpendCTR:'10.00',
+      maxFrequency:'2', minSpendFreq:'20.00', minImpressionsFreq:'100',
+      minImpressionsLead:'1000', minSpendImpressions:'15.00',
+      budgetExhaustion:'80.00',
+      maxCPM:'200.00', minSpendCPM:'5.00',
+      boostPurchCount:'5', boostPurchCap:'7000.00', boostPurchPct:'20',
+      boostLeadCount:'5', boostLeadCap:'200.00', boostLeadPct:'20',
+      _pbCount:'30', _pbAmount:'2100.00',
+      _entity: 'AD',
+      _entityKeyword: 'CTRL',
+      // schedule: TZ UTC-7 — ON at 00:00, OFF at 23:00 cabinet time
+      _onName: 'RESUME', _onTime: '00',
+      _offName: 'HOLD',  _offTime: '23',
+      _killTime: '23',
+      _morningResetTime: '00',
+      _morningResetWindow: 'LAST_7D',
+      _mrCntClick: '1',
+      _mrSpA: { click: [true, '1', '2'],  lead: [false,'1','1.5'], reg: [false,'1','1.5'], purch: [false,'1','1'] },
+      _mrSpB: { click: [true, '2', '1'],  lead: [false,'1','1'],   reg: [false,'1','1'],   purch: [false,'1','1'] },
+      _rules: [
+        'TurnOff Without Clicks with spent maxCPC',
+        'TurnOff With Expensive CPC',
+        'TurnOff Without Leads',
+        'TurnOff With Expensive Leads',
+        'TurnOff Without Purchases',
+        'TurnOff With Expensive Purchases',
+        'TurnOff High Impressions No Purchases',
+        'TurnOff Daily Budget Exhaustion',
+        'CPM Guard',
+        'CTR Guard',
+        'Frequency Burn',
+        'TurnOn If Cheap Click (CPC)',
+        'TurnOn If Cheap Lead (CPL)',
+        'TurnOn If Cheap Purchase (CPP)',
+        'TurnOn If Clicks Present (>0)',
+        'TurnOn If Leads Present (>0)',
+        'TurnOn If Purchases Present (>0)',
+        'TurnOn by Name at Time',
+        'TurnOff by Name at Time',
+        'Kill Switch: TurnOff All at Time',
+        'Morning Reset: TurnOn by 7-day CPL',
+      ]
     }
   };
 
@@ -1393,6 +1501,22 @@ function mountGenerator(container) {
   leadgenBtn.textContent = '🎯 Leadgen';
   leadgenBtn.onclick = () => applyPreset('leadgen');
   presetRow.appendChild(leadgenBtn);
+
+  // Gambling +3 preset button
+  const gambPlus3Btn = document.createElement('button');
+  gambPlus3Btn.className = 'ar-preset-btn';
+  gambPlus3Btn.style.cssText = 'border-color:#f59e0b;color:#f59e0b;font-weight:700';
+  gambPlus3Btn.textContent = '🎰 Gambl +3';
+  gambPlus3Btn.onclick = () => applyPreset('gambling_plus3');
+  presetRow.appendChild(gambPlus3Btn);
+
+  // Gambling -7 preset button
+  const gambMinus7Btn = document.createElement('button');
+  gambMinus7Btn.className = 'ar-preset-btn';
+  gambMinus7Btn.style.cssText = 'border-color:#f59e0b;color:#f59e0b;font-weight:700';
+  gambMinus7Btn.textContent = '🎰 Gambl -7';
+  gambMinus7Btn.onclick = () => applyPreset('gambling_minus7');
+  presetRow.appendChild(gambMinus7Btn);
 
   // ---- generate ----
   btnGen.onclick = async () => {
