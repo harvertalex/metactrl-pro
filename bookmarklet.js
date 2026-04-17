@@ -898,6 +898,63 @@ function mountGenerator(container) {
   });
   schGrid.appendChild(mrCntBlock);
 
+  // Spend-based conditions subheader
+  const mrSpendHdr = document.createElement('div');
+  mrSpendHdr.style.cssText = 'grid-column:span 2;font-size:11px;font-weight:700;color:var(--muted);margin-top:8px;letter-spacing:.03em';
+  mrSpendHdr.textContent = 'SPEND-BASED CONDITIONS (all levels — use instead of cost_per_* on AD)';
+  schGrid.appendChild(mrSpendHdr);
+
+  const mrSpendInfo = document.createElement('div');
+  mrSpendInfo.style.cssText = 'grid-column:span 2;font-size:11px;color:var(--muted);margin-bottom:4px';
+  mrSpendInfo.textContent = 'Unpause if spent < threshold × multiplier (AND optionally clicks < N). Works on AD level where cost_per_* is blocked.';
+  schGrid.appendChild(mrSpendInfo);
+
+  // [cbKey, multKey, cntKey, label, thresholdRef, defaultMult, defaultCnt]
+  // thresholdRef: which ctx.thresholds field to multiply
+  const mrSpendDefs = [
+    ['mrSpClickCb',  'mrSpClickMult',  'mrSpClickCnt',  'clicks < N  AND  spent < maxCPC × mult',     'maxCPC',         '2',   '2'],
+    ['mrSpLeadCb',   'mrSpLeadMult',   'mrSpLeadCnt',   'leads < N  AND  spent < maxLeadCost × mult',  'maxLeadCost',    '1.5', '1'],
+    ['mrSpRegCb',    'mrSpRegMult',    'mrSpRegCnt',    'regs < N  AND  spent < maxCPA × mult',        'maxCPARegistration', '1.5', '1'],
+    ['mrSpPurchCb',  'mrSpPurchMult',  'mrSpPurchCnt',  'purchases < N  AND  spent < maxCPP × mult',   'maxDepositCost', '1',   '1'],
+  ];
+  const mrSpendVars = {};
+  const mrSpendBlock = document.createElement('div');
+  mrSpendBlock.style.cssText = 'grid-column:span 2;display:flex;flex-direction:column;gap:6px';
+  mrSpendDefs.forEach(([cbKey, multKey, cntKey, lbl,, defaultMult, defaultCnt]) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.style.cssText = 'accent-color:var(--acc);flex-shrink:0;width:13px;height:13px';
+    const labelEl = document.createElement('span');
+    labelEl.style.cssText = 'font-size:12px;color:var(--txt);flex:1;min-width:120px';
+    labelEl.textContent = lbl;
+    // cnt input
+    const cntWrap = document.createElement('span');
+    cntWrap.style.cssText = 'display:flex;align-items:center;gap:3px;font-size:11px;color:var(--muted)';
+    cntWrap.textContent = 'N=';
+    const cntEl = document.createElement('input');
+    cntEl.value = defaultCnt; cntEl.placeholder = 'N';
+    cntEl.style.cssText = 'width:42px;background:var(--card);color:var(--txt);border:1px solid var(--bdr);border-radius:6px;padding:3px 5px;font-size:12px';
+    cntEl.disabled = true;
+    cntWrap.appendChild(cntEl);
+    // mult input
+    const multWrap = document.createElement('span');
+    multWrap.style.cssText = 'display:flex;align-items:center;gap:3px;font-size:11px;color:var(--muted)';
+    multWrap.textContent = '×=';
+    const multEl = document.createElement('input');
+    multEl.value = defaultMult; multEl.placeholder = '×';
+    multEl.style.cssText = 'width:42px;background:var(--card);color:var(--txt);border:1px solid var(--bdr);border-radius:6px;padding:3px 5px;font-size:12px';
+    multEl.disabled = true;
+    multWrap.appendChild(multEl);
+    cb.onchange = () => { cntEl.disabled = !cb.checked; multEl.disabled = !cb.checked; };
+    row.appendChild(cb); row.appendChild(labelEl); row.appendChild(cntWrap); row.appendChild(multWrap);
+    mrSpendBlock.appendChild(row);
+    mrSpendVars[cbKey]  = cb;
+    mrSpendVars[multKey] = multEl;
+    mrSpendVars[cntKey]  = cntEl;
+  });
+  schGrid.appendChild(mrSpendBlock);
+
   // ---- 4. Pause Triggers ----
   const protSec  = section(container, '⏸️', 'Pause Triggers', false);
   const protGrid = document.createElement('div');
@@ -1341,6 +1398,13 @@ function mountGenerator(container) {
               field: fbField,
               operator: op,
               value: Math.max(0, parseInt(mrCntVars[inpKey].value||'1', 10) || 1) - 1
+            })),
+          morningResetSpendConditions: mrSpendDefs
+            .filter(([cbKey]) => mrSpendVars[cbKey].checked)
+            .map(([cbKey, multKey, cntKey,, thresholdRef, defaultMult, defaultCnt]) => ({
+              thresholdRef,
+              mult:  Math.max(0.1, +(mrSpendVars[multKey].value || defaultMult)),
+              maxCnt: Math.max(0, parseInt(mrSpendVars[cntKey].value || defaultCnt, 10) || 0)
             }))
         }
       };
@@ -2005,16 +2069,17 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
     }
   }
 
-  /* ------- NEW: Morning Reset — configurable conditions ------- */
+  /* ------- Morning Reset — configurable conditions ------- */
   if (selectedRules.includes('Morning Reset: TurnOn by 7-day CPL')) {
-    const mm        = protection.morningResetMinute;
-    const costConds = protection.morningResetConditions || [];
-    const cntConds  = protection.morningResetCountConditions || [];
-    const win       = protection.morningResetWindow || 'LAST_7D';
+    const mm         = protection.morningResetMinute;
+    const costConds  = protection.morningResetConditions || [];
+    const cntConds   = protection.morningResetCountConditions || [];
+    const spendConds = protection.morningResetSpendConditions || [];
+    const win        = protection.morningResetWindow || 'LAST_7D';
 
     if (!mm && mm !== 0) {
       log('⚠️ Morning Reset — no time set, skipped.', 'warning');
-    } else if (!costConds.length && !cntConds.length) {
+    } else if (!costConds.length && !cntConds.length && !spendConds.length) {
       log('⚠️ Morning Reset — no conditions selected, skipped.', 'warning');
     } else {
       // Cost conditions: filter out campaign-only fields on ADSET/AD
@@ -2027,12 +2092,9 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
         return true;
       });
 
-      // Count conditions work on all levels — no filtering needed
+      // Cost/count rule (existing behaviour)
       const allAllowed = [...allowedCost, ...cntConds];
-
-      if (!allAllowed.length) {
-        log('⚠️ Morning Reset — all conditions require CAMPAIGN level, skipped.', 'warning');
-      } else {
+      if (allAllowed.length) {
         const winLabel = { YESTERDAY: 'yesterday', LAST_3D: 'last 3d', LAST_7D: 'last 7d' }[win] || win;
         const costDesc = allowedCost.map(c => {
           const label = { cost_per_link_click:'CPC', cost_per_lead_fb:'CPL', cost_per_complete_registration_fb:'CPA', cost_per_purchase_fb:'CPP' }[c.field] || c.field;
@@ -2048,9 +2110,42 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
           `MORNING RESET — Unpause ${artype} at ${minutesToTimeStr(mm)} [${winLabel}]: ${condDesc}`,
           kw([
             { field:'entity_type', operator:'EQUAL', value: artype },
-            ...allowedCost.map(c => ({ field: c.field, operator: 'LESS_THAN',    value: c.value })),
-            ...cntConds.map(c =>    ({ field: c.field, operator: c.operator, value: c.value })),
+            ...allowedCost.map(c => ({ field: c.field, operator: 'LESS_THAN',  value: c.value })),
+            ...cntConds.map(c =>    ({ field: c.field, operator: c.operator,   value: c.value })),
             presetWin
+          ]),
+          execUnpause(),
+          scheduleAtMinute(mm)
+        );
+      }
+
+      // Spend-based rules — one rule per spend condition, all levels including AD
+      // Uses YESTERDAY window (regardless of mrWindowSel) because we look at prior day spend
+      const thresholdMap = { maxCPC, maxLeadCost, maxCPARegistration, maxDepositCost };
+      const cntFieldMap  = {
+        maxCPC:             { field: 'link_click',                                       label: 'clicks'    },
+        maxLeadCost:        { field: 'offsite_conversion.fb_pixel_lead',                 label: 'leads'     },
+        maxCPARegistration: { field: 'offsite_conversion.fb_pixel_complete_registration', label: 'regs'     },
+        maxDepositCost:     { field: 'offsite_conversion.fb_pixel_purchase',             label: 'purchases' },
+      };
+      const presetYesterday = { field: 'time_preset', value: 'YESTERDAY', operator: 'EQUAL' };
+
+      for (const sc of spendConds) {
+        const baseThreshold = thresholdMap[sc.thresholdRef];
+        if (!baseThreshold) { log(`⚠️ Morning Reset Spend — unknown threshold ref "${sc.thresholdRef}", skipped.`, 'warning'); continue; }
+        const spendLimit   = Math.round(baseThreshold * sc.mult);
+        const cntInfo      = cntFieldMap[sc.thresholdRef];
+        const maxCnt       = sc.maxCnt; // unpause if count LESS_THAN maxCnt (i.e. < maxCnt)
+        const threshLabel  = { maxCPC:'maxCPC', maxLeadCost:'maxLeadCost', maxCPARegistration:'maxCPA', maxDepositCost:'maxCPP' }[sc.thresholdRef] || sc.thresholdRef;
+        const title = `MORNING RESET — Unpause ${artype} at ${minutesToTimeStr(mm)} [yesterday]: ${cntInfo.label}<${maxCnt} & spent<${threshLabel}×${sc.mult}(${(spendLimit/100).toFixed(2)})`;
+        await addRule(
+          title,
+          kw([
+            { field:'entity_type',  operator:'EQUAL',        value: artype },
+            { field: cntInfo.field, operator:'LESS_THAN',    value: maxCnt },
+            { field:'spent',        operator:'LESS_THAN',    value: spendLimit },
+            { field:'spent',        operator:'GREATER_THAN', value: 0 },
+            presetYesterday
           ]),
           execUnpause(),
           scheduleAtMinute(mm)
