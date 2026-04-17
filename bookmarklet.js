@@ -671,14 +671,26 @@ function mountGenerator(container) {
     aggressive:   { maxCPC:'3.00', maxLeadCost:'3.00', maxCPARegistration:'3.00', maxDepositCost:'20.00', roasHigh:'1.2', roasBoostPct:'30', roasBoostCap:'500.00', roasLowCut:'1.0', roasCutPct:'25', roasMinDailyBudget:'8.00',  roasMinSpend:'3.00',  roasLowPause:'0.9', roasSpendLimitPause:'30.00', roasRecover:'1.0', recoveryMult:'0.95', minCTR:'0.7', maxFrequency:'2.5' },
     leadgen: {
       // thresholds
-      maxCPC:'5.00', maxLeadCost:'0', maxCPARegistration:'0', maxDepositCost:'11.00',
-      roasLowPause:'0.8', roasSpendLimitPause:'50.00', roasRecover:'1.0',
-      maxCPM:'150.00', minSpendCPM: '5.00',
-      // not used in leadgen — kept at defaults
-      roasHigh:'1.4', roasBoostPct:'20', roasBoostCap:'70.00', roasLowCut:'0.9', roasCutPct:'20',
-      roasMinDailyBudget:'10.00', roasMinSpend:'5.00', recoveryMult:'0.9',
-      minCTR:'0.5', maxFrequency:'3.5',
+      maxCPC:'5.00', maxLeadCost:'0', maxCPARegistration:'0', maxDepositCost:'9.00',
+      // ROAS pause/unpause
+      roasLowPause:'0.6', roasSpendLimitPause:'29.00', roasRecover:'1.0', recoveryMult:'0.9',
+      // ROAS budget boost/cut
+      roasHigh:'1.4', roasBoostPct:'20', roasBoostCap:'7000.00', roasLowCut:'0.9', roasCutPct:'20',
+      roasMinDailyBudget:'10.00', roasMinSpend:'5.00',
+      // CTR Guard
+      minCTR:'2', minSpendCTR:'10.00',
+      // Frequency Burn
+      maxFrequency:'2', minSpendFreq:'20.00', minImpressionsFreq:'100',
+      // Impressions Guard
+      minImpressionsLead:'1000', minSpendImpressions:'15.00',
+      // Daily Spend Cap
+      budgetExhaustion:'80.00',
+      // CPM Guard
+      maxCPM:'200.00', minSpendCPM:'5.00',
+      // Budget boost % purchases
       boostPurchCount:'5', boostPurchCap:'7000.00', boostPurchPct:'20',
+      // Budget boost % leads
+      boostLeadCount:'5', boostLeadCap:'200.00', boostLeadPct:'20',
       // Budget fixed: +$2100 after 30 purchases
       _pbCount:'30', _pbAmount:'2100.00',
       // entity
@@ -691,6 +703,9 @@ function mountGenerator(container) {
       _morningResetTime: '05',
       _morningResetWindow: 'LAST_7D',
       _mrCntClick: '1',
+      // Morning Reset spend-based: [checked, N, mult]
+      _mrSpA: { click: [true, '1', '2'],  lead: [false,'1','1.5'], reg: [false,'1','1.5'], purch: [false,'1','1'] },
+      _mrSpB: { click: [true, '1', '1.5'], lead: [false,'1','1'],  reg: [false,'1','1'],   purch: [false,'1','1'] },
       // rules to enable (all others disabled)
       _rules: [
         'TurnOff Without Clicks with spent maxCPC',
@@ -698,7 +713,10 @@ function mountGenerator(container) {
         'TurnOff Without Purchases',
         'TurnOff With Expensive Purchases',
         'TurnOff High Impressions No Purchases',
+        'TurnOff Daily Budget Exhaustion',
         'CPM Guard',
+        'CTR Guard',
+        'Frequency Burn',
         'TurnOn If Cheap Click (CPC)',
         'TurnOn If Cheap Purchase (CPP)',
         'TurnOn If Clicks Present (>0)',
@@ -709,6 +727,7 @@ function mountGenerator(container) {
         'Morning Reset: TurnOn by 7-day CPL',
         'Budget: Increase budget by amount after N purchases',
         'Budget: Boost % after N purchases with good CPP',
+        'Budget: Boost % after N leads with good CPL',
         'ROAS: Pause if low & spend reached',
         'ROAS: Unpause if recovered',
       ]
@@ -1293,7 +1312,9 @@ function mountGenerator(container) {
     minImpressionsLead: minImpressionsLeadInput, minSpendImpressions: minSpendImpressionsInput,
     maxCPM: maxCPMInput, minSpendCPM: minSpendCPMInput,
     budgetExhaustion: budgetExhaustionInput,
-    boostPurchCount: boostPurchCountInput, boostPurchCap: boostPurchCapInput, boostPurchPct: boostPurchAmtInput
+    boostPurchCount: boostPurchCountInput, boostPurchCap: boostPurchCapInput, boostPurchPct: boostPurchAmtInput,
+    boostLeadCount: boostLeadCountInput, boostLeadCap: boostLeadCapInput, boostLeadPct: boostLeadAmtInput,
+    minSpendCTR: minSpendCTRInput, minSpendFreq: minSpendFreqInput, minImpressionsFreq: minImpressionsFreqInput
   };
 
   function applyPreset(level) {
@@ -1321,6 +1342,28 @@ function mountGenerator(container) {
       mrCntVars.mrCntLeadCb.checked  = false; mrCntVars.mrCntLeadInput.disabled  = true;
       mrCntVars.mrCntRegCb.checked   = false; mrCntVars.mrCntRegInput.disabled   = true;
       mrCntVars.mrCntPurchCb.checked = false; mrCntVars.mrCntPurchInput.disabled = true;
+    }
+    // morning reset spend-based conditions (Scenario A and B)
+    // Format: { A: { click:[checked, N, mult], lead:..., reg:..., purch:... }, B: { ... } }
+    if (p._mrSpA !== undefined) {
+      const defs = { click: ['mrSpAClickCb','mrSpAClickMult','mrSpAClickCnt'], lead: ['mrSpALeadCb','mrSpALeadMult','mrSpALeadCnt'], reg: ['mrSpARegCb','mrSpARegMult','mrSpARegCnt'], purch: ['mrSpAPurchCb','mrSpAPurchMult','mrSpAPurchCnt'] };
+      Object.entries(defs).forEach(([key, [cbK, multK, cntK]]) => {
+        const val = p._mrSpA[key];
+        const checked = !!(val && val[0]);
+        mrSpAVars[cbK].checked = checked;
+        mrSpAVars[multK].disabled = !checked; mrSpAVars[cntK].disabled = !checked;
+        if (val) { mrSpAVars[cntK].value = val[1]; mrSpAVars[multK].value = val[2]; }
+      });
+    }
+    if (p._mrSpB !== undefined) {
+      const defs = { click: ['mrSpBClickCb','mrSpBClickMult','mrSpBClickCnt'], lead: ['mrSpBLeadCb','mrSpBLeadMult','mrSpBLeadCnt'], reg: ['mrSpBRegCb','mrSpBRegMult','mrSpBRegCnt'], purch: ['mrSpBPurchCb','mrSpBPurchMult','mrSpBPurchCnt'] };
+      Object.entries(defs).forEach(([key, [cbK, multK, cntK]]) => {
+        const val = p._mrSpB[key];
+        const checked = !!(val && val[0]);
+        mrSpBVars[cbK].checked = checked;
+        mrSpBVars[multK].disabled = !checked; mrSpBVars[cntK].disabled = !checked;
+        if (val) { mrSpBVars[cntK].value = val[1]; mrSpBVars[multK].value = val[2]; }
+      });
     }
     // budget fixed boost fields
     if (p._pbCount  !== undefined) pbCountInput.value  = p._pbCount;
