@@ -2215,10 +2215,9 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
           await addRule(
             title,
             kw([
-              { field:'entity_type',  operator:'EQUAL',        value: artype },
-              { field: cntInfo.field, operator:'LESS_THAN',    value: sc.cntVal },
-              { field:'spent',        operator:'LESS_THAN',    value: spendLimit },
-              { field:'spent',        operator:'GREATER_THAN', value: 0 },
+              { field:'entity_type',  operator:'EQUAL',     value: artype },
+              { field: cntInfo.field, operator:'LESS_THAN', value: sc.cntVal },
+              { field:'spent',        operator:'LESS_THAN', value: spendLimit },
               presetYesterday
             ]),
             execUnpause(),
