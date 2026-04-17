@@ -901,43 +901,42 @@ function mountGenerator(container) {
   // Spend-based conditions subheader
   const mrSpendHdr = document.createElement('div');
   mrSpendHdr.style.cssText = 'grid-column:span 2;font-size:11px;font-weight:700;color:var(--muted);margin-top:8px;letter-spacing:.03em';
-  mrSpendHdr.textContent = 'SPEND-BASED CONDITIONS (all levels — use instead of cost_per_* on AD)';
+  mrSpendHdr.textContent = 'SPEND-BASED CONDITIONS (all levels — AD-safe, uses YESTERDAY window)';
   schGrid.appendChild(mrSpendHdr);
 
-  const mrSpendInfo = document.createElement('div');
-  mrSpendInfo.style.cssText = 'grid-column:span 2;font-size:11px;color:var(--muted);margin-bottom:4px';
-  mrSpendInfo.textContent = 'Unpause if spent < threshold × multiplier (AND optionally clicks < N). Works on AD level where cost_per_* is blocked.';
-  schGrid.appendChild(mrSpendInfo);
+  // --- Scenario A: "gave results, not expensive" ---
+  // clicks >= minN AND spent < threshold × mult  →  cheap result, worth waking up
+  const mrSpAHdr = document.createElement('div');
+  mrSpAHdr.style.cssText = 'grid-column:span 2;font-size:11px;color:#60a5fa;font-weight:600;margin-top:6px';
+  mrSpAHdr.textContent = 'A — Good result / cheap: clicks ≥ N  AND  spent < threshold × mult';
+  schGrid.appendChild(mrSpAHdr);
 
   // [cbKey, multKey, cntKey, label, thresholdRef, defaultMult, defaultCnt]
-  // thresholdRef: which ctx.thresholds field to multiply
-  const mrSpendDefs = [
-    ['mrSpClickCb',  'mrSpClickMult',  'mrSpClickCnt',  'clicks < N  AND  spent < maxCPC × mult',     'maxCPC',         '2',   '2'],
-    ['mrSpLeadCb',   'mrSpLeadMult',   'mrSpLeadCnt',   'leads < N  AND  spent < maxLeadCost × mult',  'maxLeadCost',    '1.5', '1'],
-    ['mrSpRegCb',    'mrSpRegMult',    'mrSpRegCnt',    'regs < N  AND  spent < maxCPA × mult',        'maxCPARegistration', '1.5', '1'],
-    ['mrSpPurchCb',  'mrSpPurchMult',  'mrSpPurchCnt',  'purchases < N  AND  spent < maxCPP × mult',   'maxDepositCost', '1',   '1'],
+  const mrSpADefs = [
+    ['mrSpAClickCb',  'mrSpAClickMult',  'mrSpAClickCnt',  'clicks ≥ N  AND  spent < maxCPC × mult',       'maxCPC',             '2',   '1'],
+    ['mrSpALeadCb',   'mrSpALeadMult',   'mrSpALeadCnt',   'leads ≥ N  AND  spent < maxLeadCost × mult',   'maxLeadCost',        '1.5', '1'],
+    ['mrSpARegCb',    'mrSpARegMult',    'mrSpARegCnt',    'regs ≥ N  AND  spent < maxCPA × mult',         'maxCPARegistration', '1.5', '1'],
+    ['mrSpAPurchCb',  'mrSpAPurchMult',  'mrSpAPurchCnt',  'purchases ≥ N  AND  spent < maxCPP × mult',    'maxDepositCost',     '1',   '1'],
   ];
-  const mrSpendVars = {};
-  const mrSpendBlock = document.createElement('div');
-  mrSpendBlock.style.cssText = 'grid-column:span 2;display:flex;flex-direction:column;gap:6px';
-  mrSpendDefs.forEach(([cbKey, multKey, cntKey, lbl,, defaultMult, defaultCnt]) => {
+  const mrSpAVars = {};
+  const mrSpABlock = document.createElement('div');
+  mrSpABlock.style.cssText = 'grid-column:span 2;display:flex;flex-direction:column;gap:5px';
+  mrSpADefs.forEach(([cbKey, multKey, cntKey, lbl,, defaultMult, defaultCnt]) => {
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap';
     const cb = document.createElement('input');
     cb.type = 'checkbox'; cb.style.cssText = 'accent-color:var(--acc);flex-shrink:0;width:13px;height:13px';
     const labelEl = document.createElement('span');
-    labelEl.style.cssText = 'font-size:12px;color:var(--txt);flex:1;min-width:120px';
+    labelEl.style.cssText = 'font-size:12px;color:var(--txt);flex:1;min-width:140px';
     labelEl.textContent = lbl;
-    // cnt input
     const cntWrap = document.createElement('span');
     cntWrap.style.cssText = 'display:flex;align-items:center;gap:3px;font-size:11px;color:var(--muted)';
-    cntWrap.textContent = 'N=';
+    cntWrap.textContent = 'N≥';
     const cntEl = document.createElement('input');
     cntEl.value = defaultCnt; cntEl.placeholder = 'N';
     cntEl.style.cssText = 'width:42px;background:var(--card);color:var(--txt);border:1px solid var(--bdr);border-radius:6px;padding:3px 5px;font-size:12px';
     cntEl.disabled = true;
     cntWrap.appendChild(cntEl);
-    // mult input
     const multWrap = document.createElement('span');
     multWrap.style.cssText = 'display:flex;align-items:center;gap:3px;font-size:11px;color:var(--muted)';
     multWrap.textContent = '×=';
@@ -948,12 +947,57 @@ function mountGenerator(container) {
     multWrap.appendChild(multEl);
     cb.onchange = () => { cntEl.disabled = !cb.checked; multEl.disabled = !cb.checked; };
     row.appendChild(cb); row.appendChild(labelEl); row.appendChild(cntWrap); row.appendChild(multWrap);
-    mrSpendBlock.appendChild(row);
-    mrSpendVars[cbKey]  = cb;
-    mrSpendVars[multKey] = multEl;
-    mrSpendVars[cntKey]  = cntEl;
+    mrSpABlock.appendChild(row);
+    mrSpAVars[cbKey] = cb; mrSpAVars[multKey] = multEl; mrSpAVars[cntKey] = cntEl;
   });
-  schGrid.appendChild(mrSpendBlock);
+  schGrid.appendChild(mrSpABlock);
+
+  // --- Scenario B: "barely ran, give another chance" ---
+  // clicks < maxN AND spent < threshold × mult  →  almost no activity, retry
+  const mrSpBHdr = document.createElement('div');
+  mrSpBHdr.style.cssText = 'grid-column:span 2;font-size:11px;color:#a78bfa;font-weight:600;margin-top:8px';
+  mrSpBHdr.textContent = 'B — Barely ran / give chance: clicks < N  AND  spent < threshold × mult';
+  schGrid.appendChild(mrSpBHdr);
+
+  const mrSpBDefs = [
+    ['mrSpBClickCb',  'mrSpBClickMult',  'mrSpBClickCnt',  'clicks < N  AND  spent < maxCPC × mult',       'maxCPC',             '1',   '2'],
+    ['mrSpBLeadCb',   'mrSpBLeadMult',   'mrSpBLeadCnt',   'leads < N  AND  spent < maxLeadCost × mult',   'maxLeadCost',        '1',   '1'],
+    ['mrSpBRegCb',    'mrSpBRegMult',    'mrSpBRegCnt',    'regs < N  AND  spent < maxCPA × mult',         'maxCPARegistration', '1',   '1'],
+    ['mrSpBPurchCb',  'mrSpBPurchMult',  'mrSpBPurchCnt',  'purchases < N  AND  spent < maxCPP × mult',    'maxDepositCost',     '1',   '1'],
+  ];
+  const mrSpBVars = {};
+  const mrSpBBlock = document.createElement('div');
+  mrSpBBlock.style.cssText = 'grid-column:span 2;display:flex;flex-direction:column;gap:5px';
+  mrSpBDefs.forEach(([cbKey, multKey, cntKey, lbl,, defaultMult, defaultCnt]) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.style.cssText = 'accent-color:var(--acc);flex-shrink:0;width:13px;height:13px';
+    const labelEl = document.createElement('span');
+    labelEl.style.cssText = 'font-size:12px;color:var(--txt);flex:1;min-width:140px';
+    labelEl.textContent = lbl;
+    const cntWrap = document.createElement('span');
+    cntWrap.style.cssText = 'display:flex;align-items:center;gap:3px;font-size:11px;color:var(--muted)';
+    cntWrap.textContent = 'N<';
+    const cntEl = document.createElement('input');
+    cntEl.value = defaultCnt; cntEl.placeholder = 'N';
+    cntEl.style.cssText = 'width:42px;background:var(--card);color:var(--txt);border:1px solid var(--bdr);border-radius:6px;padding:3px 5px;font-size:12px';
+    cntEl.disabled = true;
+    cntWrap.appendChild(cntEl);
+    const multWrap = document.createElement('span');
+    multWrap.style.cssText = 'display:flex;align-items:center;gap:3px;font-size:11px;color:var(--muted)';
+    multWrap.textContent = '×=';
+    const multEl = document.createElement('input');
+    multEl.value = defaultMult; multEl.placeholder = '×';
+    multEl.style.cssText = 'width:42px;background:var(--card);color:var(--txt);border:1px solid var(--bdr);border-radius:6px;padding:3px 5px;font-size:12px';
+    multEl.disabled = true;
+    multWrap.appendChild(multEl);
+    cb.onchange = () => { cntEl.disabled = !cb.checked; multEl.disabled = !cb.checked; };
+    row.appendChild(cb); row.appendChild(labelEl); row.appendChild(cntWrap); row.appendChild(multWrap);
+    mrSpBBlock.appendChild(row);
+    mrSpBVars[cbKey] = cb; mrSpBVars[multKey] = multEl; mrSpBVars[cntKey] = cntEl;
+  });
+  schGrid.appendChild(mrSpBBlock);
 
   // ---- 4. Pause Triggers ----
   const protSec  = section(container, '⏸️', 'Pause Triggers', false);
@@ -1399,13 +1443,26 @@ function mountGenerator(container) {
               operator: op,
               value: Math.max(0, parseInt(mrCntVars[inpKey].value||'1', 10) || 1) - 1
             })),
-          morningResetSpendConditions: mrSpendDefs
-            .filter(([cbKey]) => mrSpendVars[cbKey].checked)
-            .map(([cbKey, multKey, cntKey,, thresholdRef, defaultMult, defaultCnt]) => ({
-              thresholdRef,
-              mult:  Math.max(0.1, +(mrSpendVars[multKey].value || defaultMult)),
-              maxCnt: Math.max(0, parseInt(mrSpendVars[cntKey].value || defaultCnt, 10) || 0)
-            }))
+          morningResetSpendConditions: [
+            // Scenario A: cnt >= N AND spent < threshold*mult  (good result, cheap)
+            ...mrSpADefs
+              .filter(([cbKey]) => mrSpAVars[cbKey].checked)
+              .map(([cbKey, multKey, cntKey,, thresholdRef, defaultMult, defaultCnt]) => ({
+                scenario: 'A',
+                thresholdRef,
+                mult:   Math.max(0.1, +(mrSpAVars[multKey].value || defaultMult)),
+                cntVal: Math.max(1,   parseInt(mrSpAVars[cntKey].value || defaultCnt, 10) || 1)
+              })),
+            // Scenario B: cnt < N AND spent < threshold*mult  (barely ran, retry)
+            ...mrSpBDefs
+              .filter(([cbKey]) => mrSpBVars[cbKey].checked)
+              .map(([cbKey, multKey, cntKey,, thresholdRef, defaultMult, defaultCnt]) => ({
+                scenario: 'B',
+                thresholdRef,
+                mult:   Math.max(0.1, +(mrSpBVars[multKey].value || defaultMult)),
+                cntVal: Math.max(1,   parseInt(mrSpBVars[cntKey].value || defaultCnt, 10) || 1)
+              }))
+          ]
         }
       };
 
@@ -2119,37 +2176,55 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
         );
       }
 
-      // Spend-based rules — one rule per spend condition, all levels including AD
-      // Uses YESTERDAY window (regardless of mrWindowSel) because we look at prior day spend
+      // Spend-based rules — one rule per condition, all levels including AD
+      // Always uses YESTERDAY window
       const thresholdMap = { maxCPC, maxLeadCost, maxCPARegistration, maxDepositCost };
       const cntFieldMap  = {
-        maxCPC:             { field: 'link_click',                                       label: 'clicks'    },
-        maxLeadCost:        { field: 'offsite_conversion.fb_pixel_lead',                 label: 'leads'     },
-        maxCPARegistration: { field: 'offsite_conversion.fb_pixel_complete_registration', label: 'regs'     },
-        maxDepositCost:     { field: 'offsite_conversion.fb_pixel_purchase',             label: 'purchases' },
+        maxCPC:             { field: 'link_click',                                        label: 'clicks'    },
+        maxLeadCost:        { field: 'offsite_conversion.fb_pixel_lead',                  label: 'leads'     },
+        maxCPARegistration: { field: 'offsite_conversion.fb_pixel_complete_registration', label: 'regs'      },
+        maxDepositCost:     { field: 'offsite_conversion.fb_pixel_purchase',              label: 'purchases' },
       };
+      const threshLabelMap = { maxCPC:'maxCPC', maxLeadCost:'maxLeadCost', maxCPARegistration:'maxCPA', maxDepositCost:'maxCPP' };
       const presetYesterday = { field: 'time_preset', value: 'YESTERDAY', operator: 'EQUAL' };
 
       for (const sc of spendConds) {
         const baseThreshold = thresholdMap[sc.thresholdRef];
         if (!baseThreshold) { log(`⚠️ Morning Reset Spend — unknown threshold ref "${sc.thresholdRef}", skipped.`, 'warning'); continue; }
-        const spendLimit   = Math.round(baseThreshold * sc.mult);
-        const cntInfo      = cntFieldMap[sc.thresholdRef];
-        const maxCnt       = sc.maxCnt; // unpause if count LESS_THAN maxCnt (i.e. < maxCnt)
-        const threshLabel  = { maxCPC:'maxCPC', maxLeadCost:'maxLeadCost', maxCPARegistration:'maxCPA', maxDepositCost:'maxCPP' }[sc.thresholdRef] || sc.thresholdRef;
-        const title = `MORNING RESET — Unpause ${artype} at ${minutesToTimeStr(mm)} [yesterday]: ${cntInfo.label}<${maxCnt} & spent<${threshLabel}×${sc.mult}(${(spendLimit/100).toFixed(2)})`;
-        await addRule(
-          title,
-          kw([
-            { field:'entity_type',  operator:'EQUAL',        value: artype },
-            { field: cntInfo.field, operator:'LESS_THAN',    value: maxCnt },
-            { field:'spent',        operator:'LESS_THAN',    value: spendLimit },
-            { field:'spent',        operator:'GREATER_THAN', value: 0 },
-            presetYesterday
-          ]),
-          execUnpause(),
-          scheduleAtMinute(mm)
-        );
+        const spendLimit  = Math.round(baseThreshold * sc.mult);
+        const cntInfo     = cntFieldMap[sc.thresholdRef];
+        const threshLabel = threshLabelMap[sc.thresholdRef] || sc.thresholdRef;
+
+        if (sc.scenario === 'A') {
+          // Scenario A: cnt >= N AND spent < threshold*mult — good result, cheap
+          const title = `MR Unpause ${artype} [A: cheap result] ${cntInfo.label}≥${sc.cntVal} & spent<${threshLabel}×${sc.mult}(${(spendLimit/100).toFixed(2)})`;
+          await addRule(
+            title,
+            kw([
+              { field:'entity_type',  operator:'EQUAL',        value: artype },
+              { field: cntInfo.field, operator:'GREATER_THAN', value: sc.cntVal - 1 },
+              { field:'spent',        operator:'LESS_THAN',    value: spendLimit },
+              presetYesterday
+            ]),
+            execUnpause(),
+            scheduleAtMinute(mm)
+          );
+        } else {
+          // Scenario B: cnt < N AND spent < threshold*mult — barely ran, retry
+          const title = `MR Unpause ${artype} [B: barely ran] ${cntInfo.label}<${sc.cntVal} & spent<${threshLabel}×${sc.mult}(${(spendLimit/100).toFixed(2)})`;
+          await addRule(
+            title,
+            kw([
+              { field:'entity_type',  operator:'EQUAL',        value: artype },
+              { field: cntInfo.field, operator:'LESS_THAN',    value: sc.cntVal },
+              { field:'spent',        operator:'LESS_THAN',    value: spendLimit },
+              { field:'spent',        operator:'GREATER_THAN', value: 0 },
+              presetYesterday
+            ]),
+            execUnpause(),
+            scheduleAtMinute(mm)
+          );
+        }
       }
     }
   }
