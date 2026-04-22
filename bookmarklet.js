@@ -3983,6 +3983,10 @@ function mountPixelManager(container) {
     bulkRunning: false,
     bulkLog: [],
     bulkDone: 0, bulkTotal: 0,
+    /* coverage */
+    coverage: null,       /* Map<pixelId, string[]> accountIds */
+    coverageLoading: false,
+    showCoverage: false,
     /* scan */
     scanning: false,
     /* single */
@@ -4337,6 +4341,47 @@ function mountPixelManager(container) {
     render();
   }
 
+  async function loadCoverage() {
+    if (!pxState.pixels.length) { setStatus('error', 'Scan pixels first.'); return; }
+    pxState.coverageLoading = true; pxState.showCoverage = true;
+    pxState.coverage = new Map(); render();
+
+    const bizId = pxState.businessId || getBizId();
+    const bmPixels = pxState.pixels.filter(p => p.source && p.source.startsWith('bm:') && p.internalAssetId);
+    const noBmPixels = pxState.pixels.filter(p => p.source && p.source.startsWith('act:'));
+
+    /* No-BM pixels: owner is the act in source */
+    for (const p of noBmPixels) {
+      const ownerId = p.source.replace('act:', '');
+      pxState.coverage.set(p.id, [ownerId]);
+    }
+
+    /* /me pixels with no internal asset: unknown */
+    for (const p of pxState.pixels.filter(p => p.source === 'me' && !p.internalAssetId)) {
+      pxState.coverage.set(p.id, []);
+    }
+
+    /* BM pixels: fetch connected in parallel batches of 5 */
+    const batchSize = 5;
+    for (let i = 0; i < bmPixels.length; i += batchSize) {
+      const batch = bmPixels.slice(i, i + batchSize);
+      setStatus('info', `Loading coverage ${i + 1}–${Math.min(i + batchSize, bmPixels.length)} / ${bmPixels.length}...`);
+      await Promise.all(batch.map(async p => {
+        try {
+          const connected = await fetchConnected(bizId, p.internalAssetId);
+          pxState.coverage.set(p.id, connected.map(a => a.id));
+        } catch {
+          pxState.coverage.set(p.id, []);
+        }
+      }));
+      render();
+      if (i + batchSize < bmPixels.length) await sleep(600);
+    }
+
+    pxState.coverageLoading = false;
+    setStatus('success', `Coverage loaded for ${pxState.coverage.size} pixels.`);
+  }
+
   async function runBulkShare() {
     const pixIds = [...pxState.bulkPixelIds];
     const accIds = [...pxState.bulkAccountIds];
@@ -4474,18 +4519,79 @@ function mountPixelManager(container) {
       </div>
     `).join('');
 
-    const scanDisabled  = pxState.scanning || pxState.bulkRunning;
-    const shareDisabled = pxState.bulkRunning || pxState.scanning || !pxState.bulkPixelIds.size || !pxState.bulkAccountIds.size;
+    const scanDisabled     = pxState.scanning || pxState.bulkRunning;
+    const shareDisabled    = pxState.bulkRunning || pxState.scanning || !pxState.bulkPixelIds.size || !pxState.bulkAccountIds.size;
+    const coverageDisabled = pxState.coverageLoading || pxState.scanning || pxState.bulkRunning || !pxState.pixels.length;
+
+    /* coverage table */
+    let coverageHtml = '';
+    if (pxState.showCoverage) {
+      if (pxState.coverageLoading) {
+        coverageHtml = `<div style="font-size:12px;color:#64748b;padding:10px 0">Loading coverage...</div>`;
+      } else if (pxState.coverage && pxState.coverage.size) {
+        /* build account index for name lookup */
+        const accById = new Map(pxState.accounts.map(a => [a.id, a.name]));
+
+        const rows = pxState.pixels.map(p => {
+          const connIds = pxState.coverage.get(p.id);
+          let cell = '';
+          if (connIds === undefined) {
+            cell = `<span style="color:#64748b;font-size:11px">—</span>`;
+          } else if (!connIds.length) {
+            cell = `<span style="color:#f59e0b;font-size:11px">None</span>`;
+          } else {
+            cell = connIds.map(id => {
+              const name = accById.get(id) || id;
+              return `<span style="display:inline-block;background:rgba(59,130,246,.12);color:#93c5fd;border-radius:4px;padding:1px 6px;font-size:10px;margin:1px 2px 1px 0;white-space:nowrap" title="${esc(id)}">${esc(name)}</span>`;
+            }).join('');
+          }
+          const isNoBm = p.source && p.source.startsWith('act:');
+          const srcBadge = isNoBm
+            ? `<span style="font-size:10px;background:rgba(245,158,11,.15);color:#f59e0b;border-radius:4px;padding:1px 5px">No BM</span>`
+            : `<span style="font-size:10px;background:rgba(59,130,246,.12);color:#60a5fa;border-radius:4px;padding:1px 5px">BM</span>`;
+          return `<tr>
+            <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);white-space:nowrap">
+              <div style="font-size:12px;font-weight:600;color:var(--txt)">${esc(p.name)}</div>
+              <div style="font-size:10px;color:#64748b">${esc(p.id)}</div>
+            </td>
+            <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">${srcBadge}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px">${cell}</td>
+          </tr>`;
+        }).join('');
+
+        coverageHtml = `
+          <div style="margin-bottom:10px">
+            <div style="font-size:12px;font-weight:700;color:var(--txt);margin-bottom:6px">📋 Coverage — pixels × accounts</div>
+            <div style="overflow:auto;max-height:280px;background:var(--card);border:1px solid var(--bdr);border-radius:8px">
+              <table style="width:100%;border-collapse:collapse">
+                <thead>
+                  <tr style="background:var(--bg)">
+                    <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Pixel</th>
+                    <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Type</th>
+                    <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Connected Ad Accounts</th>
+                  </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>
+          </div>`;
+      }
+    }
 
     return `
       <!-- toolbar -->
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
         <button class="ar-btn ar-btn-primary ar-btn-sm" data-pxaction="bulk-scan" ${scanDisabled?'disabled':''}>${pxState.scanning?'Scanning…':'🔍 Scan'}</button>
+        <button class="ar-btn ar-btn-ghost ar-btn-sm ${pxState.showCoverage?'ar-btn-primary':''}" data-pxaction="coverage-toggle" ${coverageDisabled&&!pxState.showCoverage?'disabled':''}>
+          ${pxState.coverageLoading?'Loading…':'📋 Coverage'}
+        </button>
         <button class="ar-btn ar-btn-ghost ar-btn-sm" data-pxaction="bulk-sel-all-px">All pixels</button>
         <button class="ar-btn ar-btn-ghost ar-btn-sm" data-pxaction="bulk-none-px">None</button>
         <button class="ar-btn ar-btn-ghost ar-btn-sm" data-pxaction="bulk-sel-all-acc">All accounts</button>
         <button class="ar-btn ar-btn-ghost ar-btn-sm" data-pxaction="bulk-none-acc">None</button>
       </div>
+
+      ${coverageHtml}
 
       <!-- two-column layout -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
@@ -4551,6 +4657,10 @@ function mountPixelManager(container) {
         /* bulk */
         if (a === 'bulk-scan')      { await loadBulkData(); }
         if (a === 'bulk-share')     { await runBulkShare(); }
+        if (a === 'coverage-toggle') {
+          if (!pxState.showCoverage || !pxState.coverage) { await loadCoverage(); }
+          else { pxState.showCoverage = !pxState.showCoverage; render(); }
+        }
         if (a === 'bulk-sel-all-px')  { pxState.pixels.forEach(p => pxState.bulkPixelIds.add(p.id)); render(); }
         if (a === 'bulk-none-px')     { pxState.bulkPixelIds.clear(); render(); }
         if (a === 'bulk-sel-all-acc') { pxState.accounts.forEach(a => pxState.bulkAccountIds.add(a.id)); render(); }
