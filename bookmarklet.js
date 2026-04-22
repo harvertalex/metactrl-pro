@@ -559,6 +559,7 @@ function makeModal() {
       <button id="tab-col" class="ar-tab">📋 Column Presets</button>
       <button id="tab-anl" class="ar-tab">📊 Analytics</button>
       <button id="tab-insp" class="ar-tab">🔍 Inspector</button>
+      <button id="tab-px" class="ar-tab">🔗 Pixel Manager</button>
     </div>
   `;
 
@@ -567,11 +568,13 @@ function makeModal() {
   const col = document.createElement('div'); col.id = 'ar-col';
   const anl  = document.createElement('div'); anl.id  = 'ar-anl';
   const insp = document.createElement('div'); insp.id = 'ar-insp';
+  const px   = document.createElement('div'); px.id   = 'ar-px';
   wrap.appendChild(gen);
   wrap.appendChild(mgr);
   wrap.appendChild(col);
   wrap.appendChild(anl);
   wrap.appendChild(insp);
+  wrap.appendChild(px);
   document.body.appendChild(wrap);
 
   wrap.querySelector('#ar-close').onclick = () => wrap.remove();
@@ -580,21 +583,24 @@ function makeModal() {
   wrap.querySelector('#tab-col').onclick  = () => { setTab('col'); };
   wrap.querySelector('#tab-anl').onclick  = () => { setTab('anl'); };
   wrap.querySelector('#tab-insp').onclick = () => { setTab('insp'); };
+  wrap.querySelector('#tab-px').onclick   = () => { setTab('px'); };
 
   function setTab(t) {
-    gen.style.display = t === 'gen' ? 'block' : 'none';
-    mgr.style.display = t === 'mgr' ? 'block' : 'none';
-    col.style.display = t === 'col' ? 'block' : 'none';
+    gen.style.display  = t === 'gen'  ? 'block' : 'none';
+    mgr.style.display  = t === 'mgr'  ? 'block' : 'none';
+    col.style.display  = t === 'col'  ? 'block' : 'none';
     anl.style.display  = t === 'anl'  ? 'block' : 'none';
     insp.style.display = t === 'insp' ? 'block' : 'none';
+    px.style.display   = t === 'px'   ? 'block' : 'none';
     wrap.querySelector('#tab-gen').classList.toggle('active', t === 'gen');
     wrap.querySelector('#tab-mgr').classList.toggle('active', t === 'mgr');
     wrap.querySelector('#tab-col').classList.toggle('active', t === 'col');
     wrap.querySelector('#tab-anl').classList.toggle('active', t === 'anl');
     wrap.querySelector('#tab-insp').classList.toggle('active', t === 'insp');
+    wrap.querySelector('#tab-px').classList.toggle('active', t === 'px');
   }
   setTab('gen');
-  return { wrap, gen, mgr, col, anl, insp };
+  return { wrap, gen, mgr, col, anl, insp, px };
 }
 
 /* -------------------- UI: GENERATOR -------------------- */
@@ -3949,6 +3955,427 @@ function getCurrentActId() {
 
 }
 
+/* -------------------- PIXEL MANAGER -------------------- */
+function mountPixelManager(container) {
+  container.innerHTML = '';
+
+  const GRAPH_VER = 'v22.0';
+  const GQL_ENDPOINT = '/api/graphql/?_callFlowletID=0&_triggerFlowletID=1&qpl_active_e2e_trace_ids=';
+  const GQL_CALLER   = 'RelayModern';
+
+  const GQL_PIXEL_LIST     = { name: 'BusinessCometBizSuiteSettingsEventsDatasetRootQuery',       docId: '27075127438747082' };
+  const GQL_CONNECTED      = { name: 'BizKitSettingsAssetToAssetConnectionListContainerQuery',     docId: '25989701040671987' };
+  const GQL_REMOVE         = { name: 'BizKitSettingsRemoveAssetToAssetConnectionMutation',         docId: '23922031614068524' };
+
+  const AD_ACCOUNT_STATUSES = ['ACTIVE','DISABLED','IN_GRACE_PERIOD','PENDING_CLOSURE','PENDING_RISK_REVIEW','PENDING_SETTLEMENT','UNSETTLED'];
+
+  const pxState = {
+    accessToken: TOKEN || '',
+    businessId: '',
+    businesses: [], pixels: [], accounts: [],
+    selectedPixelId: '', selectedAccountId: '',
+    connectedAssets: [],
+    loadingBusinesses: false, loadingContext: false, loadingConnectedAssets: false,
+    sharing: false, removingIds: [],
+    status: { type: 'info', text: 'Initializing...' },
+    pixelMappingError: '', connectedError: '',
+  };
+
+  let gqlTemplatePromise = null;
+  let connLoadToken = 0;
+
+  function esc(v) {
+    return String(v ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  }
+
+  function setStatus(type, text) { pxState.status = { type, text }; render(); }
+
+  /* ---- Graph API helpers ---- */
+  async function gFetch(path, opts = {}) {
+    const method = opts.method || 'GET';
+    const url = new URL(`https://graph.facebook.com/${GRAPH_VER}/${path.replace(/^\/+/, '')}`);
+    Object.entries(opts.params || {}).forEach(([k, v]) => { if (v != null && v !== '') url.searchParams.set(k, v); });
+    url.searchParams.set('access_token', pxState.accessToken);
+    const fetchOpts = { method, credentials: 'include', headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' } };
+    if (opts.body) {
+      const b = new URLSearchParams();
+      Object.entries(opts.body).forEach(([k, v]) => { if (v != null) b.append(k, v); });
+      fetchOpts.body = b;
+    }
+    const res = await fetch(url.toString(), fetchOpts);
+    const json = await res.json();
+    if (!res.ok || json?.error) throw new Error(json?.error?.message || `Graph API error (${res.status})`);
+    return json;
+  }
+
+  async function gFetchAll(path, params = {}) {
+    const rows = []; let next = path; let nextParams = params;
+    while (next) {
+      const p = await gFetch(next, { params: nextParams });
+      rows.push(...(p?.data || []));
+      next = p?.paging?.next || ''; nextParams = {};
+    }
+    return rows;
+  }
+
+  /* ---- Internal GraphQL ---- */
+  function getModule(name) { try { return typeof globalThis.require === 'function' ? globalThis.require(name) : null; } catch { return null; } }
+
+  function getCurrentUserId() {
+    const m = getModule('CurrentUserInitialData');
+    for (const c of [m?.USER_ID, m?.ACCOUNT_ID, globalThis.CurrentUserInitialData?.USER_ID]) {
+      if (typeof c === 'string' && c.trim()) return c.trim();
+    }
+    const html = document.documentElement.innerHTML;
+    return html.match(/"USER_ID":"(\d+)"/)?.[1] || html.match(/"ACCOUNT_ID":"(\d+)"/)?.[1] || '';
+  }
+
+  function getLsdToken() {
+    const m = getModule('LSD');
+    for (const c of [m?.token, globalThis.LSD?.token, document.querySelector('input[name="lsd"]')?.value]) {
+      if (typeof c === 'string' && c.trim()) return c.trim();
+    }
+    const html = document.documentElement.innerHTML;
+    return html.match(/\["LSD",\[\],\{"token":"([^"]+)/)?.[1] || html.match(/name="lsd" value="([^"]+)"/)?.[1] || '';
+  }
+
+  async function captureGqlTemplate(businessId) {
+    if (gqlTemplatePromise) return gqlTemplatePromise;
+    gqlTemplatePromise = new Promise((resolve, reject) => {
+      if (typeof globalThis.AsyncRequest !== 'function') { reject(new Error('AsyncRequest not available on this page.')); return; }
+      const origOpen = XMLHttpRequest.prototype.open;
+      const origSend = XMLHttpRequest.prototype.send;
+      const origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+      const hdrs = {}; let done = false;
+      const cleanup = () => { XMLHttpRequest.prototype.open = origOpen; XMLHttpRequest.prototype.send = origSend; XMLHttpRequest.prototype.setRequestHeader = origSetHeader; };
+      const finish = (fn, v) => { if (done) return; done = true; cleanup(); fn(v); };
+      XMLHttpRequest.prototype.open = function(method, url) { this.__pmUrl = url; return origOpen.apply(this, arguments); };
+      XMLHttpRequest.prototype.setRequestHeader = function(n, v) { hdrs[n] = v; return origSetHeader.apply(this, arguments); };
+      XMLHttpRequest.prototype.send = function(body) {
+        if (!done && String(this.__pmUrl || '').includes('/api/graphql/')) { finish(resolve, { url: String(this.__pmUrl), body: String(body || ''), headers: { ...hdrs } }); return; }
+        return origSend.apply(this, arguments);
+      };
+      try {
+        const req = new AsyncRequest(); req.setMethod('POST'); req.setURI('/api/graphql/');
+        req.setData({ doc_id: '0', variables: '{}', __aaid: 0, __bid: businessId || '0' }); req.send();
+      } catch (e) { finish(reject, e); return; }
+      window.setTimeout(() => finish(reject, new Error('Could not capture internal GraphQL template.')), 3000);
+    }).catch(e => { gqlTemplatePromise = null; throw e; });
+    return gqlTemplatePromise;
+  }
+
+  async function gqlFetch({ name, docId }, variables, businessId) {
+    const tmpl = await captureGqlTemplate(businessId);
+    const params = new URLSearchParams(tmpl.body);
+    const uid = getCurrentUserId();
+    if (!uid) throw new Error('Could not determine current user for internal GraphQL.');
+    const lsd = getLsdToken() || tmpl.headers['X-FB-LSD'] || '';
+    const asbd = tmpl.headers['X-ASBD-ID'] || '359341';
+    params.set('av', uid); params.set('__aaid', '0'); params.set('__bid', businessId);
+    params.set('fb_api_caller_class', GQL_CALLER); params.set('fb_api_req_friendly_name', name);
+    params.set('server_timestamps', 'true'); params.set('variables', JSON.stringify(variables)); params.set('doc_id', docId);
+    const hdrs = { 'Content-Type': 'application/x-www-form-urlencoded', 'X-FB-Friendly-Name': name };
+    if (lsd) hdrs['X-FB-LSD'] = lsd; if (asbd) hdrs['X-ASBD-ID'] = asbd;
+    const res = await fetch(GQL_ENDPOINT, { method: 'POST', credentials: 'include', headers: hdrs, body: params.toString() });
+    const text = await res.text();
+    let json; try { json = JSON.parse(text.replace(/^for\s*\(\s*;\s*;\s*\);\s*/, '')); } catch { throw new Error('Could not parse internal GraphQL response.'); }
+    if (!res.ok || json?.error || json?.errors?.length) throw new Error(json?.errorDescription || json?.errors?.[0]?.message || `Internal GraphQL error (${res.status})`);
+    return json;
+  }
+
+  /* ---- Data fetching ---- */
+  function uniqBy(arr, key) {
+    const map = new Map();
+    for (const item of arr) { const k = key(item); if (k && !map.has(k)) map.set(k, item); }
+    return [...map.values()];
+  }
+
+  function getBizId() {
+    try { const p = new URL(window.location.href).searchParams.get('business_id'); if (p) return p; } catch {}
+    const m = String(window.location.href).match(/[?&#]business_id=(\d+)/);
+    return m?.[1] || '';
+  }
+
+  async function fetchBusinesses() {
+    const rows = [];
+    try { rows.push(...await gFetchAll('/me/businesses', { fields: 'id,name', limit: 200 })); } catch {}
+    try { const p = await gFetch('/me', { params: { fields: 'businesses{id,name}' } }); rows.push(...(p?.businesses?.data || [])); } catch {}
+    return uniqBy(rows.map(i => ({ id: String(i?.id || ''), name: i?.name || 'Untitled' })).filter(i => i.id), i => i.id).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async function fetchPixels(bizId) {
+    const rows = [];
+    for (const edge of ['owned_pixels', 'client_pixels', 'adspixels']) {
+      try { rows.push(...await gFetchAll(`/${bizId}/${edge}`, { fields: 'id,name', limit: 200 })); } catch {}
+    }
+    return uniqBy(rows.map(i => ({ id: String(i?.id||''), name: i?.name||'Untitled', label: `${i?.name||'Untitled'} (${i?.id||''})` })).filter(i => i.id), i => i.id).sort((a,b) => a.name.localeCompare(b.name));
+  }
+
+  async function fetchAccounts(bizId) {
+    const rows = [];
+    for (const edge of ['owned_ad_accounts', 'client_ad_accounts']) {
+      try { rows.push(...await gFetchAll(`/${bizId}/${edge}`, { fields: 'id,account_id,name', limit: 200 })); } catch {}
+    }
+    return uniqBy(rows.map(i => {
+      const rawId = String(i?.account_id || i?.id || '').replace(/^act_/, '');
+      return { id: rawId, apiId: String(i?.id || ''), name: i?.name || 'Untitled', label: `${i?.name||'Untitled'} (${rawId})` };
+    }).filter(i => i.id), i => i.id).sort((a,b) => a.name.localeCompare(b.name));
+  }
+
+  async function fetchInternalPixels(bizId) {
+    const payload = await gqlFetch(GQL_PIXEL_LIST, {
+      assetFilters: { ad_account_statuses: AD_ACCOUNT_STATUSES },
+      assetTypes: ['EVENTS_DATASET_NEW', 'PIXEL'],
+      businessID: bizId, count: 200, shouldCountAdmin: false,
+    }, bizId);
+    const edges = payload?.data?.business?.connected_objects?.edges || [];
+    return uniqBy(edges.map(e => {
+      const node = e?.node || {};
+      const name = e?.nameColumn?.bizkit_settings_render_strategy_no_business_id?.business_object?.business_object_name || '';
+      return { assetId: String(node?.assetID || node?.id || ''), assetType: String(node?.assetType || ''), name: name || 'Untitled' };
+    }).filter(i => i.assetId && i.name), i => i.assetId);
+  }
+
+  function mergePixels(pixels, internalAssets) {
+    const byName = new Map();
+    for (const a of internalAssets) {
+      const k = a.name.trim().toLowerCase(); if (!k) continue;
+      const cur = byName.get(k) || []; cur.push(a); byName.set(k, cur);
+    }
+    return pixels.map(px => {
+      const matches = byName.get(px.name.trim().toLowerCase()) || [];
+      const m = matches.length === 1 ? matches[0] : null;
+      return { ...px, internalAssetId: m?.assetId || '', internalAssetType: m?.assetType || '', internalMatchCount: matches.length };
+    });
+  }
+
+  async function fetchConnected(bizId, internalAssetId) {
+    const payload = await gqlFetch(GQL_CONNECTED, {
+      businessID: bizId, fromAssetID: internalAssetId, toAssetType: 'AD_ACCOUNT', searchTerm: null,
+    }, bizId);
+    const edges = payload?.data?.fromAsset?.connectedAssets?.edges || [];
+    return uniqBy(edges.map(e => {
+      const node = e?.node || {};
+      const id = String(node?.legacy_account_id || node?.assetID || '');
+      return { id, assetId: String(node?.assetID || ''), name: node?.assetName || 'Untitled', label: `${node?.assetName||'Untitled'} (${id})` };
+    }).filter(i => i.id), i => i.id).sort((a,b) => a.name.localeCompare(b.name));
+  }
+
+  /* ---- Actions ---- */
+  async function loadConnected() {
+    const px = pxState.pixels.find(p => p.id === pxState.selectedPixelId);
+    const token = ++connLoadToken;
+    pxState.connectedAssets = []; pxState.connectedError = '';
+    if (!px?.id) { render(); return; }
+    if (!px.internalAssetId) {
+      pxState.loadingConnectedAssets = false;
+      pxState.connectedError = pxState.pixelMappingError || 'Connected assets not available for this pixel on current page.';
+      render(); return;
+    }
+    pxState.loadingConnectedAssets = true; render();
+    try {
+      const assets = await fetchConnected(pxState.businessId, px.internalAssetId);
+      if (token !== connLoadToken) return;
+      pxState.connectedAssets = assets; pxState.connectedError = '';
+    } catch (e) {
+      if (token !== connLoadToken) return;
+      pxState.connectedError = e.message; pxState.connectedAssets = [];
+    } finally {
+      if (token !== connLoadToken) return;
+      pxState.loadingConnectedAssets = false; render();
+    }
+  }
+
+  async function loadContext(bizId) {
+    pxState.loadingContext = true; pxState.connectedAssets = []; pxState.connectedError = '';
+    pxState.pixelMappingError = ''; pxState.businessId = bizId;
+    setStatus('info', `Loading BM ${bizId}...`);
+    try {
+      const [businesses, pixels, accounts, internalAssets] = await Promise.all([
+        fetchBusinesses().catch(() => []),
+        fetchPixels(bizId),
+        fetchAccounts(bizId),
+        fetchInternalPixels(bizId).catch(e => { pxState.pixelMappingError = e.message; return []; }),
+      ]);
+      pxState.businesses = businesses;
+      pxState.accounts = accounts;
+      pxState.pixels = mergePixels(pixels, internalAssets);
+      pxState.selectedPixelId = pxState.pixels[0]?.id || '';
+      pxState.selectedAccountId = accounts[0]?.id || '';
+      if (!pxState.pixels.length) setStatus('error', 'No pixels found for this BM.');
+      else if (!accounts.length) setStatus('error', 'No ad accounts found for this BM.');
+      else setStatus('success', 'Data loaded. Select a pixel and account to share.');
+      await loadConnected();
+    } catch (e) {
+      pxState.pixels = []; pxState.accounts = []; pxState.connectedAssets = [];
+      setStatus('error', e.message);
+    } finally { pxState.loadingContext = false; render(); }
+  }
+
+  async function loadBusinessesOnly() {
+    pxState.loadingBusinesses = true; setStatus('info', 'Loading business managers...');
+    try {
+      pxState.businesses = await fetchBusinesses();
+      setStatus(pxState.businesses.length ? 'success' : 'info', pxState.businesses.length ? 'Select a BM to load its data.' : 'No business managers found.');
+    } catch (e) { setStatus('error', e.message); }
+    finally { pxState.loadingBusinesses = false; render(); }
+  }
+
+  async function sharePixel() {
+    if (!pxState.selectedPixelId || !pxState.selectedAccountId || !pxState.businessId) { setStatus('error', 'Select a pixel and ad account first.'); return; }
+    const alreadyConn = pxState.connectedAssets.some(a => a.id === pxState.selectedAccountId);
+    if (alreadyConn) { setStatus('info', 'This ad account is already connected to the pixel.'); return; }
+    pxState.sharing = true; setStatus('info', 'Sending share request...');
+    try {
+      await gFetch(`/${pxState.selectedPixelId}/shared_accounts`, { method: 'POST', body: { method: 'POST', business: pxState.businessId, account_id: pxState.selectedAccountId } });
+      const px = pxState.pixels.find(p => p.id === pxState.selectedPixelId);
+      const acc = pxState.accounts.find(a => a.id === pxState.selectedAccountId);
+      setStatus('success', `Pixel "${px?.label}" shared to "${acc?.label}" successfully.`);
+      await loadConnected();
+    } catch (e) { setStatus('error', e.message); }
+    finally { pxState.sharing = false; render(); }
+  }
+
+  async function removeConnected(accountId) {
+    const px = pxState.pixels.find(p => p.id === pxState.selectedPixelId);
+    const asset = pxState.connectedAssets.find(a => a.id === accountId);
+    if (!pxState.businessId || !px?.internalAssetId || !asset?.assetId) { setStatus('error', 'Cannot determine asset to remove.'); return; }
+    if (pxState.removingIds.includes(accountId)) return;
+    pxState.removingIds = [...pxState.removingIds, accountId];
+    setStatus('info', `Removing ${asset.label} from ${px.label}...`); render();
+    try {
+      await gqlFetch(GQL_REMOVE, {
+        businessID: pxState.businessId, fromAssetID: px.internalAssetId,
+        toAssetID: asset.assetId, connectedAssetTypes: ['AD_ACCOUNT', 'BUSINESS_RESOURCE_GROUP'],
+      }, pxState.businessId);
+      setStatus('success', `${asset.label} removed from ${px.label}.`);
+      await loadConnected();
+    } catch (e) { setStatus('error', e.message); }
+    finally { pxState.removingIds = pxState.removingIds.filter(i => i !== accountId); render(); }
+  }
+
+  /* ---- Render ---- */
+  const statusColors = { info: '#3b82f6', success: '#22c55e', error: '#ef4444' };
+  const statusIcons  = { info: 'ℹ', success: '✓', error: '!' };
+
+  function render() {
+    const bizId = pxState.businessId;
+    const alreadyConn = pxState.connectedAssets.some(a => a.id === pxState.selectedAccountId);
+    const shareDisabled = pxState.sharing || pxState.loadingContext || !pxState.selectedPixelId || !pxState.selectedAccountId || alreadyConn;
+
+    let body = '';
+
+    if (!bizId) {
+      /* BM list view */
+      if (pxState.loadingBusinesses) {
+        body = `<div style="color:var(--txt);font-size:13px;padding:16px 0">Loading business managers...</div>`;
+      } else if (!pxState.businesses.length) {
+        body = `<div style="color:var(--txt);font-size:13px;padding:16px 0">No business managers found for this account.</div>`;
+      } else {
+        body = pxState.businesses.map(biz => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:var(--card);border:1px solid var(--bdr);border-radius:8px;margin-bottom:8px">
+            <div>
+              <div style="font-size:13px;font-weight:700;color:var(--txt)">${esc(biz.name)}</div>
+              <div style="font-size:11px;color:#64748b">ID: ${esc(biz.id)}</div>
+            </div>
+            <button class="ar-btn ar-btn-primary ar-btn-sm" data-pxaction="open-biz" data-bizid="${esc(biz.id)}">Open</button>
+          </div>
+        `).join('');
+      }
+      body += `<button class="ar-btn ar-btn-ghost ar-btn-sm" style="margin-top:8px" data-pxaction="reload-biz">↻ Refresh list</button>`;
+    } else {
+      /* Main view */
+      const pixOpts = pxState.pixels.map(p => `<option value="${esc(p.id)}" ${p.id===pxState.selectedPixelId?'selected':''}>${esc(p.label)}</option>`).join('') || '<option value="">No pixels found</option>';
+      const accOpts = pxState.accounts.map(a => `<option value="${esc(a.id)}" ${a.id===pxState.selectedAccountId?'selected':''}>${esc(a.label)}</option>`).join('') || '<option value="">No accounts found</option>';
+
+      /* Connected assets list */
+      let connHtml = '';
+      if (pxState.loadingConnectedAssets) {
+        connHtml = `<div style="font-size:12px;color:#64748b;padding:8px 0">Loading connected assets...</div>`;
+      } else if (pxState.connectedError) {
+        connHtml = `<div style="font-size:12px;color:#ef4444;padding:8px 0">${esc(pxState.connectedError)}</div>`;
+      } else if (!pxState.connectedAssets.length) {
+        connHtml = `<div style="font-size:12px;color:#64748b;padding:8px 0">No connected ad accounts for this pixel.</div>`;
+      } else {
+        connHtml = pxState.connectedAssets.map(a => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;margin-bottom:6px;${a.id===pxState.selectedAccountId?'border-color:#3b82f6':''}">
+            <div style="font-size:12px;color:var(--txt)">${esc(a.label)}${a.id===pxState.selectedAccountId?'<span style="margin-left:6px;font-size:10px;background:#3b82f620;color:#3b82f6;padding:2px 6px;border-radius:4px">selected</span>':''}</div>
+            <button class="ar-btn ar-btn-sm" style="background:#ef444420;color:#ef4444;border:1px solid #ef444430;min-width:72px" data-pxaction="remove" data-accid="${esc(a.id)}" ${pxState.removingIds.includes(a.id)?'disabled':''}>
+              ${pxState.removingIds.includes(a.id)?'Removing…':'Remove'}
+            </button>
+          </div>
+        `).join('');
+      }
+
+      body = `
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+          <span class="ar-badge">BM: ${esc(bizId)}</span>
+          <span class="ar-badge">Pixels: ${pxState.pixels.length}</span>
+          <span class="ar-badge">Accounts: ${pxState.accounts.length}</span>
+        </div>
+        <div class="ar-field">
+          <label class="ar-label">Pixel</label>
+          <select class="ar-select" data-pxrole="pixel-select" ${pxState.loadingContext?'disabled':''}>${pixOpts}</select>
+        </div>
+        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:12px;margin:10px 0">
+          <div style="font-size:12px;font-weight:700;color:var(--txt);margin-bottom:8px">
+            Connected Ad Accounts
+            <span style="font-weight:400;color:#64748b;margin-left:6px">${pxState.loadingConnectedAssets?'loading…':(pxState.connectedAssets.length+' total')}</span>
+          </div>
+          ${connHtml}
+        </div>
+        <div class="ar-field">
+          <label class="ar-label">Ad Account to share to</label>
+          <select class="ar-select" data-pxrole="account-select" ${pxState.loadingContext?'disabled':''}>${accOpts}</select>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+          <button class="ar-btn ar-btn-primary" data-pxaction="share" ${shareDisabled?'disabled':''}>
+            ${pxState.sharing?'Sharing…':alreadyConn?'Already connected':'Share Pixel'}
+          </button>
+          <button class="ar-btn ar-btn-ghost" data-pxaction="reload-ctx" ${pxState.loadingContext?'disabled':''}>↻ Refresh</button>
+          <button class="ar-btn ar-btn-ghost" data-pxaction="back">← Back to BM list</button>
+        </div>
+      `;
+    }
+
+    container.innerHTML = `
+      <div style="padding:6px 0">
+        <h3 style="margin:0 0 14px;font-size:15px;font-weight:700;color:var(--txt)">🔗 Pixel Manager</h3>
+        ${body}
+        <div style="margin-top:14px;padding:10px 12px;border-radius:8px;border:1px solid;font-size:12px;line-height:1.5;color:${statusColors[pxState.status.type]||statusColors.info};background:${statusColors[pxState.status.type]||statusColors.info}18;border-color:${statusColors[pxState.status.type]||statusColors.info}30">
+          ${statusIcons[pxState.status.type]||'i'} ${esc(pxState.status.text)}
+        </div>
+      </div>
+    `;
+
+    /* bind events */
+    container.querySelectorAll('[data-pxaction]').forEach(el => {
+      el.addEventListener('click', async () => {
+        const action = el.getAttribute('data-pxaction');
+        if (action === 'open-biz')    { await loadContext(el.getAttribute('data-bizid')); }
+        if (action === 'reload-biz')  { await loadBusinessesOnly(); }
+        if (action === 'reload-ctx')  { await loadContext(pxState.businessId); }
+        if (action === 'share')       { await sharePixel(); }
+        if (action === 'remove')      { await removeConnected(el.getAttribute('data-accid')); }
+        if (action === 'back')        { pxState.businessId = ''; pxState.pixels = []; pxState.accounts = []; pxState.connectedAssets = []; setStatus('info', 'Select a business manager.'); render(); }
+      });
+    });
+    container.querySelectorAll('[data-pxrole]').forEach(el => {
+      el.addEventListener('change', async () => {
+        const role = el.getAttribute('data-pxrole');
+        if (role === 'pixel-select')   { pxState.selectedPixelId = el.value; await loadConnected(); }
+        if (role === 'account-select') { pxState.selectedAccountId = el.value; render(); }
+      });
+    });
+  }
+
+  /* ---- Init ---- */
+  const bizId = getBizId();
+  pxState.businessId = bizId;
+  render();
+  if (bizId) { loadContext(bizId); } else { loadBusinessesOnly(); }
+}
+
 /* -------------------- BOOT -------------------- */
 if (!TOKEN) {
   alert('Access token (__accessToken) not found.\nOpen Ads Manager inside Business Manager and run again.');
@@ -3959,6 +4386,7 @@ if (!TOKEN) {
   mountColumnManager(ui.col);
   mountAnalytics(ui.anl);
   mountInspector(ui.insp);
+  mountPixelManager(ui.px);
 }
 
 })();
