@@ -4290,36 +4290,38 @@ function mountPixelManager(container) {
 
     const bizId = pxState.businessId || getBizId();
     try {
-      /* accounts */
-      if (bizId) {
-        const accs = await fetchAccounts(bizId);
-        pxState.accounts = accs;
-      }
-
-      /* BM pixels */
       let allPixels = [];
+
+      /* 1. BM pixels + accounts */
       if (bizId) {
-        const bmPx = await fetchPixelsBm(bizId);
+        const [bmPx, accs] = await Promise.all([fetchPixelsBm(bizId), fetchAccounts(bizId)]);
+        pxState.accounts = accs;
         allPixels.push(...bmPx);
-        bulkLog('info', `BM ${bizId}: found ${bmPx.length} pixels`);
+        bulkLog('info', `BM ${bizId}: ${bmPx.length} pixels, ${accs.length} accounts`);
       }
 
-      /* personal + account-level scan */
-      if (pxState.bulkScanPersonal && pxState.accounts.length) {
-        bulkLog('info', `Scanning ${pxState.accounts.length} ad accounts for personal pixels...`);
-        const personalPx = await fetchPixelsPersonal(pxState.accounts, (i, total, name) => {
-          setStatus('info', `Scanning accounts: ${i}/${total} — ${name}`);
-        });
-        allPixels.push(...personalPx);
-        bulkLog('info', `Account scan: found ${personalPx.length} pixel entries`);
-      }
-
-      /* /me/adspixels always */
+      /* 2. /me/adspixels */
       try {
         const mePx = await gFetchAll('/me/adspixels', { fields: 'id,name', limit: 200 });
         mePx.forEach(i => allPixels.push({ id: String(i?.id||''), name: i?.name||'Untitled', label: `${i?.name||'Untitled'} (${i?.id||''})`, source: 'me' }));
-        if (mePx.length) bulkLog('info', `/me/adspixels: found ${mePx.length} pixels`);
+        if (mePx.length) bulkLog('info', `/me/adspixels: ${mePx.length} pixels`);
       } catch {}
+
+      /* 3. Scan all ad accounts in parallel (finds No-BM pixels like Inspector does) */
+      if (pxState.accounts.length) {
+        setStatus('info', `Scanning ${pxState.accounts.length} ad accounts in parallel...`);
+        const accResults = await Promise.all(
+          pxState.accounts.map(acc =>
+            gFetchAll(`/act_${acc.id}/adspixels`, { fields: 'id,name', limit: 200 })
+              .then(list => list.map(i => ({ id: String(i?.id||''), name: i?.name||'Untitled', label: `${i?.name||'Untitled'} (${i?.id||''})`, source: `act:${acc.id}` })))
+              .catch(() => [])
+          )
+        );
+        const accPx = accResults.flat();
+        allPixels.push(...accPx);
+        const newCount = accPx.filter(p => !allPixels.slice(0, allPixels.length - accPx.length).some(e => e.id === p.id)).length;
+        if (newCount) bulkLog('info', `Account scan: +${newCount} additional pixels found`);
+      }
 
       pxState.pixels = uniqBy(allPixels.filter(i => i.id), i => i.id).sort((a,b) => a.name.localeCompare(b.name));
       bulkLog('success', `Total unique pixels: ${pxState.pixels.length}, accounts: ${pxState.accounts.length}`);
@@ -4478,10 +4480,6 @@ function mountPixelManager(container) {
     return `
       <!-- toolbar -->
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt);cursor:pointer">
-          <input type="checkbox" id="px-scan-personal" ${pxState.bulkScanPersonal?'checked':''} style="accent-color:var(--acc)">
-          Scan account-level pixels <span style="color:#64748b">(slower)</span>
-        </label>
         <button class="ar-btn ar-btn-primary ar-btn-sm" data-pxaction="bulk-scan" ${scanDisabled?'disabled':''}>${pxState.scanning?'Scanning…':'🔍 Scan'}</button>
         <button class="ar-btn ar-btn-ghost ar-btn-sm" data-pxaction="bulk-sel-all-px">All pixels</button>
         <button class="ar-btn ar-btn-ghost ar-btn-sm" data-pxaction="bulk-none-px">None</button>
@@ -4578,8 +4576,6 @@ function mountPixelManager(container) {
       });
     });
 
-    const scanPersonalCb = container.querySelector('#px-scan-personal');
-    if (scanPersonalCb) scanPersonalCb.addEventListener('change', () => { pxState.bulkScanPersonal = scanPersonalCb.checked; });
   }
 
   /* ---- Init ---- */
