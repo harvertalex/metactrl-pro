@@ -3959,22 +3959,33 @@ function getCurrentActId() {
 function mountPixelManager(container) {
   container.innerHTML = '';
 
-  const GRAPH_VER = 'v22.0';
+  const GRAPH_VER    = 'v22.0';
   const GQL_ENDPOINT = '/api/graphql/?_callFlowletID=0&_triggerFlowletID=1&qpl_active_e2e_trace_ids=';
   const GQL_CALLER   = 'RelayModern';
+  const RATE_MS      = 2500;
 
-  const GQL_PIXEL_LIST     = { name: 'BusinessCometBizSuiteSettingsEventsDatasetRootQuery',       docId: '27075127438747082' };
-  const GQL_CONNECTED      = { name: 'BizKitSettingsAssetToAssetConnectionListContainerQuery',     docId: '25989701040671987' };
-  const GQL_REMOVE         = { name: 'BizKitSettingsRemoveAssetToAssetConnectionMutation',         docId: '23922031614068524' };
+  const GQL_PIXEL_LIST = { name: 'BusinessCometBizSuiteSettingsEventsDatasetRootQuery',   docId: '27075127438747082' };
+  const GQL_CONNECTED  = { name: 'BizKitSettingsAssetToAssetConnectionListContainerQuery', docId: '25989701040671987' };
+  const GQL_REMOVE     = { name: 'BizKitSettingsRemoveAssetToAssetConnectionMutation',     docId: '23922031614068524' };
+  const AD_STATUSES    = ['ACTIVE','DISABLED','IN_GRACE_PERIOD','PENDING_CLOSURE','PENDING_RISK_REVIEW','PENDING_SETTLEMENT','UNSETTLED'];
 
-  const AD_ACCOUNT_STATUSES = ['ACTIVE','DISABLED','IN_GRACE_PERIOD','PENDING_CLOSURE','PENDING_RISK_REVIEW','PENDING_SETTLEMENT','UNSETTLED'];
-
+  /* mode: 'single' | 'bulk' */
   const pxState = {
-    accessToken: TOKEN || '',
+    mode: 'single',
     businessId: '',
     businesses: [], pixels: [], accounts: [],
     selectedPixelId: '', selectedAccountId: '',
     connectedAssets: [],
+    /* bulk */
+    bulkPixelIds: new Set(),
+    bulkAccountIds: new Set(),
+    bulkScanPersonal: false,
+    bulkRunning: false,
+    bulkLog: [],
+    bulkDone: 0, bulkTotal: 0,
+    /* scan */
+    scanning: false,
+    /* single */
     loadingBusinesses: false, loadingContext: false, loadingConnectedAssets: false,
     sharing: false, removingIds: [],
     status: { type: 'info', text: 'Initializing...' },
@@ -3987,15 +3998,18 @@ function mountPixelManager(container) {
   function esc(v) {
     return String(v ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
   }
-
   function setStatus(type, text) { pxState.status = { type, text }; render(); }
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-  /* ---- Graph API helpers ---- */
+  /* ---- Graph API ---- */
   async function gFetch(path, opts = {}) {
     const method = opts.method || 'GET';
-    const url = new URL(`https://graph.facebook.com/${GRAPH_VER}/${path.replace(/^\/+/, '')}`);
-    Object.entries(opts.params || {}).forEach(([k, v]) => { if (v != null && v !== '') url.searchParams.set(k, v); });
-    url.searchParams.set('access_token', pxState.accessToken);
+    const isFullUrl = /^https?:\/\//i.test(path);
+    const url = isFullUrl ? new URL(path) : new URL(`https://graph.facebook.com/${GRAPH_VER}/${path.replace(/^\/+/, '')}`);
+    if (!isFullUrl) {
+      Object.entries(opts.params || {}).forEach(([k, v]) => { if (v != null && v !== '') url.searchParams.set(k, v); });
+      url.searchParams.set('access_token', TOKEN);
+    }
     const fetchOpts = { method, credentials: 'include', headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' } };
     if (opts.body) {
       const b = new URLSearchParams();
@@ -4043,9 +4057,7 @@ function mountPixelManager(container) {
     if (gqlTemplatePromise) return gqlTemplatePromise;
     gqlTemplatePromise = new Promise((resolve, reject) => {
       if (typeof globalThis.AsyncRequest !== 'function') { reject(new Error('AsyncRequest not available on this page.')); return; }
-      const origOpen = XMLHttpRequest.prototype.open;
-      const origSend = XMLHttpRequest.prototype.send;
-      const origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+      const origOpen = XMLHttpRequest.prototype.open, origSend = XMLHttpRequest.prototype.send, origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
       const hdrs = {}; let done = false;
       const cleanup = () => { XMLHttpRequest.prototype.open = origOpen; XMLHttpRequest.prototype.send = origSend; XMLHttpRequest.prototype.setRequestHeader = origSetHeader; };
       const finish = (fn, v) => { if (done) return; done = true; cleanup(); fn(v); };
@@ -4083,7 +4095,7 @@ function mountPixelManager(container) {
     return json;
   }
 
-  /* ---- Data fetching ---- */
+  /* ---- Data helpers ---- */
   function uniqBy(arr, key) {
     const map = new Map();
     for (const item of arr) { const k = key(item); if (k && !map.has(k)) map.set(k, item); }
@@ -4092,47 +4104,66 @@ function mountPixelManager(container) {
 
   function getBizId() {
     try { const p = new URL(window.location.href).searchParams.get('business_id'); if (p) return p; } catch {}
-    const m = String(window.location.href).match(/[?&#]business_id=(\d+)/);
-    return m?.[1] || '';
+    return String(window.location.href).match(/[?&#]business_id=(\d+)/)?.[1] || '';
   }
 
   async function fetchBusinesses() {
     const rows = [];
     try { rows.push(...await gFetchAll('/me/businesses', { fields: 'id,name', limit: 200 })); } catch {}
     try { const p = await gFetch('/me', { params: { fields: 'businesses{id,name}' } }); rows.push(...(p?.businesses?.data || [])); } catch {}
-    return uniqBy(rows.map(i => ({ id: String(i?.id || ''), name: i?.name || 'Untitled' })).filter(i => i.id), i => i.id).sort((a, b) => a.name.localeCompare(b.name));
+    return uniqBy(rows.map(i => ({ id: String(i?.id||''), name: i?.name||'Untitled' })).filter(i => i.id), i => i.id).sort((a,b) => a.name.localeCompare(b.name));
   }
 
-  async function fetchPixels(bizId) {
+  async function fetchPixelsBm(bizId) {
     const rows = [];
-    for (const edge of ['owned_pixels', 'client_pixels', 'adspixels']) {
+    for (const edge of ['owned_pixels','client_pixels','adspixels']) {
       try { rows.push(...await gFetchAll(`/${bizId}/${edge}`, { fields: 'id,name', limit: 200 })); } catch {}
     }
-    return uniqBy(rows.map(i => ({ id: String(i?.id||''), name: i?.name||'Untitled', label: `${i?.name||'Untitled'} (${i?.id||''})` })).filter(i => i.id), i => i.id).sort((a,b) => a.name.localeCompare(b.name));
+    return rows.map(i => ({ id: String(i?.id||''), name: i?.name||'Untitled', label: `${i?.name||'Untitled'} (${i?.id||''})`, source: 'bm:'+bizId }));
+  }
+
+  async function fetchPixelsPersonal(accounts, onProgress) {
+    const rows = [];
+    /* /me/adspixels — личные пиксели токена */
+    try {
+      const personal = await gFetchAll('/me/adspixels', { fields: 'id,name', limit: 200 });
+      personal.forEach(i => rows.push({ id: String(i?.id||''), name: i?.name||'Untitled', label: `${i?.name||'Untitled'} (${i?.id||''})`, source: 'personal' }));
+    } catch {}
+    /* scan каждый аккаунт */
+    for (let i = 0; i < accounts.length; i++) {
+      const acc = accounts[i];
+      if (onProgress) onProgress(i + 1, accounts.length, acc.name);
+      try {
+        const items = await gFetchAll(`/act_${acc.id}/adspixels`, { fields: 'id,name', limit: 200 });
+        items.forEach(px => rows.push({ id: String(px?.id||''), name: px?.name||'Untitled', label: `${px?.name||'Untitled'} (${px?.id||''})`, source: 'act:'+acc.id }));
+      } catch {}
+      if (i < accounts.length - 1) await sleep(400);
+    }
+    return rows;
   }
 
   async function fetchAccounts(bizId) {
     const rows = [];
-    for (const edge of ['owned_ad_accounts', 'client_ad_accounts']) {
+    for (const edge of ['owned_ad_accounts','client_ad_accounts']) {
       try { rows.push(...await gFetchAll(`/${bizId}/${edge}`, { fields: 'id,account_id,name', limit: 200 })); } catch {}
     }
     return uniqBy(rows.map(i => {
-      const rawId = String(i?.account_id || i?.id || '').replace(/^act_/, '');
-      return { id: rawId, apiId: String(i?.id || ''), name: i?.name || 'Untitled', label: `${i?.name||'Untitled'} (${rawId})` };
+      const rawId = String(i?.account_id||i?.id||'').replace(/^act_/, '');
+      return { id: rawId, apiId: String(i?.id||''), name: i?.name||'Untitled', label: `${i?.name||'Untitled'} (${rawId})` };
     }).filter(i => i.id), i => i.id).sort((a,b) => a.name.localeCompare(b.name));
   }
 
   async function fetchInternalPixels(bizId) {
     const payload = await gqlFetch(GQL_PIXEL_LIST, {
-      assetFilters: { ad_account_statuses: AD_ACCOUNT_STATUSES },
-      assetTypes: ['EVENTS_DATASET_NEW', 'PIXEL'],
+      assetFilters: { ad_account_statuses: AD_STATUSES },
+      assetTypes: ['EVENTS_DATASET_NEW','PIXEL'],
       businessID: bizId, count: 200, shouldCountAdmin: false,
     }, bizId);
     const edges = payload?.data?.business?.connected_objects?.edges || [];
     return uniqBy(edges.map(e => {
       const node = e?.node || {};
       const name = e?.nameColumn?.bizkit_settings_render_strategy_no_business_id?.business_object?.business_object_name || '';
-      return { assetId: String(node?.assetID || node?.id || ''), assetType: String(node?.assetType || ''), name: name || 'Untitled' };
+      return { assetId: String(node?.assetID||node?.id||''), assetType: String(node?.assetType||''), name: name||'Untitled' };
     }).filter(i => i.assetId && i.name), i => i.assetId);
   }
 
@@ -4145,7 +4176,7 @@ function mountPixelManager(container) {
     return pixels.map(px => {
       const matches = byName.get(px.name.trim().toLowerCase()) || [];
       const m = matches.length === 1 ? matches[0] : null;
-      return { ...px, internalAssetId: m?.assetId || '', internalAssetType: m?.assetType || '', internalMatchCount: matches.length };
+      return { ...px, internalAssetId: m?.assetId||'', internalAssetType: m?.assetType||'' };
     });
   }
 
@@ -4156,21 +4187,20 @@ function mountPixelManager(container) {
     const edges = payload?.data?.fromAsset?.connectedAssets?.edges || [];
     return uniqBy(edges.map(e => {
       const node = e?.node || {};
-      const id = String(node?.legacy_account_id || node?.assetID || '');
-      return { id, assetId: String(node?.assetID || ''), name: node?.assetName || 'Untitled', label: `${node?.assetName||'Untitled'} (${id})` };
+      const id = String(node?.legacy_account_id||node?.assetID||'');
+      return { id, assetId: String(node?.assetID||''), name: node?.assetName||'Untitled', label: `${node?.assetName||'Untitled'} (${id})` };
     }).filter(i => i.id), i => i.id).sort((a,b) => a.name.localeCompare(b.name));
   }
 
-  /* ---- Actions ---- */
+  /* ---- Single mode actions ---- */
   async function loadConnected() {
     const px = pxState.pixels.find(p => p.id === pxState.selectedPixelId);
     const token = ++connLoadToken;
     pxState.connectedAssets = []; pxState.connectedError = '';
     if (!px?.id) { render(); return; }
     if (!px.internalAssetId) {
-      pxState.loadingConnectedAssets = false;
       pxState.connectedError = pxState.pixelMappingError || 'Connected assets not available for this pixel on current page.';
-      render(); return;
+      pxState.loadingConnectedAssets = false; render(); return;
     }
     pxState.loadingConnectedAssets = true; render();
     try {
@@ -4193,18 +4223,18 @@ function mountPixelManager(container) {
     try {
       const [businesses, pixels, accounts, internalAssets] = await Promise.all([
         fetchBusinesses().catch(() => []),
-        fetchPixels(bizId),
+        fetchPixelsBm(bizId),
         fetchAccounts(bizId),
         fetchInternalPixels(bizId).catch(e => { pxState.pixelMappingError = e.message; return []; }),
       ]);
       pxState.businesses = businesses;
       pxState.accounts = accounts;
-      pxState.pixels = mergePixels(pixels, internalAssets);
+      pxState.pixels = mergePixels(uniqBy(pixels.filter(i => i.id), i => i.id).sort((a,b) => a.name.localeCompare(b.name)), internalAssets);
       pxState.selectedPixelId = pxState.pixels[0]?.id || '';
       pxState.selectedAccountId = accounts[0]?.id || '';
       if (!pxState.pixels.length) setStatus('error', 'No pixels found for this BM.');
       else if (!accounts.length) setStatus('error', 'No ad accounts found for this BM.');
-      else setStatus('success', 'Data loaded. Select a pixel and account to share.');
+      else setStatus('success', 'Data loaded.');
       await loadConnected();
     } catch (e) {
       pxState.pixels = []; pxState.accounts = []; pxState.connectedAssets = [];
@@ -4221,16 +4251,16 @@ function mountPixelManager(container) {
     finally { pxState.loadingBusinesses = false; render(); }
   }
 
-  async function sharePixel() {
-    if (!pxState.selectedPixelId || !pxState.selectedAccountId || !pxState.businessId) { setStatus('error', 'Select a pixel and ad account first.'); return; }
+  async function sharePixelSingle() {
+    if (!pxState.selectedPixelId || !pxState.selectedAccountId || !pxState.businessId) { setStatus('error', 'Select pixel and ad account first.'); return; }
     const alreadyConn = pxState.connectedAssets.some(a => a.id === pxState.selectedAccountId);
-    if (alreadyConn) { setStatus('info', 'This ad account is already connected to the pixel.'); return; }
-    pxState.sharing = true; setStatus('info', 'Sending share request...');
+    if (alreadyConn) { setStatus('info', 'Already connected.'); return; }
+    pxState.sharing = true; setStatus('info', 'Sharing...');
     try {
       await gFetch(`/${pxState.selectedPixelId}/shared_accounts`, { method: 'POST', body: { method: 'POST', business: pxState.businessId, account_id: pxState.selectedAccountId } });
       const px = pxState.pixels.find(p => p.id === pxState.selectedPixelId);
       const acc = pxState.accounts.find(a => a.id === pxState.selectedAccountId);
-      setStatus('success', `Pixel "${px?.label}" shared to "${acc?.label}" successfully.`);
+      setStatus('success', `Shared "${px?.label}" → "${acc?.label}"`);
       await loadConnected();
     } catch (e) { setStatus('error', e.message); }
     finally { pxState.sharing = false; render(); }
@@ -4241,36 +4271,124 @@ function mountPixelManager(container) {
     const asset = pxState.connectedAssets.find(a => a.id === accountId);
     if (!pxState.businessId || !px?.internalAssetId || !asset?.assetId) { setStatus('error', 'Cannot determine asset to remove.'); return; }
     if (pxState.removingIds.includes(accountId)) return;
-    pxState.removingIds = [...pxState.removingIds, accountId];
-    setStatus('info', `Removing ${asset.label} from ${px.label}...`); render();
+    pxState.removingIds = [...pxState.removingIds, accountId]; render();
     try {
       await gqlFetch(GQL_REMOVE, {
         businessID: pxState.businessId, fromAssetID: px.internalAssetId,
-        toAssetID: asset.assetId, connectedAssetTypes: ['AD_ACCOUNT', 'BUSINESS_RESOURCE_GROUP'],
+        toAssetID: asset.assetId, connectedAssetTypes: ['AD_ACCOUNT','BUSINESS_RESOURCE_GROUP'],
       }, pxState.businessId);
-      setStatus('success', `${asset.label} removed from ${px.label}.`);
+      setStatus('success', `Removed ${asset.label} from ${px.label}.`);
       await loadConnected();
     } catch (e) { setStatus('error', e.message); }
     finally { pxState.removingIds = pxState.removingIds.filter(i => i !== accountId); render(); }
   }
 
+  /* ---- Bulk mode actions ---- */
+  async function loadBulkData() {
+    pxState.scanning = true; pxState.bulkLog = []; pxState.bulkPixelIds = new Set(); pxState.bulkAccountIds = new Set();
+    setStatus('info', 'Scanning all BMs for pixels and accounts...');
+
+    const bizId = pxState.businessId || getBizId();
+    try {
+      /* accounts */
+      if (bizId) {
+        const accs = await fetchAccounts(bizId);
+        pxState.accounts = accs;
+      }
+
+      /* BM pixels */
+      let allPixels = [];
+      if (bizId) {
+        const bmPx = await fetchPixelsBm(bizId);
+        allPixels.push(...bmPx);
+        bulkLog('info', `BM ${bizId}: found ${bmPx.length} pixels`);
+      }
+
+      /* personal + account-level scan */
+      if (pxState.bulkScanPersonal && pxState.accounts.length) {
+        bulkLog('info', `Scanning ${pxState.accounts.length} ad accounts for personal pixels...`);
+        const personalPx = await fetchPixelsPersonal(pxState.accounts, (i, total, name) => {
+          setStatus('info', `Scanning accounts: ${i}/${total} — ${name}`);
+        });
+        allPixels.push(...personalPx);
+        bulkLog('info', `Account scan: found ${personalPx.length} pixel entries`);
+      }
+
+      /* /me/adspixels always */
+      try {
+        const mePx = await gFetchAll('/me/adspixels', { fields: 'id,name', limit: 200 });
+        mePx.forEach(i => allPixels.push({ id: String(i?.id||''), name: i?.name||'Untitled', label: `${i?.name||'Untitled'} (${i?.id||''})`, source: 'me' }));
+        if (mePx.length) bulkLog('info', `/me/adspixels: found ${mePx.length} pixels`);
+      } catch {}
+
+      pxState.pixels = uniqBy(allPixels.filter(i => i.id), i => i.id).sort((a,b) => a.name.localeCompare(b.name));
+      bulkLog('success', `Total unique pixels: ${pxState.pixels.length}, accounts: ${pxState.accounts.length}`);
+      setStatus('success', `Found ${pxState.pixels.length} pixels, ${pxState.accounts.length} accounts. Select and share.`);
+    } catch (e) {
+      bulkLog('error', e.message);
+      setStatus('error', e.message);
+    } finally { pxState.scanning = false; render(); }
+  }
+
+  function bulkLog(type, msg) {
+    pxState.bulkLog.push({ type, msg, ts: new Date().toLocaleTimeString() });
+    render();
+  }
+
+  async function runBulkShare() {
+    const pixIds = [...pxState.bulkPixelIds];
+    const accIds = [...pxState.bulkAccountIds];
+    if (!pixIds.length || !accIds.length) { setStatus('error', 'Select at least one pixel and one account.'); return; }
+
+    const pairs = [];
+    for (const pxId of pixIds) for (const accId of accIds) pairs.push({ pxId, accId });
+
+    pxState.bulkRunning = true; pxState.bulkDone = 0; pxState.bulkTotal = pairs.length;
+    pxState.bulkLog = [];
+    bulkLog('info', `Starting bulk share: ${pixIds.length} pixels × ${accIds.length} accounts = ${pairs.length} pairs`);
+
+    for (const { pxId, accId } of pairs) {
+      const px  = pxState.pixels.find(p => p.id === pxId);
+      const acc = pxState.accounts.find(a => a.id === accId);
+      const pxLabel  = px?.name  || pxId;
+      const accLabel = acc?.name || accId;
+      try {
+        const body = { method: 'POST', account_id: accId };
+        if (pxState.businessId) body.business = pxState.businessId;
+        await gFetch(`/${pxId}/shared_accounts`, { method: 'POST', body });
+        bulkLog('success', `✓ ${pxLabel} → ${accLabel}`);
+      } catch (e) {
+        const msg = e.message || '';
+        /* already shared is not a real error */
+        if (msg.includes('already') || msg.includes('2200')) {
+          bulkLog('info', `≈ ${pxLabel} → ${accLabel} (already connected)`);
+        } else {
+          bulkLog('error', `✗ ${pxLabel} → ${accLabel}: ${msg}`);
+        }
+      }
+      pxState.bulkDone++;
+      render();
+      if (pxState.bulkDone < pairs.length) await sleep(RATE_MS);
+    }
+
+    const errCount = pxState.bulkLog.filter(l => l.type === 'error').length;
+    const okCount  = pxState.bulkLog.filter(l => l.type === 'success').length;
+    setStatus(errCount ? 'error' : 'success', `Done: ${okCount} shared, ${errCount} errors`);
+    pxState.bulkRunning = false; render();
+  }
+
   /* ---- Render ---- */
-  const statusColors = { info: '#3b82f6', success: '#22c55e', error: '#ef4444' };
-  const statusIcons  = { info: 'ℹ', success: '✓', error: '!' };
+  const SC = { info: '#3b82f6', success: '#22c55e', error: '#ef4444' };
+  const SI = { info: 'ℹ', success: '✓', error: '!' };
 
-  function render() {
+  function renderSingleMode() {
     const bizId = pxState.businessId;
-    const alreadyConn = pxState.connectedAssets.some(a => a.id === pxState.selectedAccountId);
-    const shareDisabled = pxState.sharing || pxState.loadingContext || !pxState.selectedPixelId || !pxState.selectedAccountId || alreadyConn;
-
-    let body = '';
-
     if (!bizId) {
-      /* BM list view */
+      let body = '';
       if (pxState.loadingBusinesses) {
         body = `<div style="color:var(--txt);font-size:13px;padding:16px 0">Loading business managers...</div>`;
       } else if (!pxState.businesses.length) {
-        body = `<div style="color:var(--txt);font-size:13px;padding:16px 0">No business managers found for this account.</div>`;
+        body = `<div style="color:var(--txt);font-size:13px;padding:16px 0">No business managers found.</div>`;
       } else {
         body = pxState.businesses.map(biz => `
           <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:var(--card);border:1px solid var(--bdr);border-radius:8px;margin-bottom:8px">
@@ -4282,84 +4400,166 @@ function mountPixelManager(container) {
           </div>
         `).join('');
       }
-      body += `<button class="ar-btn ar-btn-ghost ar-btn-sm" style="margin-top:8px" data-pxaction="reload-biz">↻ Refresh list</button>`;
-    } else {
-      /* Main view */
-      const pixOpts = pxState.pixels.map(p => `<option value="${esc(p.id)}" ${p.id===pxState.selectedPixelId?'selected':''}>${esc(p.label)}</option>`).join('') || '<option value="">No pixels found</option>';
-      const accOpts = pxState.accounts.map(a => `<option value="${esc(a.id)}" ${a.id===pxState.selectedAccountId?'selected':''}>${esc(a.label)}</option>`).join('') || '<option value="">No accounts found</option>';
-
-      /* Connected assets list */
-      let connHtml = '';
-      if (pxState.loadingConnectedAssets) {
-        connHtml = `<div style="font-size:12px;color:#64748b;padding:8px 0">Loading connected assets...</div>`;
-      } else if (pxState.connectedError) {
-        connHtml = `<div style="font-size:12px;color:#ef4444;padding:8px 0">${esc(pxState.connectedError)}</div>`;
-      } else if (!pxState.connectedAssets.length) {
-        connHtml = `<div style="font-size:12px;color:#64748b;padding:8px 0">No connected ad accounts for this pixel.</div>`;
-      } else {
-        connHtml = pxState.connectedAssets.map(a => `
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;margin-bottom:6px;${a.id===pxState.selectedAccountId?'border-color:#3b82f6':''}">
-            <div style="font-size:12px;color:var(--txt)">${esc(a.label)}${a.id===pxState.selectedAccountId?'<span style="margin-left:6px;font-size:10px;background:#3b82f620;color:#3b82f6;padding:2px 6px;border-radius:4px">selected</span>':''}</div>
-            <button class="ar-btn ar-btn-sm" style="background:#ef444420;color:#ef4444;border:1px solid #ef444430;min-width:72px" data-pxaction="remove" data-accid="${esc(a.id)}" ${pxState.removingIds.includes(a.id)?'disabled':''}>
-              ${pxState.removingIds.includes(a.id)?'Removing…':'Remove'}
-            </button>
-          </div>
-        `).join('');
-      }
-
-      body = `
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
-          <span class="ar-badge">BM: ${esc(bizId)}</span>
-          <span class="ar-badge">Pixels: ${pxState.pixels.length}</span>
-          <span class="ar-badge">Accounts: ${pxState.accounts.length}</span>
-        </div>
-        <div class="ar-field">
-          <label class="ar-label">Pixel</label>
-          <select class="ar-select" data-pxrole="pixel-select" ${pxState.loadingContext?'disabled':''}>${pixOpts}</select>
-        </div>
-        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:12px;margin:10px 0">
-          <div style="font-size:12px;font-weight:700;color:var(--txt);margin-bottom:8px">
-            Connected Ad Accounts
-            <span style="font-weight:400;color:#64748b;margin-left:6px">${pxState.loadingConnectedAssets?'loading…':(pxState.connectedAssets.length+' total')}</span>
-          </div>
-          ${connHtml}
-        </div>
-        <div class="ar-field">
-          <label class="ar-label">Ad Account to share to</label>
-          <select class="ar-select" data-pxrole="account-select" ${pxState.loadingContext?'disabled':''}>${accOpts}</select>
-        </div>
-        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-          <button class="ar-btn ar-btn-primary" data-pxaction="share" ${shareDisabled?'disabled':''}>
-            ${pxState.sharing?'Sharing…':alreadyConn?'Already connected':'Share Pixel'}
-          </button>
-          <button class="ar-btn ar-btn-ghost" data-pxaction="reload-ctx" ${pxState.loadingContext?'disabled':''}>↻ Refresh</button>
-          <button class="ar-btn ar-btn-ghost" data-pxaction="back">← Back to BM list</button>
-        </div>
-      `;
+      return body + `<button class="ar-btn ar-btn-ghost ar-btn-sm" style="margin-top:8px" data-pxaction="reload-biz">↻ Refresh</button>`;
     }
 
+    const alreadyConn = pxState.connectedAssets.some(a => a.id === pxState.selectedAccountId);
+    const shareDisabled = pxState.sharing || pxState.loadingContext || !pxState.selectedPixelId || !pxState.selectedAccountId || alreadyConn;
+    const pixOpts = pxState.pixels.map(p => `<option value="${esc(p.id)}" ${p.id===pxState.selectedPixelId?'selected':''}>${esc(p.label)}</option>`).join('') || '<option value="">No pixels</option>';
+    const accOpts = pxState.accounts.map(a => `<option value="${esc(a.id)}" ${a.id===pxState.selectedAccountId?'selected':''}>${esc(a.label)}</option>`).join('') || '<option value="">No accounts</option>';
+
+    let connHtml = '';
+    if (pxState.loadingConnectedAssets) connHtml = `<div style="font-size:12px;color:#64748b;padding:6px 0">Loading...</div>`;
+    else if (pxState.connectedError)    connHtml = `<div style="font-size:12px;color:#ef4444;padding:6px 0">${esc(pxState.connectedError)}</div>`;
+    else if (!pxState.connectedAssets.length) connHtml = `<div style="font-size:12px;color:#64748b;padding:6px 0">No connected accounts for this pixel.</div>`;
+    else connHtml = pxState.connectedAssets.map(a => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;background:var(--bg);border:1px solid ${a.id===pxState.selectedAccountId?'#3b82f6':'var(--bdr)'};border-radius:6px;margin-bottom:5px">
+        <div style="font-size:12px;color:var(--txt)">${esc(a.label)}${a.id===pxState.selectedAccountId?'<span style="margin-left:6px;font-size:10px;background:#3b82f620;color:#3b82f6;padding:2px 5px;border-radius:4px">selected</span>':''}</div>
+        <button class="ar-btn ar-btn-sm" style="background:#ef444420;color:#ef4444;border:1px solid #ef444430;min-width:68px" data-pxaction="remove" data-accid="${esc(a.id)}" ${pxState.removingIds.includes(a.id)?'disabled':''}>
+          ${pxState.removingIds.includes(a.id)?'…':'Remove'}
+        </button>
+      </div>
+    `).join('');
+
+    return `
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <span class="ar-badge">BM: ${esc(bizId)}</span>
+        <span class="ar-badge">Pixels: ${pxState.pixels.length}</span>
+        <span class="ar-badge">Accounts: ${pxState.accounts.length}</span>
+      </div>
+      <div class="ar-field">
+        <label class="ar-label">Pixel</label>
+        <select class="ar-select" data-pxrole="pixel-select" ${pxState.loadingContext?'disabled':''}>${pixOpts}</select>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:10px 12px;margin:10px 0">
+        <div style="font-size:12px;font-weight:700;color:var(--txt);margin-bottom:6px">Connected Accounts <span style="font-weight:400;color:#64748b">${pxState.loadingConnectedAssets?'…':pxState.connectedAssets.length+' total'}</span></div>
+        ${connHtml}
+      </div>
+      <div class="ar-field">
+        <label class="ar-label">Share to account</label>
+        <select class="ar-select" data-pxrole="account-select" ${pxState.loadingContext?'disabled':''}>${accOpts}</select>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button class="ar-btn ar-btn-primary" data-pxaction="share" ${shareDisabled?'disabled':''}>${pxState.sharing?'Sharing…':alreadyConn?'Already connected':'Share'}</button>
+        <button class="ar-btn ar-btn-ghost" data-pxaction="reload-ctx" ${pxState.loadingContext?'disabled':''}>↻ Refresh</button>
+        <button class="ar-btn ar-btn-ghost" data-pxaction="back">← BM list</button>
+      </div>
+    `;
+  }
+
+  function renderBulkMode() {
+    const logColors = { info: '#94a3b8', success: '#22c55e', error: '#ef4444' };
+    const progress = pxState.bulkTotal ? Math.round(pxState.bulkDone / pxState.bulkTotal * 100) : 0;
+
+    const pixRows = pxState.pixels.map(p => `
+      <label style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:5px;cursor:pointer;font-size:12px;color:var(--txt);background:${pxState.bulkPixelIds.has(p.id)?'rgba(59,130,246,.1)':''}">
+        <input type="checkbox" data-pxbulk="pixel" data-id="${esc(p.id)}" ${pxState.bulkPixelIds.has(p.id)?'checked':''} style="accent-color:var(--acc)">
+        <span title="${esc(p.label)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(p.label)}</span>
+        <span style="font-size:10px;color:#64748b;flex-shrink:0">${esc(p.source||'')}</span>
+      </label>
+    `).join('') || '<div style="font-size:12px;color:#64748b;padding:8px">No pixels loaded. Click Scan first.</div>';
+
+    const accRows = pxState.accounts.map(a => `
+      <label style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:5px;cursor:pointer;font-size:12px;color:var(--txt);background:${pxState.bulkAccountIds.has(a.id)?'rgba(59,130,246,.1)':''}">
+        <input type="checkbox" data-pxbulk="account" data-id="${esc(a.id)}" ${pxState.bulkAccountIds.has(a.id)?'checked':''} style="accent-color:var(--acc)">
+        <span title="${esc(a.label)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(a.label)}</span>
+      </label>
+    `).join('') || '<div style="font-size:12px;color:#64748b;padding:8px">No accounts. Load a BM first.</div>';
+
+    const logHtml = pxState.bulkLog.slice(-60).map(l => `
+      <div style="font-size:11px;color:${logColors[l.type]||logColors.info};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+        <span style="opacity:.5">${esc(l.ts)}</span> ${esc(l.msg)}
+      </div>
+    `).join('');
+
+    const scanDisabled  = pxState.scanning || pxState.bulkRunning;
+    const shareDisabled = pxState.bulkRunning || pxState.scanning || !pxState.bulkPixelIds.size || !pxState.bulkAccountIds.size;
+
+    return `
+      <!-- toolbar -->
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt);cursor:pointer">
+          <input type="checkbox" id="px-scan-personal" ${pxState.bulkScanPersonal?'checked':''} style="accent-color:var(--acc)">
+          Scan account-level pixels <span style="color:#64748b">(slower)</span>
+        </label>
+        <button class="ar-btn ar-btn-primary ar-btn-sm" data-pxaction="bulk-scan" ${scanDisabled?'disabled':''}>${pxState.scanning?'Scanning…':'🔍 Scan'}</button>
+        <button class="ar-btn ar-btn-ghost ar-btn-sm" data-pxaction="bulk-sel-all-px">All pixels</button>
+        <button class="ar-btn ar-btn-ghost ar-btn-sm" data-pxaction="bulk-none-px">None</button>
+        <button class="ar-btn ar-btn-ghost ar-btn-sm" data-pxaction="bulk-sel-all-acc">All accounts</button>
+        <button class="ar-btn ar-btn-ghost ar-btn-sm" data-pxaction="bulk-none-acc">None</button>
+      </div>
+
+      <!-- two-column layout -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div>
+          <div style="font-size:12px;font-weight:700;color:var(--txt);margin-bottom:6px">
+            Pixels <span style="font-weight:400;color:#64748b">${pxState.bulkPixelIds.size} selected / ${pxState.pixels.length} total</span>
+          </div>
+          <div style="max-height:240px;overflow:auto;background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:6px">${pixRows}</div>
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:700;color:var(--txt);margin-bottom:6px">
+            Ad Accounts <span style="font-weight:400;color:#64748b">${pxState.bulkAccountIds.size} selected / ${pxState.accounts.length} total</span>
+          </div>
+          <div style="max-height:240px;overflow:auto;background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:6px">${accRows}</div>
+        </div>
+      </div>
+
+      <!-- share button + progress -->
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <button class="ar-btn ar-btn-primary" data-pxaction="bulk-share" ${shareDisabled?'disabled':''}>
+          ${pxState.bulkRunning?`Sharing… ${pxState.bulkDone}/${pxState.bulkTotal}`:`▶ Share ${pxState.bulkPixelIds.size}px × ${pxState.bulkAccountIds.size}acc`}
+        </button>
+        ${pxState.bulkTotal ? `<div style="flex:1;min-width:100px;background:var(--bdr);border-radius:4px;height:6px"><div style="background:var(--acc);width:${progress}%;height:100%;border-radius:4px;transition:width .3s"></div></div><span style="font-size:11px;color:#64748b">${progress}%</span>` : ''}
+      </div>
+
+      <!-- log -->
+      ${pxState.bulkLog.length ? `
+        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 10px;max-height:160px;overflow:auto;font-family:ui-monospace,monospace">
+          ${logHtml}
+        </div>
+      ` : ''}
+    `;
+  }
+
+  function render() {
+    const isBulk = pxState.mode === 'bulk';
     container.innerHTML = `
       <div style="padding:6px 0">
-        <h3 style="margin:0 0 14px;font-size:15px;font-weight:700;color:var(--txt)">🔗 Pixel Manager</h3>
-        ${body}
-        <div style="margin-top:14px;padding:10px 12px;border-radius:8px;border:1px solid;font-size:12px;line-height:1.5;color:${statusColors[pxState.status.type]||statusColors.info};background:${statusColors[pxState.status.type]||statusColors.info}18;border-color:${statusColors[pxState.status.type]||statusColors.info}30">
-          ${statusIcons[pxState.status.type]||'i'} ${esc(pxState.status.text)}
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+          <h3 style="margin:0;font-size:15px;font-weight:700;color:var(--txt)">🔗 Pixel Manager</h3>
+          <button class="ar-btn ar-btn-sm ${isBulk?'ar-btn-primary':'ar-btn-ghost'}" data-pxaction="toggle-bulk">
+            ${isBulk?'⚡ Bulk mode':'⚡ Bulk mode'}
+          </button>
+        </div>
+        ${isBulk ? renderBulkMode() : renderSingleMode()}
+        <div style="margin-top:12px;padding:9px 12px;border-radius:8px;border:1px solid;font-size:12px;line-height:1.5;color:${SC[pxState.status.type]||SC.info};background:${SC[pxState.status.type]||SC.info}18;border-color:${SC[pxState.status.type]||SC.info}30">
+          ${SI[pxState.status.type]||'i'} ${esc(pxState.status.text)}
         </div>
       </div>
     `;
 
-    /* bind events */
+    /* single mode events */
     container.querySelectorAll('[data-pxaction]').forEach(el => {
       el.addEventListener('click', async () => {
-        const action = el.getAttribute('data-pxaction');
-        if (action === 'open-biz')    { await loadContext(el.getAttribute('data-bizid')); }
-        if (action === 'reload-biz')  { await loadBusinessesOnly(); }
-        if (action === 'reload-ctx')  { await loadContext(pxState.businessId); }
-        if (action === 'share')       { await sharePixel(); }
-        if (action === 'remove')      { await removeConnected(el.getAttribute('data-accid')); }
-        if (action === 'back')        { pxState.businessId = ''; pxState.pixels = []; pxState.accounts = []; pxState.connectedAssets = []; setStatus('info', 'Select a business manager.'); render(); }
+        const a = el.getAttribute('data-pxaction');
+        if (a === 'toggle-bulk')    { pxState.mode = pxState.mode === 'bulk' ? 'single' : 'bulk'; render(); }
+        if (a === 'open-biz')       { await loadContext(el.getAttribute('data-bizid')); }
+        if (a === 'reload-biz')     { await loadBusinessesOnly(); }
+        if (a === 'reload-ctx')     { await loadContext(pxState.businessId); }
+        if (a === 'share')          { await sharePixelSingle(); }
+        if (a === 'remove')         { await removeConnected(el.getAttribute('data-accid')); }
+        if (a === 'back')           { pxState.businessId = ''; pxState.pixels = []; pxState.accounts = []; pxState.connectedAssets = []; setStatus('info', 'Select a BM.'); render(); }
+        /* bulk */
+        if (a === 'bulk-scan')      { await loadBulkData(); }
+        if (a === 'bulk-share')     { await runBulkShare(); }
+        if (a === 'bulk-sel-all-px')  { pxState.pixels.forEach(p => pxState.bulkPixelIds.add(p.id)); render(); }
+        if (a === 'bulk-none-px')     { pxState.bulkPixelIds.clear(); render(); }
+        if (a === 'bulk-sel-all-acc') { pxState.accounts.forEach(a => pxState.bulkAccountIds.add(a.id)); render(); }
+        if (a === 'bulk-none-acc')    { pxState.bulkAccountIds.clear(); render(); }
       });
     });
+
     container.querySelectorAll('[data-pxrole]').forEach(el => {
       el.addEventListener('change', async () => {
         const role = el.getAttribute('data-pxrole');
@@ -4367,6 +4567,19 @@ function mountPixelManager(container) {
         if (role === 'account-select') { pxState.selectedAccountId = el.value; render(); }
       });
     });
+
+    container.querySelectorAll('[data-pxbulk]').forEach(el => {
+      el.addEventListener('change', () => {
+        const type = el.getAttribute('data-pxbulk');
+        const id   = el.getAttribute('data-id');
+        const set  = type === 'pixel' ? pxState.bulkPixelIds : pxState.bulkAccountIds;
+        el.checked ? set.add(id) : set.delete(id);
+        render();
+      });
+    });
+
+    const scanPersonalCb = container.querySelector('#px-scan-personal');
+    if (scanPersonalCb) scanPersonalCb.addEventListener('change', () => { pxState.bulkScanPersonal = scanPersonalCb.checked; });
   }
 
   /* ---- Init ---- */
