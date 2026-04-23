@@ -5159,13 +5159,10 @@ function mountOperations(container) {
     for (const accId of targetIds) {
       const acc = ops.copyAccounts.find(a=>a.id===accId);
       try {
-        const srcCampaign = ops.copyCampaigns.find(c=>c.id===ops.copySelectedCampaignId);
-        await apiFetch(`/act_${accId}/campaigns`,{method:'POST',body:{
-          copied_campaign_id: ops.copySelectedCampaignId,
-          name: srcCampaign?.name || 'Copied Campaign',
-          objective: srcCampaign?.objective || 'OUTCOME_LEADS',
+        await apiFetch(`/${ops.copySelectedCampaignId}/copies`,{method:'POST',body:{
+          deep_copy: '1',
           status_override: 'PAUSED',
-          special_ad_categories: JSON.stringify(srcCampaign?.special_ad_categories||[]),
+          destination_ad_account_id: accId,
         }});
         addLog(ops.copyLog,'success',`✓ → ${acc?.name||accId}`);
       } catch(e) {
