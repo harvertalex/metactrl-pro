@@ -5073,7 +5073,7 @@ function mountOperations(container) {
     csvFileName: '',
     csvRows: [],           // parsed rows from CSV
     csvCampaignNameTpl: 'COLD TEST | CBO ${budget}/d | 1as{ad_count}ads | {date} | {acc_id}',
-    csvAdsetNameTpl: '{date}',
+    csvAdsetNameTpl: '{date} | {n}',
     csvSub2Mode: 'acc_id', // acc_id | keep | empty
     csvRunning: false,
     csvLog: [], csvDone: 0, csvTotal: 0,
@@ -5478,7 +5478,7 @@ function mountOperations(container) {
         // --- Ad Set ---
         const adsetName = csvRenderTpl(ops.csvAdsetNameTpl, {
           date: dateStr, acc_id: accId, source_name: firstRow['Ad Set Name']||'',
-          budget, ad_count: adCount,
+          budget, ad_count: adCount, n: '01',
         }) || firstRow['Ad Set Name'] || 'Ad Set 1';
         const countries = String(firstRow['Countries']||'').split(',').map(s=>s.trim()).filter(Boolean);
         const ageMin = +firstRow['Age Min'] || 18;
@@ -5640,7 +5640,7 @@ function mountOperations(container) {
       </div>
 
       <div style="margin:12px 0">
-        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Ad Set Name Template — by default just <code>{date}</code> (MMDDYY)</div>
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Ad Set Name Template — tokens: <code>{date}</code> <code>{n}</code> <code>{acc_id}</code> <code>{source_name}</code></div>
         <input type="text" id="csv-adset-tpl" value="${esc(ops.csvAdsetNameTpl)}" style="width:100%;padding:7px 9px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;font-family:monospace">
       </div>
 
