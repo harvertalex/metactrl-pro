@@ -4805,26 +4805,56 @@ function mountOperations(container) {
   }
 
   /* ==================== SPEND DASHBOARD ==================== */
+  /* Fetch ALL accounts across ALL BMs + personal — reused by every tool */
+  async function fetchAllAccountsFlat(fields = 'id,account_id,name') {
+    const rows = [];
+    /* 1. all BMs */
+    let businesses = [];
+    try { businesses = await apiAll('/me/businesses', {fields:'id,name',limit:200}); } catch {}
+    try {
+      const p = await apiFetch('/me', {params:{fields:'businesses{id,name}'}});
+      (p?.businesses?.data||[]).forEach(b => businesses.push(b));
+    } catch {}
+    const seenBiz = new Set();
+    businesses = businesses.filter(b => { if(!b.id||seenBiz.has(b.id))return false; seenBiz.add(b.id); return true; });
+
+    await Promise.all(businesses.map(async biz => {
+      await Promise.all(['owned_ad_accounts','client_ad_accounts'].map(async edge => {
+        try {
+          const items = await apiAll(`/${biz.id}/${edge}`, {fields, limit:200});
+          items.forEach(a => rows.push({...a, _bm_id:biz.id, _bm_name:biz.name}));
+        } catch {}
+      }));
+    }));
+
+    /* 2. personal /me/adaccounts (catches accounts not in any BM) */
+    try {
+      const personal = await apiAll('/me/adaccounts', {fields, limit:200});
+      personal.forEach(a => rows.push({...a, _bm_id:'', _bm_name:'No BM'}));
+    } catch {}
+
+    /* dedupe by numeric account id */
+    const seen = new Set();
+    return rows.filter(a => {
+      const id = String(a.account_id||a.id||'').replace(/^act_/,'');
+      if (!id||seen.has(id)) return false;
+      seen.add(id); return true;
+    }).map(a => ({
+      ...a,
+      _id: String(a.account_id||a.id||'').replace(/^act_/,''),
+      _name: a.name||'Untitled',
+    }));
+  }
+
   async function loadSpend() {
     ops.spendLoading = true; ops.spendAccounts = [];
-    setStatus('info', 'Loading accounts...');
+    setStatus('info', 'Loading accounts across all BMs...');
     try {
-      const bizId = ops.spendBizId || getBizId();
-      if (!bizId) throw new Error('No BM ID found. Open Ads Manager inside a BM.');
-      const accounts = await apiAll(`/${bizId}/owned_ad_accounts`, {
-        fields: 'id,account_id,name,account_status,amount_spent,balance,spend_cap,currency,disable_reason',
-        limit: 200,
-      });
-      const client = await apiAll(`/${bizId}/client_ad_accounts`, {
-        fields: 'id,account_id,name,account_status,amount_spent,balance,spend_cap,currency,disable_reason',
-        limit: 200,
-      }).catch(()=>[]);
-      const all = [...accounts, ...client];
-      const seen = new Set();
-      ops.spendAccounts = all.filter(a => { const id=String(a.account_id||a.id||'').replace(/^act_/,''); if(!id||seen.has(id))return false; seen.add(id); return true; })
-        .map(a => ({
-          id: String(a.account_id||a.id||'').replace(/^act_/,''),
-          name: a.name||'Untitled',
+      const raw = await fetchAllAccountsFlat('id,account_id,name,account_status,amount_spent,balance,spend_cap,currency,disable_reason');
+      ops.spendAccounts = raw.map(a => ({
+          id: a._id,
+          name: a._name,
+          bm: a._bm_name||'',
           status: a.account_status,
           spent: parseFloat(a.amount_spent||0)/100,
           balance: parseFloat(a.balance||0)/100,
@@ -4857,7 +4887,7 @@ function mountOperations(container) {
       return `<tr>
         <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
           <div style="font-size:12px;font-weight:600;color:var(--txt)">${esc(a.name)}</div>
-          <div style="font-size:10px;color:#64748b">${esc(a.id)}</div>
+          <div style="font-size:10px;color:#64748b">${esc(a.id)}${a.bm?` · ${esc(a.bm)}`:''}</div>
         </td>
         <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
           <span style="font-size:11px;font-weight:700;color:${STATUS_COLOR[a.status]||'#64748b'}">${STATUS_LABEL[a.status]||a.status}</span>
@@ -4916,19 +4946,10 @@ function mountOperations(container) {
 
   /* ==================== BULK COPY CAMPAIGN ==================== */
   async function loadCopyAccounts() {
-    ops.copyLoadingAccounts = true; setStatus('info','Loading accounts...'); render();
+    ops.copyLoadingAccounts = true; setStatus('info','Loading accounts across all BMs...'); render();
     try {
-      const bizId = ops.copyBizId || getBizId();
-      if (!bizId) throw new Error('No BM ID found.');
-      const [owned, client] = await Promise.all([
-        apiAll(`/${bizId}/owned_ad_accounts`,{fields:'id,account_id,name',limit:200}),
-        apiAll(`/${bizId}/client_ad_accounts`,{fields:'id,account_id,name',limit:200}).catch(()=>[]),
-      ]);
-      const seen=new Set();
-      ops.copyAccounts = [...owned,...client].filter(a=>{
-        const id=String(a.account_id||a.id||'').replace(/^act_/,'');
-        if(!id||seen.has(id))return false; seen.add(id); return true;
-      }).map(a=>({id:String(a.account_id||a.id||'').replace(/^act_/,''),name:a.name||'Untitled',label:`${a.name||'Untitled'} (${String(a.account_id||a.id||'').replace(/^act_/,'')})`}))
+      const raw = await fetchAllAccountsFlat('id,account_id,name');
+      ops.copyAccounts = raw.map(a=>({id:a._id, name:a._name, label:`${a._name} (${a._id})`}))
         .sort((a,b)=>a.name.localeCompare(b.name));
       ops.copySrcAccId = ops.copyAccounts[0]?.id||'';
       setStatus('success',`${ops.copyAccounts.length} accounts loaded.`);
@@ -5029,20 +5050,10 @@ function mountOperations(container) {
 
   /* ==================== BULK PAUSE / RESUME ==================== */
   async function loadPauseAccounts() {
-    ops.pauseLoadingAccounts=true; setStatus('info','Loading accounts...'); render();
+    ops.pauseLoadingAccounts=true; setStatus('info','Loading accounts across all BMs...'); render();
     try {
-      const bizId = ops.pauseBizId||getBizId();
-      if (!bizId) throw new Error('No BM ID found.');
-      const [owned,client] = await Promise.all([
-        apiAll(`/${bizId}/owned_ad_accounts`,{fields:'id,account_id,name',limit:200}),
-        apiAll(`/${bizId}/client_ad_accounts`,{fields:'id,account_id,name',limit:200}).catch(()=>[]),
-      ]);
-      const seen=new Set();
-      ops.pauseAccounts = [...owned,...client].filter(a=>{
-        const id=String(a.account_id||a.id||'').replace(/^act_/,'');
-        if(!id||seen.has(id))return false; seen.add(id); return true;
-      }).map(a=>({id:String(a.account_id||a.id||'').replace(/^act_/,''),name:a.name||'Untitled'}))
-        .sort((a,b)=>a.name.localeCompare(b.name));
+      const raw = await fetchAllAccountsFlat('id,account_id,name');
+      ops.pauseAccounts = raw.map(a=>({id:a._id, name:a._name})).sort((a,b)=>a.name.localeCompare(b.name));
       setStatus('success',`${ops.pauseAccounts.length} accounts loaded.`);
     } catch(e) { setStatus('error',e.message); }
     finally { ops.pauseLoadingAccounts=false; render(); }
@@ -5134,17 +5145,8 @@ function mountOperations(container) {
   async function loadZombies() {
     ops.zombieLoading=true; ops.zombies=[]; setStatus('info','Scanning for zombie campaigns...'); render();
     try {
-      const bizId = ops.zombieBizId||getBizId();
-      if (!bizId) throw new Error('No BM ID found.');
-      const [owned,client] = await Promise.all([
-        apiAll(`/${bizId}/owned_ad_accounts`,{fields:'id,account_id,name',limit:200}),
-        apiAll(`/${bizId}/client_ad_accounts`,{fields:'id,account_id,name',limit:200}).catch(()=>[]),
-      ]);
-      const seen=new Set();
-      const accounts = [...owned,...client].filter(a=>{
-        const id=String(a.account_id||a.id||'').replace(/^act_/,'');
-        if(!id||seen.has(id))return false; seen.add(id); return true;
-      }).map(a=>({id:String(a.account_id||a.id||'').replace(/^act_/,''),name:a.name||'Untitled'}));
+      const raw = await fetchAllAccountsFlat('id,account_id,name');
+      const accounts = raw.map(a=>({id:a._id, name:a._name}));
 
       const cutoff = Date.now() - ops.zombieDays * 86400000;
       const minSpendCents = ops.zombieMinSpend * 100;
@@ -5229,17 +5231,8 @@ function mountOperations(container) {
   async function loadAudiences() {
     ops.audLoading=true; ops.audList=[]; setStatus('info','Loading audiences...'); render();
     try {
-      const bizId = ops.audBizId||getBizId();
-      if (!bizId) throw new Error('No BM ID found.');
-      const [owned,client] = await Promise.all([
-        apiAll(`/${bizId}/owned_ad_accounts`,{fields:'id,account_id,name',limit:200}),
-        apiAll(`/${bizId}/client_ad_accounts`,{fields:'id,account_id,name',limit:200}).catch(()=>[]),
-      ]);
-      const seen=new Set();
-      ops.audAccounts = [...owned,...client].filter(a=>{
-        const id=String(a.account_id||a.id||'').replace(/^act_/,'');
-        if(!id||seen.has(id))return false; seen.add(id); return true;
-      }).map(a=>({id:String(a.account_id||a.id||'').replace(/^act_/,''),name:a.name||'Untitled'}));
+      const raw = await fetchAllAccountsFlat('id,account_id,name');
+      ops.audAccounts = raw.map(a=>({id:a._id, name:a._name}));
 
       const allAud=[];
       await Promise.all(ops.audAccounts.map(async acc=>{
