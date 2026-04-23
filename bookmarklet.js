@@ -5162,6 +5162,7 @@ function mountOperations(container) {
         const srcCampaign = ops.copyCampaigns.find(c=>c.id===ops.copySelectedCampaignId);
         await apiFetch(`/act_${accId}/campaigns`,{method:'POST',body:{
           copied_campaign_id: ops.copySelectedCampaignId,
+          name: srcCampaign?.name || 'Copied Campaign',
           status_override: 'PAUSED',
           special_ad_categories: JSON.stringify(srcCampaign?.special_ad_categories||[]),
         }});
