@@ -3340,7 +3340,7 @@ function mountAnalytics(container) {
 
   grid.appendChild(left);
   grid.appendChild(right);
-  container.appendChild(grid);
+  c.appendChild(grid);
 
   /* ---- helpers ---- */
   function log(msg, type='info') {
