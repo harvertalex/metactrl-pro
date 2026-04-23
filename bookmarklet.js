@@ -5136,11 +5136,12 @@ function mountOperations(container) {
     ops.copyLoadingCampaigns=true; ops.copyCampaigns=[]; setStatus('info','Loading campaigns...'); render();
     try {
       const campaigns = await apiAll(`/act_${ops.copySrcAccId}/campaigns`,{
-        fields:'id,name,status,objective,daily_budget,lifetime_budget',limit:200
+        fields:'id,name,status,objective,daily_budget,lifetime_budget,special_ad_categories',limit:200
       });
       ops.copyCampaigns = campaigns.map(c=>({
         id:String(c.id), name:c.name||'Untitled',
         status:c.status, objective:c.objective||'',
+        special_ad_categories: c.special_ad_categories||[],
         budget: c.daily_budget ? `$${(+c.daily_budget/100).toFixed(2)}/day` : c.lifetime_budget ? `$${(+c.lifetime_budget/100).toFixed(2)} total` : '—',
       })).sort((a,b)=>a.name.localeCompare(b.name));
       ops.copySelectedCampaignId = ops.copyCampaigns[0]?.id||'';
@@ -5158,9 +5159,11 @@ function mountOperations(container) {
     for (const accId of targetIds) {
       const acc = ops.copyAccounts.find(a=>a.id===accId);
       try {
+        const srcCampaign = ops.copyCampaigns.find(c=>c.id===ops.copySelectedCampaignId);
         await apiFetch(`/act_${accId}/campaigns`,{method:'POST',body:{
           copied_campaign_id: ops.copySelectedCampaignId,
           status_override: 'PAUSED',
+          special_ad_categories: JSON.stringify(srcCampaign?.special_ad_categories||[]),
         }});
         addLog(ops.copyLog,'success',`✓ → ${acc?.name||accId}`);
       } catch(e) {
