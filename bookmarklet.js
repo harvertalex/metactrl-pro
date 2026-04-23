@@ -5163,6 +5163,7 @@ function mountOperations(container) {
         await apiFetch(`/act_${accId}/campaigns`,{method:'POST',body:{
           copied_campaign_id: ops.copySelectedCampaignId,
           name: srcCampaign?.name || 'Copied Campaign',
+          objective: srcCampaign?.objective || 'OUTCOME_LEADS',
           status_override: 'PAUSED',
           special_ad_categories: JSON.stringify(srcCampaign?.special_ad_categories||[]),
         }});
