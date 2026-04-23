@@ -5074,7 +5074,9 @@ function mountOperations(container) {
     csvRows: [],           // parsed rows from CSV
     csvCampaignNameTpl: 'COLD TEST | CBO ${budget}/d | 1as{ad_count}ads | {date} | {acc_id}',
     csvAdsetNameTpl: '{date} | {n}',
-    csvSub2Mode: 'acc_id', // acc_id | keep | empty
+    csvUrlTagParam: 'sub2',      // which param to modify (sub1..sub6, keyword, etc.)
+    csvUrlTagMode: 'acc_id',     // acc_id | keep | empty | custom
+    csvUrlTagCustom: '',         // value when mode = custom
     csvRunning: false,
     csvLog: [], csvDone: 0, csvTotal: 0,
 
@@ -5384,25 +5386,25 @@ function mountOperations(container) {
     return String(tpl||'').replace(/\{(\w+)\}|\$\{(\w+)\}/g, (_,a,b) => String(ctx[a||b] ?? ''));
   }
 
-  /** Transform URL Tags — set sub2 based on mode. */
-  function csvTransformUrlTags(raw, accId, mode) {
+  /** Transform URL Tags — modify a chosen param (paramName) based on mode. */
+  function csvTransformUrlTags(raw, accId, paramName, mode, customVal) {
     if (!raw) return raw;
+    const target = String(paramName||'').trim();
+    if (!target || mode === 'keep') return raw;
     const pairs = String(raw).split('&').map(p=>{
       const [k,...rest] = p.split('=');
       return [k, rest.join('=')];
     });
-    const kept = [];
-    let sawSub2 = false;
-    for (const [k,v] of pairs) {
-      if (k === 'sub2') {
-        sawSub2 = true;
-        if (mode === 'acc_id') kept.push(['sub2', accId]);
-        else if (mode === 'keep') kept.push(['sub2', v]);
-        else kept.push(['sub2', '']);
-      } else kept.push([k,v]);
-    }
-    if (!sawSub2 && mode === 'acc_id') kept.push(['sub2', accId]);
-    return kept.map(([k,v]) => v===''?`${k}=`:`${k}=${v}`).join('&');
+    const newVal = mode === 'acc_id' ? accId
+                 : mode === 'empty' ? ''
+                 : mode === 'custom' ? String(customVal||'') : '';
+    let saw = false;
+    const out = pairs.map(([k,v]) => {
+      if (k === target) { saw = true; return [k, newVal]; }
+      return [k, v];
+    });
+    if (!saw) out.push([target, newVal]);
+    return out.map(([k,v]) => v===''?`${k}=`:`${k}=${v}`).join('&');
   }
 
   /** Map Objective label from CSV to API enum. */
@@ -5534,7 +5536,7 @@ function mountOperations(container) {
             const videoId = r['Video ID'] ? csvStripPrefix(r['Video ID']) : '';
             const imageHash = (r['Image Hash']||'').split(':').pop(); // strip "accid:hash"
             const urlTagsRaw = r['URL Tags'] || '';
-            const urlTags = csvTransformUrlTags(urlTagsRaw, accId, ops.csvSub2Mode);
+            const urlTags = csvTransformUrlTags(urlTagsRaw, accId, ops.csvUrlTagParam, ops.csvUrlTagMode, ops.csvUrlTagCustom);
             const cta = r['Call to Action'] || 'LEARN_MORE';
 
             const objectStorySpec = { page_id: pageId };
@@ -5644,11 +5646,20 @@ function mountOperations(container) {
         <input type="text" id="csv-adset-tpl" value="${esc(ops.csvAdsetNameTpl)}" style="width:100%;padding:7px 9px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;font-family:monospace">
       </div>
 
-      <div style="margin:8px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <span style="font-size:11px;color:#94a3b8">URL Tag sub2:</span>
-        <label style="font-size:12px;color:var(--txt);display:flex;align-items:center;gap:4px"><input type="radio" name="csv-sub2" value="acc_id" ${ops.csvSub2Mode==='acc_id'?'checked':''}> = target account ID</label>
-        <label style="font-size:12px;color:var(--txt);display:flex;align-items:center;gap:4px"><input type="radio" name="csv-sub2" value="keep"  ${ops.csvSub2Mode==='keep'?'checked':''}> keep as in CSV</label>
-        <label style="font-size:12px;color:var(--txt);display:flex;align-items:center;gap:4px"><input type="radio" name="csv-sub2" value="empty" ${ops.csvSub2Mode==='empty'?'checked':''}> empty</label>
+      <div style="margin:12px 0">
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">URL Tag — выбери параметр и режим замены</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          <input type="text" id="csv-urltag-param" value="${esc(ops.csvUrlTagParam)}" placeholder="sub2" style="width:90px;padding:6px 8px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;font-family:monospace">
+          <span style="color:#64748b;font-size:12px">=</span>
+          <select id="csv-urltag-mode" style="padding:6px 8px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px">
+            <option value="acc_id" ${ops.csvUrlTagMode==='acc_id'?'selected':''}>target account ID</option>
+            <option value="keep"   ${ops.csvUrlTagMode==='keep'  ?'selected':''}>keep as in CSV</option>
+            <option value="empty"  ${ops.csvUrlTagMode==='empty' ?'selected':''}>empty</option>
+            <option value="custom" ${ops.csvUrlTagMode==='custom'?'selected':''}>custom value…</option>
+          </select>
+          ${ops.csvUrlTagMode==='custom'?`<input type="text" id="csv-urltag-custom" value="${esc(ops.csvUrlTagCustom)}" placeholder="custom value" style="flex:1;min-width:120px;padding:6px 8px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px">`:''}
+        </div>
+        <div style="font-size:10px;color:#64748b;margin-top:4px">Примеры: <code>sub1</code>, <code>sub2</code>, <code>sub3</code>, <code>keyword</code>… Пусто — отключить замену.</div>
       </div>
 
       <div style="margin-top:12px">
@@ -5924,9 +5935,12 @@ function mountOperations(container) {
     if (csvTpl) csvTpl.addEventListener('input', ()=>{ ops.csvCampaignNameTpl = csvTpl.value; });
     const csvAdsetTpl = container.querySelector('#csv-adset-tpl');
     if (csvAdsetTpl) csvAdsetTpl.addEventListener('input', ()=>{ ops.csvAdsetNameTpl = csvAdsetTpl.value; });
-    container.querySelectorAll('input[name="csv-sub2"]').forEach(el=>{
-      el.addEventListener('change', ()=>{ if (el.checked) ops.csvSub2Mode = el.value; });
-    });
+    const csvUrlParam = container.querySelector('#csv-urltag-param');
+    if (csvUrlParam) csvUrlParam.addEventListener('input', ()=>{ ops.csvUrlTagParam = csvUrlParam.value; });
+    const csvUrlMode = container.querySelector('#csv-urltag-mode');
+    if (csvUrlMode) csvUrlMode.addEventListener('change', ()=>{ ops.csvUrlTagMode = csvUrlMode.value; render(); });
+    const csvUrlCustom = container.querySelector('#csv-urltag-custom');
+    if (csvUrlCustom) csvUrlCustom.addEventListener('input', ()=>{ ops.csvUrlTagCustom = csvUrlCustom.value; });
     container.querySelectorAll('[data-csvacc]').forEach(el=>{
       el.addEventListener('change', ()=>{ const id=el.getAttribute('data-csvacc'); el.checked?ops.csvTargetAccIds.add(id):ops.csvTargetAccIds.delete(id); render(); });
     });
