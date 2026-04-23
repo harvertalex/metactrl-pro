@@ -4754,7 +4754,10 @@ function mountOperations(container) {
     spendAccounts: [],
     spendLoading: false,
     spendBizId: getBizId(),
-    spendFilter: 'all',   /* all | active | issues */
+    spendFilter: 'all',   /* all | active | spending | issues */
+    spendPreset: 'today', /* today | yesterday | last_3d | last_7_days | last_14_days | last_30_days | custom */
+    spendDateFrom: '',
+    spendDateTo: '',
 
     /* bulk copy */
     copyBizId: getBizId(),
@@ -4846,23 +4849,60 @@ function mountOperations(container) {
     }));
   }
 
+  const SPEND_PRESETS = [
+    { id:'today',        label:'Today' },
+    { id:'yesterday',    label:'Yesterday' },
+    { id:'last_3d',      label:'3 Days' },
+    { id:'last_7_days',  label:'7 Days' },
+    { id:'last_14_days', label:'14 Days' },
+    { id:'last_30_days', label:'30 Days' },
+    { id:'custom',       label:'Custom' },
+  ];
+
   async function loadSpend() {
     ops.spendLoading = true; ops.spendAccounts = [];
-    setStatus('info', 'Loading accounts across all BMs...');
+    setStatus('info', 'Loading accounts...');
+    render();
     try {
-      const raw = await fetchAllAccountsFlat('id,account_id,name,account_status,amount_spent,balance,spend_cap,currency,disable_reason');
-      ops.spendAccounts = raw.map(a => ({
-          id: a._id,
-          name: a._name,
-          bm: a._bm_name||'',
-          status: a.account_status,
-          spent: parseFloat(a.amount_spent||0)/100,
-          balance: parseFloat(a.balance||0)/100,
-          spendCap: parseFloat(a.spend_cap||0)/100,
-          currency: a.currency||'USD',
-          disableReason: a.disable_reason||0,
-        }))
-        .sort((a,b) => b.spent - a.spent);
+      /* Step 1: get all accounts with status/balance */
+      const raw = await fetchAllAccountsFlat('id,account_id,name,account_status,balance,currency,disable_reason');
+      const base = raw.map(a => ({
+        id: a._id, name: a._name, bm: a._bm_name||'',
+        status: a.account_status,
+        balance: parseFloat(a.balance||0)/100,
+        currency: a.currency||'USD',
+        disableReason: a.disable_reason||0,
+        spend: null,   /* filled by insights step */
+        impressions: null, clicks: null,
+      }));
+
+      setStatus('info', `Fetching insights for ${base.length} accounts...`);
+      render();
+
+      /* Step 2: insights in parallel batches of 10 */
+      const insParams = { fields:'spend,impressions,clicks', limit:1 };
+      if (ops.spendPreset === 'custom' && ops.spendDateFrom && ops.spendDateTo) {
+        insParams.time_range = JSON.stringify({since: ops.spendDateFrom, until: ops.spendDateTo});
+      } else {
+        insParams.date_preset = ops.spendPreset === 'last_3d' ? 'last_3_days' : (ops.spendPreset || 'today');
+      }
+
+      const BATCH = 10;
+      for (let i = 0; i < base.length; i += BATCH) {
+        const batch = base.slice(i, i + BATCH);
+        await Promise.all(batch.map(async acc => {
+          try {
+            const r = await apiFetch(`/act_${acc.id}/insights`, {params: insParams});
+            const d = r?.data?.[0];
+            acc.spend       = parseFloat(d?.spend||0);
+            acc.impressions = parseInt(d?.impressions||0);
+            acc.clicks      = parseInt(d?.clicks||0);
+          } catch { acc.spend = 0; acc.impressions = 0; acc.clicks = 0; }
+        }));
+        if (i + BATCH < base.length) await sleep(300);
+      }
+
+      ops.spendAccounts = base.sort((a,b) => (b.spend||0) - (a.spend||0));
       setStatus('success', `Loaded ${ops.spendAccounts.length} accounts.`);
     } catch(e) { setStatus('error', e.message); }
     finally { ops.spendLoading = false; render(); }
@@ -4871,76 +4911,100 @@ function mountOperations(container) {
   function renderSpend() {
     const STATUS_LABEL = {1:'Active',2:'Disabled',3:'Unsettled',7:'Pending',8:'Pending',9:'In Review',100:'Closed',101:'Any Closed',201:'Flagged'};
     const STATUS_COLOR = {1:'#22c55e',2:'#ef4444',3:'#f59e0b',7:'#f59e0b',8:'#f59e0b',9:'#f59e0b',100:'#64748b',101:'#64748b',201:'#ef4444'};
+    const fmt = n => n==null ? '—' : `$${n.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 
     let accs = ops.spendAccounts;
     if (ops.spendFilter==='active')  accs = accs.filter(a=>a.status===1);
     if (ops.spendFilter==='issues')  accs = accs.filter(a=>a.status!==1);
+    if (ops.spendFilter==='spending') accs = accs.filter(a=>(a.spend||0)>0);
 
-    const totalSpent   = ops.spendAccounts.reduce((s,a)=>s+a.spent,0);
+    const totalSpend   = ops.spendAccounts.reduce((s,a)=>s+(a.spend||0),0);
     const totalBalance = ops.spendAccounts.reduce((s,a)=>s+a.balance,0);
     const activeCount  = ops.spendAccounts.filter(a=>a.status===1).length;
     const issueCount   = ops.spendAccounts.filter(a=>a.status!==1).length;
+    const spendingCount= ops.spendAccounts.filter(a=>(a.spend||0)>0).length;
 
-    const rows = accs.map(a => {
-      const capPct = a.spendCap>0 ? Math.min(100,Math.round(a.spent/a.spendCap*100)) : null;
-      const capBar = capPct!==null ? `<div style="margin-top:3px;background:var(--bdr);border-radius:2px;height:3px;width:80px"><div style="background:${capPct>85?'#ef4444':'#3b82f6'};width:${capPct}%;height:100%;border-radius:2px"></div></div><span style="font-size:10px;color:#64748b">${capPct}% of cap</span>` : '';
-      return `<tr>
-        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
-          <div style="font-size:12px;font-weight:600;color:var(--txt)">${esc(a.name)}</div>
-          <div style="font-size:10px;color:#64748b">${esc(a.id)}${a.bm?` · ${esc(a.bm)}`:''}</div>
-        </td>
-        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
-          <span style="font-size:11px;font-weight:700;color:${STATUS_COLOR[a.status]||'#64748b'}">${STATUS_LABEL[a.status]||a.status}</span>
-        </td>
-        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--txt);text-align:right;white-space:nowrap">
-          $${a.spent.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})}
-          ${capBar}
-        </td>
-        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--txt);text-align:right">
-          $${a.balance.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})}
-        </td>
-      </tr>`;
-    }).join('');
+    const presetLabel = SPEND_PRESETS.find(p=>p.id===(ops.spendPreset||'today'))?.label||'Today';
+    const presetBtns = SPEND_PRESETS.filter(p=>p.id!=='custom').map(p=>
+      `<button class="ar-btn ar-btn-ghost ar-btn-sm${ops.spendPreset===p.id?' active':''}" data-opsact="spend-preset" data-preset="${p.id}">${p.label}</button>`
+    ).join('');
+
+    const rows = accs.map(a => `<tr>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
+        <div style="font-size:12px;font-weight:600;color:var(--txt)">${esc(a.name)}</div>
+        <div style="font-size:10px;color:#64748b">${esc(a.id)}${a.bm?` · ${esc(a.bm)}`:''}</div>
+      </td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
+        <span style="font-size:11px;font-weight:700;color:${STATUS_COLOR[a.status]||'#64748b'}">${STATUS_LABEL[a.status]||a.status}</span>
+      </td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:13px;font-weight:700;color:${(a.spend||0)>0?'var(--txt)':'#64748b'};text-align:right">${fmt(a.spend)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:#64748b;text-align:right">${a.impressions!=null?a.impressions.toLocaleString():'—'}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:#64748b;text-align:right">${a.clicks!=null?a.clicks.toLocaleString():'—'}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--txt);text-align:right">${fmt(a.balance)}</td>
+    </tr>`).join('');
 
     return `
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
-        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:10px 14px;min-width:110px">
-          <div style="font-size:11px;color:#64748b">Total Spent</div>
-          <div style="font-size:16px;font-weight:700;color:var(--txt)">$${totalSpent.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+      <!-- period selector -->
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+        ${presetBtns}
+        <span style="color:#64748b;font-size:11px">|</span>
+        <button class="ar-btn ar-btn-ghost ar-btn-sm${ops.spendPreset==='custom'?' active':''}" data-opsact="spend-preset" data-preset="custom">📅 Custom</button>
+        ${ops.spendPreset==='custom' ? `
+          <input type="date" id="spend-from" value="${ops.spendDateFrom||''}" style="background:var(--card);border:1px solid var(--bdr);border-radius:6px;padding:3px 8px;font-size:12px;color:var(--txt)">
+          <span style="color:#64748b;font-size:11px">–</span>
+          <input type="date" id="spend-to" value="${ops.spendDateTo||''}" style="background:var(--card);border:1px solid var(--bdr);border-radius:6px;padding:3px 8px;font-size:12px;color:var(--txt)">
+        ` : ''}
+        <button class="ar-btn ar-btn-primary ar-btn-sm" data-opsact="spend-load" ${ops.spendLoading?'disabled':''}>${ops.spendLoading?'Loading…':'↻ Load'}</button>
+      </div>
+
+      <!-- summary cards -->
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 14px;min-width:100px">
+          <div style="font-size:10px;color:#64748b">Spend (${presetLabel})</div>
+          <div style="font-size:16px;font-weight:700;color:var(--txt)">${fmt(totalSpend)}</div>
         </div>
-        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:10px 14px;min-width:110px">
-          <div style="font-size:11px;color:#64748b">Total Balance</div>
-          <div style="font-size:16px;font-weight:700;color:var(--txt)">$${totalBalance.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 14px;min-width:100px">
+          <div style="font-size:10px;color:#64748b">Total Balance</div>
+          <div style="font-size:16px;font-weight:700;color:var(--txt)">${fmt(totalBalance)}</div>
         </div>
-        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:10px 14px;min-width:90px">
-          <div style="font-size:11px;color:#64748b">Active</div>
+        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 12px;min-width:70px">
+          <div style="font-size:10px;color:#64748b">Active</div>
           <div style="font-size:16px;font-weight:700;color:#22c55e">${activeCount}</div>
         </div>
-        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:10px 14px;min-width:90px">
-          <div style="font-size:11px;color:#64748b">Issues</div>
+        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 12px;min-width:70px">
+          <div style="font-size:10px;color:#64748b">Spending</div>
+          <div style="font-size:16px;font-weight:700;color:#3b82f6">${spendingCount}</div>
+        </div>
+        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 12px;min-width:70px">
+          <div style="font-size:10px;color:#64748b">Issues</div>
           <div style="font-size:16px;font-weight:700;color:#ef4444">${issueCount}</div>
         </div>
       </div>
-      <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
-        <button class="ar-btn ar-btn-primary ar-btn-sm" data-opsact="spend-load" ${ops.spendLoading?'disabled':''}>${ops.spendLoading?'Loading…':'↻ Refresh'}</button>
-        <button class="ar-btn ar-btn-ghost ar-btn-sm ${ops.spendFilter==='all'?'active':''}" data-opsact="spend-filter-all">All</button>
-        <button class="ar-btn ar-btn-ghost ar-btn-sm ${ops.spendFilter==='active'?'active':''}" data-opsact="spend-filter-active">Active only</button>
-        <button class="ar-btn ar-btn-ghost ar-btn-sm ${ops.spendFilter==='issues'?'active':''}" data-opsact="spend-filter-issues">Issues only</button>
+
+      <!-- filter + export -->
+      <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
+        <button class="ar-btn ar-btn-ghost ar-btn-sm${ops.spendFilter==='all'?' active':''}" data-opsact="spend-filter-all">All (${ops.spendAccounts.length})</button>
+        <button class="ar-btn ar-btn-ghost ar-btn-sm${ops.spendFilter==='active'?' active':''}" data-opsact="spend-filter-active">Active</button>
+        <button class="ar-btn ar-btn-ghost ar-btn-sm${ops.spendFilter==='spending'?' active':''}" data-opsact="spend-filter-spending">Spending</button>
+        <button class="ar-btn ar-btn-ghost ar-btn-sm${ops.spendFilter==='issues'?' active':''}" data-opsact="spend-filter-issues">Issues</button>
         <button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="spend-csv" ${!ops.spendAccounts.length?'disabled':''}>⬇ CSV</button>
       </div>
+
       ${ops.spendAccounts.length ? `
-        <div style="overflow:auto;max-height:360px;background:var(--card);border:1px solid var(--bdr);border-radius:8px">
+        <div style="overflow:auto;max-height:340px;background:var(--card);border:1px solid var(--bdr);border-radius:8px">
           <table style="width:100%;border-collapse:collapse">
-            <thead><tr style="background:var(--bg)">
+            <thead><tr style="background:var(--bg);position:sticky;top:0">
               <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Account</th>
               <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Status</th>
-              <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Spent (lifetime)</th>
+              <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Spend</th>
+              <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Impr.</th>
+              <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Clicks</th>
               <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Balance</th>
             </tr></thead>
             <tbody>${rows}</tbody>
           </table>
         </div>
-      ` : `<div style="font-size:13px;color:#64748b;padding:16px 0">Click Refresh to load accounts.</div>`}
+      ` : `<div style="font-size:13px;color:#64748b;padding:16px 0">Select a period and click Load.</div>`}
     `;
   }
 
@@ -5326,11 +5390,26 @@ function mountOperations(container) {
     /* spend actions */
     const sa = (id, fn) => { const el=container.querySelector(`[data-opsact="${id}"]`); if(el) el.addEventListener('click', fn); };
     sa('spend-load', loadSpend);
-    sa('spend-filter-all',    ()=>{ops.spendFilter='all'; render();});
-    sa('spend-filter-active', ()=>{ops.spendFilter='active'; render();});
-    sa('spend-filter-issues', ()=>{ops.spendFilter='issues'; render();});
+    sa('spend-filter-all',      ()=>{ops.spendFilter='all'; render();});
+    sa('spend-filter-active',   ()=>{ops.spendFilter='active'; render();});
+    sa('spend-filter-spending', ()=>{ops.spendFilter='spending'; render();});
+    sa('spend-filter-issues',   ()=>{ops.spendFilter='issues'; render();});
     sa('spend-csv', ()=>{
-      exportCsv([['Name','ID','Status','Spent','Balance','SpendCap','Currency'],...ops.spendAccounts.map(a=>[a.name,a.id,a.status,a.spent,a.balance,a.spendCap,a.currency])],'spend_dashboard.csv');
+      const preset = ops.spendPreset||'today';
+      exportCsv([['Name','BM','ID','Status','Spend','Impressions','Clicks','Balance','Currency'],...ops.spendAccounts.map(a=>[a.name,a.bm,a.id,a.status,a.spend,a.impressions,a.clicks,a.balance,a.currency])],`spend_${preset}_dashboard.csv`);
+    });
+    /* preset buttons — delegated since they're dynamically rendered */
+    container.addEventListener('click', e=>{
+      const btn = e.target.closest('[data-opsact="spend-preset"]');
+      if (!btn) return;
+      ops.spendPreset = btn.dataset.preset;
+      if (ops.spendPreset !== 'custom') { ops.spendDateFrom=''; ops.spendDateTo=''; }
+      render();
+      if (ops.spendPreset !== 'custom') loadSpend();
+    });
+    container.addEventListener('change', e=>{
+      if (e.target.id==='spend-from') { ops.spendDateFrom=e.target.value; }
+      if (e.target.id==='spend-to')   { ops.spendDateTo=e.target.value; if(ops.spendDateFrom) loadSpend(); }
     });
 
     /* copy actions */
