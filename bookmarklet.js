@@ -5073,6 +5073,7 @@ function mountOperations(container) {
     csvFileName: '',
     csvRows: [],           // parsed rows from CSV
     csvCampaignNameTpl: 'COLD TEST | CBO ${budget}/d | 1as{ad_count}ads | {date} | {acc_id}',
+    csvAdsetNameTpl: '{date}',
     csvSub2Mode: 'acc_id', // acc_id | keep | empty
     csvRunning: false,
     csvLog: [], csvDone: 0, csvTotal: 0,
@@ -5475,7 +5476,10 @@ function mountOperations(container) {
         addLog(ops.csvLog,'success',`[${accLabel}] ✓ campaign id=${campaignId}`);
 
         // --- Ad Set ---
-        const adsetName = firstRow['Ad Set Name'] || 'Ad Set 1';
+        const adsetName = csvRenderTpl(ops.csvAdsetNameTpl, {
+          date: dateStr, acc_id: accId, source_name: firstRow['Ad Set Name']||'',
+          budget, ad_count: adCount,
+        }) || firstRow['Ad Set Name'] || 'Ad Set 1';
         const countries = String(firstRow['Countries']||'').split(',').map(s=>s.trim()).filter(Boolean);
         const ageMin = +firstRow['Age Min'] || 18;
         const ageMax = +firstRow['Age Max'] || 65;
@@ -5526,7 +5530,6 @@ function mountOperations(container) {
           const adName = r['Ad Name'] || `Ad ${i+1}`;
           try {
             const pageId = r['Link Object ID'] ? csvStripPrefix(r['Link Object ID']) : '';
-            const igId = r['Instagram Account ID'] || '';
             const link = r['Link'] || '';
             const videoId = r['Video ID'] ? csvStripPrefix(r['Video ID']) : '';
             const imageHash = (r['Image Hash']||'').split(':').pop(); // strip "accid:hash"
@@ -5535,7 +5538,7 @@ function mountOperations(container) {
             const cta = r['Call to Action'] || 'LEARN_MORE';
 
             const objectStorySpec = { page_id: pageId };
-            if (igId) objectStorySpec.instagram_actor_id = igId;
+            // Skip instagram_actor_id: FB will auto-use the IG linked to the Page in each account ("from Page").
             if (videoId) {
               // FB requires a thumbnail (image_url or image_hash) for video ads.
               // Fetch auto-generated thumbnail from the video itself.
@@ -5634,6 +5637,11 @@ function mountOperations(container) {
       <div style="margin:12px 0">
         <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Campaign Name Template — tokens: <code>{budget}</code> <code>{ad_count}</code> <code>{date}</code> <code>{acc_id}</code> <code>{source_name}</code></div>
         <input type="text" id="csv-tpl" value="${esc(ops.csvCampaignNameTpl)}" style="width:100%;padding:7px 9px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;font-family:monospace">
+      </div>
+
+      <div style="margin:12px 0">
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Ad Set Name Template — by default just <code>{date}</code> (MMDDYY)</div>
+        <input type="text" id="csv-adset-tpl" value="${esc(ops.csvAdsetNameTpl)}" style="width:100%;padding:7px 9px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;font-family:monospace">
       </div>
 
       <div style="margin:8px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
@@ -5914,6 +5922,8 @@ function mountOperations(container) {
     if (csvFile) csvFile.addEventListener('change', (e)=>{ const f=e.target.files?.[0]; if(f) onCsvFile(f); });
     const csvTpl = container.querySelector('#csv-tpl');
     if (csvTpl) csvTpl.addEventListener('input', ()=>{ ops.csvCampaignNameTpl = csvTpl.value; });
+    const csvAdsetTpl = container.querySelector('#csv-adset-tpl');
+    if (csvAdsetTpl) csvAdsetTpl.addEventListener('input', ()=>{ ops.csvAdsetNameTpl = csvAdsetTpl.value; });
     container.querySelectorAll('input[name="csv-sub2"]').forEach(el=>{
       el.addEventListener('change', ()=>{ if (el.checked) ops.csvSub2Mode = el.value; });
     });
