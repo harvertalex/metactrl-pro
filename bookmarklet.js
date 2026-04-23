@@ -2991,6 +2991,250 @@ function mountColumnManager(container) {
 function mountAnalytics(container) {
   container.innerHTML = '';
 
+  /* ---- sub-tab shell ---- */
+  const ANL_TABS = [
+    { id: 'spend',  label: '💰 Spend Dashboard' },
+    { id: 'export', label: '📊 CSV Export' },
+  ];
+  let anlTab = 'spend';
+
+  const tabBar = document.createElement('div');
+  tabBar.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--bdr)';
+  function renderAnlTabs() {
+    tabBar.innerHTML = ANL_TABS.map(t =>
+      `<button class="ar-tab${anlTab===t.id?' active':''}" data-anltab="${t.id}">${t.label}</button>`
+    ).join('');
+    tabBar.querySelectorAll('[data-anltab]').forEach(btn => {
+      btn.addEventListener('click', () => { anlTab = btn.dataset.anltab; renderAnlContent(); renderAnlTabs(); });
+    });
+  }
+
+  const anlContent = document.createElement('div');
+  container.appendChild(tabBar);
+  container.appendChild(anlContent);
+
+  /* ==================== SPEND DASHBOARD (sub-tab) ==================== */
+  function mountAnlSpend(c) {
+    c.innerHTML = '';
+
+    const GRAPH_VER = 'v22.0';
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+    function esc(v) { return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+    async function apiFetch(path, opts={}) {
+      const method = opts.method||'GET';
+      const isFull = /^https?:\/\//i.test(path);
+      const url = isFull ? new URL(path) : new URL(`https://graph.facebook.com/${GRAPH_VER}/${path.replace(/^\/+/,'')}`);
+      if (!isFull) {
+        Object.entries(opts.params||{}).forEach(([k,v])=>{ if(v!=null&&v!=='') url.searchParams.set(k,v); });
+        url.searchParams.set('access_token', TOKEN);
+      }
+      const fo = {method, credentials:'include', headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'}};
+      if (opts.body) { const b=new URLSearchParams(); Object.entries(opts.body).forEach(([k,v])=>{if(v!=null)b.append(k,v);}); fo.body=b; }
+      const res = await fetch(url.toString(), fo);
+      const json = await res.json();
+      if (!res.ok||json?.error) throw new Error(json?.error?.message||`API error (${res.status})`);
+      return json;
+    }
+    async function apiAll(path, params={}) {
+      const rows=[]; let next=path; let np=params;
+      while(next){ const p=await apiFetch(next,{params:np}); rows.push(...(p?.data||[])); next=p?.paging?.next||''; np={}; }
+      return rows;
+    }
+    function exportCsv(rows, filename) {
+      const csv = rows.map(r=>r.map(cell=>`"${String(cell??'').replace(/"/g,'""')}"`).join(',')).join('\n');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+      a.download = filename; a.click();
+      setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+    }
+    async function fetchAllAccountsFlat(fields='id,account_id,name') {
+      const rows=[];
+      let businesses=[];
+      try { businesses=await apiAll('/me/businesses',{fields:'id,name',limit:200}); } catch {}
+      try { const p=await apiFetch('/me',{params:{fields:'businesses{id,name}'}}); (p?.businesses?.data||[]).forEach(b=>businesses.push(b)); } catch {}
+      const seenBiz=new Set();
+      businesses=businesses.filter(b=>{ if(!b.id||seenBiz.has(b.id))return false; seenBiz.add(b.id); return true; });
+      await Promise.all(businesses.map(async biz=>{
+        await Promise.all(['owned_ad_accounts','client_ad_accounts'].map(async edge=>{
+          try { const items=await apiAll(`/${biz.id}/${edge}`,{fields,limit:200}); items.forEach(a=>rows.push({...a,_bm_id:biz.id,_bm_name:biz.name})); } catch {}
+        }));
+      }));
+      try { const personal=await apiAll('/me/adaccounts',{fields,limit:200}); personal.forEach(a=>rows.push({...a,_bm_id:'',_bm_name:'No BM'})); } catch {}
+      const seen=new Set();
+      return rows.filter(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); if(!id||seen.has(id))return false; seen.add(id); return true; })
+        .map(a=>({...a, _id:String(a.account_id||a.id||'').replace(/^act_/,''), _name:a.name||'Untitled'}));
+    }
+
+    const SPEND_PRESETS = [
+      {id:'today',label:'Today'},{id:'yesterday',label:'Yesterday'},
+      {id:'last_3d',label:'3 Days'},{id:'last_7_days',label:'7 Days'},
+      {id:'last_14_days',label:'14 Days'},{id:'last_30_days',label:'30 Days'},
+      {id:'custom',label:'Custom'},
+    ];
+    const sd = {
+      accounts:[], loading:false,
+      filter:'all', preset:'today', dateFrom:'', dateTo:'',
+      status:{type:'info',text:'Select a period and click Load.'},
+    };
+    const SC={info:'#3b82f6',success:'#22c55e',error:'#ef4444',warning:'#f59e0b'};
+
+    async function sdLoad() {
+      sd.loading=true; sd.accounts=[];
+      sdRender();
+      try {
+        const raw = await fetchAllAccountsFlat('id,account_id,name,account_status,balance,currency,disable_reason');
+        const base = raw.map(a=>({
+          id:a._id, name:a._name, bm:a._bm_name||'',
+          status:a.account_status,
+          balance:parseFloat(a.balance||0)/100,
+          currency:a.currency||'USD',
+          spend:null, impressions:null, clicks:null,
+        }));
+        sd.status={type:'info',text:`Fetching insights for ${base.length} accounts...`};
+        sdRender();
+        const insParams={fields:'spend,impressions,clicks',limit:1};
+        if (sd.preset==='custom'&&sd.dateFrom&&sd.dateTo) {
+          insParams.time_range=JSON.stringify({since:sd.dateFrom,until:sd.dateTo});
+        } else {
+          insParams.date_preset=sd.preset==='last_3d'?'last_3_days':(sd.preset||'today');
+        }
+        const BATCH=10;
+        for (let i=0;i<base.length;i+=BATCH) {
+          const batch=base.slice(i,i+BATCH);
+          await Promise.all(batch.map(async acc=>{
+            try {
+              const r=await apiFetch(`/act_${acc.id}/insights`,{params:insParams});
+              const d=r?.data?.[0];
+              acc.spend=parseFloat(d?.spend||0); acc.impressions=parseInt(d?.impressions||0); acc.clicks=parseInt(d?.clicks||0);
+            } catch { acc.spend=0; acc.impressions=0; acc.clicks=0; }
+          }));
+          if (i+BATCH<base.length) await sleep(300);
+        }
+        sd.accounts=base.sort((a,b)=>(b.spend||0)-(a.spend||0));
+        sd.status={type:'success',text:`Loaded ${sd.accounts.length} accounts.`};
+      } catch(e) { sd.status={type:'error',text:e.message}; }
+      finally { sd.loading=false; sdRender(); }
+    }
+
+    function sdRender() {
+      const SL={1:'Active',2:'Disabled',3:'Unsettled',7:'Pending',8:'Pending',9:'In Review',100:'Closed',101:'Any Closed',201:'Flagged'};
+      const SC2={1:'#22c55e',2:'#ef4444',3:'#f59e0b',7:'#f59e0b',8:'#f59e0b',9:'#f59e0b',100:'#64748b',101:'#64748b',201:'#ef4444'};
+      const fmt=n=>n==null?'—':`$${n.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+
+      let accs=sd.accounts;
+      if (sd.filter==='active') accs=accs.filter(a=>a.status===1);
+      if (sd.filter==='issues') accs=accs.filter(a=>a.status!==1);
+      if (sd.filter==='spending') accs=accs.filter(a=>(a.spend||0)>0);
+
+      const totalSpend=sd.accounts.reduce((s,a)=>s+(a.spend||0),0);
+      const totalBalance=sd.accounts.reduce((s,a)=>s+a.balance,0);
+      const activeCount=sd.accounts.filter(a=>a.status===1).length;
+      const issueCount=sd.accounts.filter(a=>a.status!==1).length;
+      const spendingCount=sd.accounts.filter(a=>(a.spend||0)>0).length;
+      const presetLabel=SPEND_PRESETS.find(p=>p.id===sd.preset)?.label||'Today';
+      const presetBtns=SPEND_PRESETS.filter(p=>p.id!=='custom').map(p=>
+        `<button class="ar-btn ar-btn-ghost ar-btn-sm${sd.preset===p.id?' active':''}" data-sdact="preset" data-preset="${p.id}">${p.label}</button>`
+      ).join('');
+      const rows=accs.map(a=>`<tr>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
+          <div style="font-size:12px;font-weight:600;color:var(--txt)">${esc(a.name)}</div>
+          <div style="font-size:10px;color:#64748b">${esc(a.id)}${a.bm?` · ${esc(a.bm)}`:''}</div>
+        </td>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
+          <span style="font-size:11px;font-weight:700;color:${SC2[a.status]||'#64748b'}">${SL[a.status]||a.status}</span>
+        </td>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:13px;font-weight:700;color:${(a.spend||0)>0?'var(--txt)':'#64748b'};text-align:right">${fmt(a.spend)}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:#64748b;text-align:right">${a.impressions!=null?a.impressions.toLocaleString():'—'}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:#64748b;text-align:right">${a.clicks!=null?a.clicks.toLocaleString():'—'}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--txt);text-align:right">${fmt(a.balance)}</td>
+      </tr>`).join('');
+
+      c.innerHTML = `
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+          ${presetBtns}
+          <span style="color:#64748b;font-size:11px">|</span>
+          <button class="ar-btn ar-btn-ghost ar-btn-sm${sd.preset==='custom'?' active':''}" data-sdact="preset" data-preset="custom">📅 Custom</button>
+          ${sd.preset==='custom'?`
+            <input type="date" id="sd-from" value="${sd.dateFrom||''}" style="background:var(--card);border:1px solid var(--bdr);border-radius:6px;padding:3px 8px;font-size:12px;color:var(--txt)">
+            <span style="color:#64748b;font-size:11px">–</span>
+            <input type="date" id="sd-to" value="${sd.dateTo||''}" style="background:var(--card);border:1px solid var(--bdr);border-radius:6px;padding:3px 8px;font-size:12px;color:var(--txt)">
+          `:''}
+          <button class="ar-btn ar-btn-primary ar-btn-sm" data-sdact="load" ${sd.loading?'disabled':''}>${sd.loading?'Loading…':'↻ Load'}</button>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+          ${[
+            ['Spend ('+presetLabel+')', fmt(totalSpend), 'var(--txt)', '100px'],
+            ['Total Balance', fmt(totalBalance), 'var(--txt)', '100px'],
+            ['Active', activeCount, '#22c55e', '70px'],
+            ['Spending', spendingCount, '#3b82f6', '70px'],
+            ['Issues', issueCount, '#ef4444', '70px'],
+          ].map(([lbl,val,clr,w])=>`<div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 14px;min-width:${w}">
+            <div style="font-size:10px;color:#64748b">${lbl}</div>
+            <div style="font-size:16px;font-weight:700;color:${clr}">${val}</div>
+          </div>`).join('')}
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
+          <button class="ar-btn ar-btn-ghost ar-btn-sm${sd.filter==='all'?' active':''}" data-sdact="filter" data-filter="all">All (${sd.accounts.length})</button>
+          <button class="ar-btn ar-btn-ghost ar-btn-sm${sd.filter==='active'?' active':''}" data-sdact="filter" data-filter="active">Active</button>
+          <button class="ar-btn ar-btn-ghost ar-btn-sm${sd.filter==='spending'?' active':''}" data-sdact="filter" data-filter="spending">Spending</button>
+          <button class="ar-btn ar-btn-ghost ar-btn-sm${sd.filter==='issues'?' active':''}" data-sdact="filter" data-filter="issues">Issues</button>
+          <button class="ar-btn ar-btn-ghost ar-btn-sm" data-sdact="csv" ${!sd.accounts.length?'disabled':''}>⬇ CSV</button>
+        </div>
+        ${sd.accounts.length?`
+          <div style="overflow:auto;max-height:380px;background:var(--card);border:1px solid var(--bdr);border-radius:8px">
+            <table style="width:100%;border-collapse:collapse">
+              <thead><tr style="background:var(--bg);position:sticky;top:0">
+                <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Account</th>
+                <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Status</th>
+                <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Spend</th>
+                <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Impr.</th>
+                <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Clicks</th>
+                <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Balance</th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        `:`<div style="font-size:13px;color:#64748b;padding:16px 0">Select a period and click Load.</div>`}
+        <div style="margin-top:10px;padding:8px 12px;border-radius:8px;border:1px solid;font-size:12px;color:${SC[sd.status.type]};background:${SC[sd.status.type]}18;border-color:${SC[sd.status.type]}30">
+          ${esc(sd.status.text)}
+        </div>
+      `;
+
+      /* events — delegated */
+      c.addEventListener('click', e=>{
+        const btn = e.target.closest('[data-sdact]');
+        if (!btn) return;
+        const act = btn.dataset.sdact;
+        if (act==='load') { sdLoad(); return; }
+        if (act==='preset') {
+          sd.preset=btn.dataset.preset;
+          if (sd.preset!=='custom') { sd.dateFrom=''; sd.dateTo=''; }
+          sdRender();
+          if (sd.preset!=='custom') sdLoad();
+          return;
+        }
+        if (act==='filter') { sd.filter=btn.dataset.filter; sdRender(); return; }
+        if (act==='csv') {
+          exportCsv([
+            ['Name','BM','ID','Status','Spend','Impressions','Clicks','Balance','Currency'],
+            ...sd.accounts.map(a=>[a.name,a.bm,a.id,a.status,a.spend,a.impressions,a.clicks,a.balance,a.currency])
+          ],`spend_${sd.preset}_dashboard.csv`);
+        }
+      },{once:false});
+      c.addEventListener('change', e=>{
+        if (e.target.id==='sd-from') { sd.dateFrom=e.target.value; }
+        if (e.target.id==='sd-to')   { sd.dateTo=e.target.value; if(sd.dateFrom) sdLoad(); }
+      },{once:false});
+    }
+
+    sdRender();
+  }
+
+  /* ==================== CSV EXPORT (sub-tab) ==================== */
+  function mountAnlExport(c) {
+    c.innerHTML = '';
+
   const PERIODS = [
     { label: '📅 Today',        preset: 'today',      defaultOn: true  },
     { label: '🕐 Yesterday',    preset: 'yesterday',  defaultOn: false },
@@ -3127,29 +3371,41 @@ function mountAnalytics(container) {
     const cpa   = d.cost_per_action_type || [];
     const wctr  = d.website_ctr || [];
     const oc    = d.outbound_clicks || [];
-    const ulpv  = d.unique_actions || [];
+    const ua    = d.unique_actions || [];
+    const ilc   = d.inline_link_clicks || [];
     const v3s   = d.video_thruplay_watched_actions || [];
     const v25   = d.video_p25_watched_actions || [];
+    const v50   = d.video_p50_watched_actions || [];
+    const v75   = d.video_p75_watched_actions || [];
+    const v100  = d.video_p100_watched_actions || [];
+    const vavg  = d.video_avg_time_watched_actions || [];
 
-    // Outbound link clicks (to external site, excludes "More" / carousel arrows)
     const outClicks  = oc.find(x => x.action_type === 'outbound_click')?.value || '';
     const outCTR     = wctr.find(x => x.action_type === 'link_click')?.value   || '';
-    // ThruPlay (video watched to end or 15s)
     const thruplay   = v3s.find(x => x.action_type === 'video_view')?.value    || '';
-    // Hook rate source: 25% video watched
     const v25val     = v25.find(x => x.action_type === 'video_view')?.value    || '';
+    const v50val     = v50.find(x => x.action_type === 'video_view')?.value    || '';
+    const v75val     = v75.find(x => x.action_type === 'video_view')?.value    || '';
+    const v100val    = v100.find(x => x.action_type === 'video_view')?.value   || '';
+    const vavgval    = vavg.find(x => x.action_type === 'video_view')?.value   || '';
+    const inlineClk  = ilc.find(x => x.action_type === 'link_click')?.value   || d.inline_link_clicks || '';
+    const inlineCTR  = d.inline_link_click_ctr || '';
+    const uniqueClk  = d.unique_clicks || '';
+    const uniqueCTR  = d.unique_ctr || '';
+    const uniqueLink = d.unique_link_clicks_ctr || '';
+    const cpuClk     = d.cost_per_unique_click || '';
+    const uLPV       = ua.find(x => x.action_type === 'omni_landing_page_view')?.value || '';
+    const uLeads     = ua.find(x => x.action_type === 'lead')?.value || '';
 
     const row = {
       'Account ID':    d.account_id   || '',
       'Account Name':  d.account_name || '',
     };
-    // Hierarchy columns
     if (level === 'campaign' || level === 'adset' || level === 'ad') {
       row['Campaign ID']  = d.campaign_id   || '';
       row['Campaign']     = d.campaign_name || '';
     }
     if (level === 'adset' || level === 'ad') {
-      // adset_name fallback: FB sometimes returns ID as name — use dedicated field
       row['Adset ID']  = d.adset_id   || '';
       row['Adset']     = (d.adset_name && d.adset_name !== d.adset_id) ? d.adset_name : '';
     }
@@ -3158,38 +3414,51 @@ function mountAnalytics(container) {
       row['Ad']     = d.ad_name || '';
     }
     Object.assign(row, {
+      'Date Start':         d.date_start  || '',
+      'Date Stop':          d.date_stop   || '',
       'Period':             preset,
       // ---- Spend & Volume ----
       'Spend':              n(d.spend, 2),
       'Impressions':        d.impressions || '',
       'Reach':              d.reach       || '',
       'Frequency':          n(d.frequency, 2),
+      'CPM':                n(d.cpm, 2),
       // ---- Click metrics ----
       'Clicks (all)':       d.clicks      || '',
+      'Unique Clicks':      uniqueClk,
+      'Inline Link Clicks': inlineClk,
       'Outbound Clicks':    outClicks,
       'CTR% (all)':         n(d.ctr, 2),
+      'Unique CTR%':        uniqueCTR ? n(uniqueCTR, 2) : '',
+      'Unique Link CTR%':   uniqueLink ? n(uniqueLink, 2) : '',
       'Outbound CTR%':      outCTR ? n(outCTR, 2) : '',
+      'Inline CTR%':        inlineCTR ? n(inlineCTR, 2) : '',
       'CPC (all)':          n(d.cpc, 3),
+      'Cost/Unique Click':  cpuClk ? n(cpuClk, 3) : '',
       // ---- Landing ----
       'LPV':                getAct(acts, 'omni_landing_page_view'),
+      'Unique LPV':         uLPV,
       'Cost/LPV':           getCPA(cpa, 'omni_landing_page_view'),
-      // ---- Cost & Efficiency ----
-      'CPM':                n(d.cpm, 2),
-      // ---- Quality Rankings (FB signal vs competitors) ----
+      // ---- Quality Rankings ----
       'Quality Rank':       d.quality_ranking            || '',
       'Engagement Rank':    d.engagement_rate_ranking    || '',
       'Conversion Rank':    d.conversion_rate_ranking    || '',
       // ---- Conversions ----
       'Leads':              getAct(acts, 'lead'),
+      'Unique Leads':       uLeads,
       'CPL':                getCPA(cpa,  'lead'),
       'Registrations':      getAct(acts, 'omni_complete_registration'),
       'CPA(Reg)':           getCPA(cpa,  'omni_complete_registration'),
       'Purchases':          getAct(acts, 'purchase'),
       'CPP':                getCPA(cpa,  'purchase'),
       'ROAS':               getRoas(d.website_purchase_roas),
-      // ---- Video ----
-      'ThruPlay':           thruplay,
+      // ---- Video funnel ----
       'Video 25%':          v25val,
+      'Video 50%':          v50val,
+      'Video 75%':          v75val,
+      'Video 100%':         v100val,
+      'ThruPlay':           thruplay,
+      'Avg Watch Time (s)': vavgval,
     });
     return row;
   }
@@ -3251,20 +3520,25 @@ function mountAnalytics(container) {
       const fields = [
         'account_id','account_name',
         ...(hierarchyFields[level] || []),
+        'date_start','date_stop',
         // Spend & volume
-        'spend','impressions','reach','frequency',
-        // Clicks
-        'clicks','ctr','cpc','outbound_clicks','website_ctr',
-        // CPM
-        'cpm',
-        // Landing page views
-        'actions','cost_per_action_type',
+        'spend','impressions','reach','frequency','cpm',
+        // Clicks — all variants
+        'clicks','unique_clicks','ctr','unique_ctr',
+        'cpc','cost_per_unique_click',
+        'inline_link_clicks','inline_link_click_ctr',
+        'unique_link_clicks_ctr',
+        'outbound_clicks','website_ctr',
+        // Conversions & actions
+        'actions','unique_actions','cost_per_action_type',
         // Quality rankings
         'quality_ranking','engagement_rate_ranking','conversion_rate_ranking',
         // ROAS
         'website_purchase_roas',
-        // Video
-        'video_thruplay_watched_actions','video_p25_watched_actions',
+        // Video funnel
+        'video_p25_watched_actions','video_p50_watched_actions',
+        'video_p75_watched_actions','video_p100_watched_actions',
+        'video_thruplay_watched_actions','video_avg_time_watched_actions',
       ].join(',');
 
       for (const accId of accountIds) {
@@ -3293,6 +3567,17 @@ function mountAnalytics(container) {
       fetchBtn.disabled = false; fetchBtn.textContent = '📊 Fetch & Export CSV';
     }
   };
+  } /* end mountAnlExport */
+
+  /* ==================== SUB-TAB ROUTER ==================== */
+  function renderAnlContent() {
+    anlContent.innerHTML = '';
+    if (anlTab === 'spend')  mountAnlSpend(anlContent);
+    if (anlTab === 'export') mountAnlExport(anlContent);
+  }
+
+  renderAnlTabs();
+  renderAnlContent();
 }
 
 /* -------------------- UI: INSPECTOR -------------------- */
@@ -4748,16 +5033,7 @@ function mountOperations(container) {
 
   /* ---- sub-tab state ---- */
   const ops = {
-    tab: 'spend',       /* spend | bulk-copy | pause | zombies | audiences */
-
-    /* spend dashboard */
-    spendAccounts: [],
-    spendLoading: false,
-    spendBizId: getBizId(),
-    spendFilter: 'all',   /* all | active | spending | issues */
-    spendPreset: 'today', /* today | yesterday | last_3d | last_7_days | last_14_days | last_30_days | custom */
-    spendDateFrom: '',
-    spendDateTo: '',
+    tab: 'copy',       /* copy | pause | zombies | audiences */
 
     /* bulk copy */
     copyBizId: getBizId(),
@@ -4807,8 +5083,7 @@ function mountOperations(container) {
     return arr.slice(-80).map(l=>`<div style="font-size:11px;color:${SC[l.type]||SC.info};white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span style="opacity:.5">${esc(l.ts)}</span> ${esc(l.msg)}</div>`).join('');
   }
 
-  /* ==================== SPEND DASHBOARD ==================== */
-  /* Fetch ALL accounts across ALL BMs + personal — reused by every tool */
+  /* Fetch ALL accounts across ALL BMs + personal — shared by all Ops tools */
   async function fetchAllAccountsFlat(fields = 'id,account_id,name') {
     const rows = [];
     /* 1. all BMs */
@@ -4847,165 +5122,6 @@ function mountOperations(container) {
       _id: String(a.account_id||a.id||'').replace(/^act_/,''),
       _name: a.name||'Untitled',
     }));
-  }
-
-  const SPEND_PRESETS = [
-    { id:'today',        label:'Today' },
-    { id:'yesterday',    label:'Yesterday' },
-    { id:'last_3d',      label:'3 Days' },
-    { id:'last_7_days',  label:'7 Days' },
-    { id:'last_14_days', label:'14 Days' },
-    { id:'last_30_days', label:'30 Days' },
-    { id:'custom',       label:'Custom' },
-  ];
-
-  async function loadSpend() {
-    ops.spendLoading = true; ops.spendAccounts = [];
-    setStatus('info', 'Loading accounts...');
-    render();
-    try {
-      /* Step 1: get all accounts with status/balance */
-      const raw = await fetchAllAccountsFlat('id,account_id,name,account_status,balance,currency,disable_reason');
-      const base = raw.map(a => ({
-        id: a._id, name: a._name, bm: a._bm_name||'',
-        status: a.account_status,
-        balance: parseFloat(a.balance||0)/100,
-        currency: a.currency||'USD',
-        disableReason: a.disable_reason||0,
-        spend: null,   /* filled by insights step */
-        impressions: null, clicks: null,
-      }));
-
-      setStatus('info', `Fetching insights for ${base.length} accounts...`);
-      render();
-
-      /* Step 2: insights in parallel batches of 10 */
-      const insParams = { fields:'spend,impressions,clicks', limit:1 };
-      if (ops.spendPreset === 'custom' && ops.spendDateFrom && ops.spendDateTo) {
-        insParams.time_range = JSON.stringify({since: ops.spendDateFrom, until: ops.spendDateTo});
-      } else {
-        insParams.date_preset = ops.spendPreset === 'last_3d' ? 'last_3_days' : (ops.spendPreset || 'today');
-      }
-
-      const BATCH = 10;
-      for (let i = 0; i < base.length; i += BATCH) {
-        const batch = base.slice(i, i + BATCH);
-        await Promise.all(batch.map(async acc => {
-          try {
-            const r = await apiFetch(`/act_${acc.id}/insights`, {params: insParams});
-            const d = r?.data?.[0];
-            acc.spend       = parseFloat(d?.spend||0);
-            acc.impressions = parseInt(d?.impressions||0);
-            acc.clicks      = parseInt(d?.clicks||0);
-          } catch { acc.spend = 0; acc.impressions = 0; acc.clicks = 0; }
-        }));
-        if (i + BATCH < base.length) await sleep(300);
-      }
-
-      ops.spendAccounts = base.sort((a,b) => (b.spend||0) - (a.spend||0));
-      setStatus('success', `Loaded ${ops.spendAccounts.length} accounts.`);
-    } catch(e) { setStatus('error', e.message); }
-    finally { ops.spendLoading = false; render(); }
-  }
-
-  function renderSpend() {
-    const STATUS_LABEL = {1:'Active',2:'Disabled',3:'Unsettled',7:'Pending',8:'Pending',9:'In Review',100:'Closed',101:'Any Closed',201:'Flagged'};
-    const STATUS_COLOR = {1:'#22c55e',2:'#ef4444',3:'#f59e0b',7:'#f59e0b',8:'#f59e0b',9:'#f59e0b',100:'#64748b',101:'#64748b',201:'#ef4444'};
-    const fmt = n => n==null ? '—' : `$${n.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
-
-    let accs = ops.spendAccounts;
-    if (ops.spendFilter==='active')  accs = accs.filter(a=>a.status===1);
-    if (ops.spendFilter==='issues')  accs = accs.filter(a=>a.status!==1);
-    if (ops.spendFilter==='spending') accs = accs.filter(a=>(a.spend||0)>0);
-
-    const totalSpend   = ops.spendAccounts.reduce((s,a)=>s+(a.spend||0),0);
-    const totalBalance = ops.spendAccounts.reduce((s,a)=>s+a.balance,0);
-    const activeCount  = ops.spendAccounts.filter(a=>a.status===1).length;
-    const issueCount   = ops.spendAccounts.filter(a=>a.status!==1).length;
-    const spendingCount= ops.spendAccounts.filter(a=>(a.spend||0)>0).length;
-
-    const presetLabel = SPEND_PRESETS.find(p=>p.id===(ops.spendPreset||'today'))?.label||'Today';
-    const presetBtns = SPEND_PRESETS.filter(p=>p.id!=='custom').map(p=>
-      `<button class="ar-btn ar-btn-ghost ar-btn-sm${ops.spendPreset===p.id?' active':''}" data-opsact="spend-preset" data-preset="${p.id}">${p.label}</button>`
-    ).join('');
-
-    const rows = accs.map(a => `<tr>
-      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
-        <div style="font-size:12px;font-weight:600;color:var(--txt)">${esc(a.name)}</div>
-        <div style="font-size:10px;color:#64748b">${esc(a.id)}${a.bm?` · ${esc(a.bm)}`:''}</div>
-      </td>
-      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
-        <span style="font-size:11px;font-weight:700;color:${STATUS_COLOR[a.status]||'#64748b'}">${STATUS_LABEL[a.status]||a.status}</span>
-      </td>
-      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:13px;font-weight:700;color:${(a.spend||0)>0?'var(--txt)':'#64748b'};text-align:right">${fmt(a.spend)}</td>
-      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:#64748b;text-align:right">${a.impressions!=null?a.impressions.toLocaleString():'—'}</td>
-      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:#64748b;text-align:right">${a.clicks!=null?a.clicks.toLocaleString():'—'}</td>
-      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--txt);text-align:right">${fmt(a.balance)}</td>
-    </tr>`).join('');
-
-    return `
-      <!-- period selector -->
-      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
-        ${presetBtns}
-        <span style="color:#64748b;font-size:11px">|</span>
-        <button class="ar-btn ar-btn-ghost ar-btn-sm${ops.spendPreset==='custom'?' active':''}" data-opsact="spend-preset" data-preset="custom">📅 Custom</button>
-        ${ops.spendPreset==='custom' ? `
-          <input type="date" id="spend-from" value="${ops.spendDateFrom||''}" style="background:var(--card);border:1px solid var(--bdr);border-radius:6px;padding:3px 8px;font-size:12px;color:var(--txt)">
-          <span style="color:#64748b;font-size:11px">–</span>
-          <input type="date" id="spend-to" value="${ops.spendDateTo||''}" style="background:var(--card);border:1px solid var(--bdr);border-radius:6px;padding:3px 8px;font-size:12px;color:var(--txt)">
-        ` : ''}
-        <button class="ar-btn ar-btn-primary ar-btn-sm" data-opsact="spend-load" ${ops.spendLoading?'disabled':''}>${ops.spendLoading?'Loading…':'↻ Load'}</button>
-      </div>
-
-      <!-- summary cards -->
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 14px;min-width:100px">
-          <div style="font-size:10px;color:#64748b">Spend (${presetLabel})</div>
-          <div style="font-size:16px;font-weight:700;color:var(--txt)">${fmt(totalSpend)}</div>
-        </div>
-        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 14px;min-width:100px">
-          <div style="font-size:10px;color:#64748b">Total Balance</div>
-          <div style="font-size:16px;font-weight:700;color:var(--txt)">${fmt(totalBalance)}</div>
-        </div>
-        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 12px;min-width:70px">
-          <div style="font-size:10px;color:#64748b">Active</div>
-          <div style="font-size:16px;font-weight:700;color:#22c55e">${activeCount}</div>
-        </div>
-        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 12px;min-width:70px">
-          <div style="font-size:10px;color:#64748b">Spending</div>
-          <div style="font-size:16px;font-weight:700;color:#3b82f6">${spendingCount}</div>
-        </div>
-        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 12px;min-width:70px">
-          <div style="font-size:10px;color:#64748b">Issues</div>
-          <div style="font-size:16px;font-weight:700;color:#ef4444">${issueCount}</div>
-        </div>
-      </div>
-
-      <!-- filter + export -->
-      <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
-        <button class="ar-btn ar-btn-ghost ar-btn-sm${ops.spendFilter==='all'?' active':''}" data-opsact="spend-filter-all">All (${ops.spendAccounts.length})</button>
-        <button class="ar-btn ar-btn-ghost ar-btn-sm${ops.spendFilter==='active'?' active':''}" data-opsact="spend-filter-active">Active</button>
-        <button class="ar-btn ar-btn-ghost ar-btn-sm${ops.spendFilter==='spending'?' active':''}" data-opsact="spend-filter-spending">Spending</button>
-        <button class="ar-btn ar-btn-ghost ar-btn-sm${ops.spendFilter==='issues'?' active':''}" data-opsact="spend-filter-issues">Issues</button>
-        <button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="spend-csv" ${!ops.spendAccounts.length?'disabled':''}>⬇ CSV</button>
-      </div>
-
-      ${ops.spendAccounts.length ? `
-        <div style="overflow:auto;max-height:340px;background:var(--card);border:1px solid var(--bdr);border-radius:8px">
-          <table style="width:100%;border-collapse:collapse">
-            <thead><tr style="background:var(--bg);position:sticky;top:0">
-              <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Account</th>
-              <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Status</th>
-              <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Spend</th>
-              <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Impr.</th>
-              <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Clicks</th>
-              <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Balance</th>
-            </tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </div>
-      ` : `<div style="font-size:13px;color:#64748b;padding:16px 0">Select a period and click Load.</div>`}
-    `;
   }
 
   /* ==================== BULK COPY CAMPAIGN ==================== */
@@ -5355,7 +5471,6 @@ function mountOperations(container) {
 
   /* ==================== RENDER ==================== */
   const TABS = [
-    {id:'spend',    label:'💰 Spend Dashboard'},
     {id:'copy',     label:'📋 Bulk Copy Campaign'},
     {id:'pause',    label:'⏸ Bulk Pause/Resume'},
     {id:'zombies',  label:'🧟 Zombie Campaigns'},
@@ -5366,7 +5481,6 @@ function mountOperations(container) {
     const tabBar = TABS.map(t=>`<button class="ar-tab ${ops.tab===t.id?'active':''}" data-opstab="${t.id}">${t.label}</button>`).join('');
 
     let content = '';
-    if (ops.tab==='spend')     content = renderSpend();
     if (ops.tab==='copy')      content = renderBulkCopy();
     if (ops.tab==='pause')     content = renderBulkPause();
     if (ops.tab==='zombies')   content = renderZombies();
@@ -5387,32 +5501,8 @@ function mountOperations(container) {
       el.addEventListener('click', () => { ops.tab = el.getAttribute('data-opstab'); render(); });
     });
 
-    /* spend actions */
-    const sa = (id, fn) => { const el=container.querySelector(`[data-opsact="${id}"]`); if(el) el.addEventListener('click', fn); };
-    sa('spend-load', loadSpend);
-    sa('spend-filter-all',      ()=>{ops.spendFilter='all'; render();});
-    sa('spend-filter-active',   ()=>{ops.spendFilter='active'; render();});
-    sa('spend-filter-spending', ()=>{ops.spendFilter='spending'; render();});
-    sa('spend-filter-issues',   ()=>{ops.spendFilter='issues'; render();});
-    sa('spend-csv', ()=>{
-      const preset = ops.spendPreset||'today';
-      exportCsv([['Name','BM','ID','Status','Spend','Impressions','Clicks','Balance','Currency'],...ops.spendAccounts.map(a=>[a.name,a.bm,a.id,a.status,a.spend,a.impressions,a.clicks,a.balance,a.currency])],`spend_${preset}_dashboard.csv`);
-    });
-    /* preset buttons — delegated since they're dynamically rendered */
-    container.addEventListener('click', e=>{
-      const btn = e.target.closest('[data-opsact="spend-preset"]');
-      if (!btn) return;
-      ops.spendPreset = btn.dataset.preset;
-      if (ops.spendPreset !== 'custom') { ops.spendDateFrom=''; ops.spendDateTo=''; }
-      render();
-      if (ops.spendPreset !== 'custom') loadSpend();
-    });
-    container.addEventListener('change', e=>{
-      if (e.target.id==='spend-from') { ops.spendDateFrom=e.target.value; }
-      if (e.target.id==='spend-to')   { ops.spendDateTo=e.target.value; if(ops.spendDateFrom) loadSpend(); }
-    });
-
     /* copy actions */
+    const sa = (id, fn) => { const el=container.querySelector(`[data-opsact="${id}"]`); if(el) el.addEventListener('click', fn); };
     sa('copy-load-accounts', async ()=>{ await loadCopyAccounts(); await loadCopyCampaigns(); });
     sa('copy-run', runBulkCopy);
     sa('copy-sel-all', ()=>{ ops.copyAccounts.filter(a=>a.id!==ops.copySrcAccId).forEach(a=>ops.copyTargetAccIds.add(a.id)); render(); });
