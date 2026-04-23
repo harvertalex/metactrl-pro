@@ -560,6 +560,7 @@ function makeModal() {
       <button id="tab-anl" class="ar-tab">📊 Analytics</button>
       <button id="tab-insp" class="ar-tab">🔍 Inspector</button>
       <button id="tab-px" class="ar-tab">🔗 Pixel Manager</button>
+      <button id="tab-ops" class="ar-tab">🛠 Ops</button>
     </div>
   `;
 
@@ -569,12 +570,14 @@ function makeModal() {
   const anl  = document.createElement('div'); anl.id  = 'ar-anl';
   const insp = document.createElement('div'); insp.id = 'ar-insp';
   const px   = document.createElement('div'); px.id   = 'ar-px';
+  const ops  = document.createElement('div'); ops.id  = 'ar-ops';
   wrap.appendChild(gen);
   wrap.appendChild(mgr);
   wrap.appendChild(col);
   wrap.appendChild(anl);
   wrap.appendChild(insp);
   wrap.appendChild(px);
+  wrap.appendChild(ops);
   document.body.appendChild(wrap);
 
   wrap.querySelector('#ar-close').onclick = () => wrap.remove();
@@ -584,6 +587,7 @@ function makeModal() {
   wrap.querySelector('#tab-anl').onclick  = () => { setTab('anl'); };
   wrap.querySelector('#tab-insp').onclick = () => { setTab('insp'); };
   wrap.querySelector('#tab-px').onclick   = () => { setTab('px'); };
+  wrap.querySelector('#tab-ops').onclick  = () => { setTab('ops'); };
 
   function setTab(t) {
     gen.style.display  = t === 'gen'  ? 'block' : 'none';
@@ -592,15 +596,17 @@ function makeModal() {
     anl.style.display  = t === 'anl'  ? 'block' : 'none';
     insp.style.display = t === 'insp' ? 'block' : 'none';
     px.style.display   = t === 'px'   ? 'block' : 'none';
+    ops.style.display  = t === 'ops'  ? 'block' : 'none';
     wrap.querySelector('#tab-gen').classList.toggle('active', t === 'gen');
     wrap.querySelector('#tab-mgr').classList.toggle('active', t === 'mgr');
     wrap.querySelector('#tab-col').classList.toggle('active', t === 'col');
     wrap.querySelector('#tab-anl').classList.toggle('active', t === 'anl');
     wrap.querySelector('#tab-insp').classList.toggle('active', t === 'insp');
     wrap.querySelector('#tab-px').classList.toggle('active', t === 'px');
+    wrap.querySelector('#tab-ops').classList.toggle('active', t === 'ops');
   }
   setTab('gen');
-  return { wrap, gen, mgr, col, anl, insp, px };
+  return { wrap, gen, mgr, col, anl, insp, px, ops };
 }
 
 /* -------------------- UI: GENERATOR -------------------- */
@@ -4695,6 +4701,689 @@ function mountPixelManager(container) {
   if (bizId) { loadContext(bizId); } else { loadBusinessesOnly(); }
 }
 
+/* -------------------- OPERATIONS -------------------- */
+function mountOperations(container) {
+  container.innerHTML = '';
+
+  const GRAPH_VER = 'v22.0';
+
+  /* shared helpers */
+  function esc(v) { return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  async function apiFetch(path, opts = {}) {
+    const method = opts.method || 'GET';
+    const isFull = /^https?:\/\//i.test(path);
+    const url = isFull ? new URL(path) : new URL(`https://graph.facebook.com/${GRAPH_VER}/${path.replace(/^\/+/,'')}`);
+    if (!isFull) {
+      Object.entries(opts.params||{}).forEach(([k,v]) => { if (v!=null&&v!=='') url.searchParams.set(k,v); });
+      url.searchParams.set('access_token', TOKEN);
+    }
+    const fo = { method, credentials:'include', headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'} };
+    if (opts.body) { const b=new URLSearchParams(); Object.entries(opts.body).forEach(([k,v])=>{if(v!=null)b.append(k,v);}); fo.body=b; }
+    const res = await fetch(url.toString(), fo);
+    const json = await res.json();
+    if (!res.ok||json?.error) throw new Error(json?.error?.message||`API error (${res.status})`);
+    return json;
+  }
+
+  async function apiAll(path, params={}) {
+    const rows=[]; let next=path; let np=params;
+    while(next){ const p=await apiFetch(next,{params:np}); rows.push(...(p?.data||[])); next=p?.paging?.next||''; np={}; }
+    return rows;
+  }
+
+  function getBizId() {
+    try { const p=new URL(window.location.href).searchParams.get('business_id'); if(p) return p; } catch {}
+    return String(window.location.href).match(/[?&#]business_id=(\d+)/)?.[1]||'';
+  }
+
+  function exportCsv(rows, filename) {
+    const csv = rows.map(r => r.map(c => `"${String(c??'').replace(/"/g,'""')}"`).join(',')).join('\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
+    a.download = filename; a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+  }
+
+  /* ---- sub-tab state ---- */
+  const ops = {
+    tab: 'spend',       /* spend | bulk-copy | pause | zombies | audiences */
+
+    /* spend dashboard */
+    spendAccounts: [],
+    spendLoading: false,
+    spendBizId: getBizId(),
+    spendFilter: 'all',   /* all | active | issues */
+
+    /* bulk copy */
+    copyBizId: getBizId(),
+    copySrcAccId: '',
+    copyCampaigns: [],
+    copyTargetAccIds: new Set(),
+    copyAccounts: [],
+    copyLoadingCampaigns: false,
+    copyLoadingAccounts: false,
+    copyRunning: false,
+    copyLog: [], copyDone: 0, copyTotal: 0,
+    copySelectedCampaignId: '',
+
+    /* pause/resume */
+    pauseBizId: getBizId(),
+    pauseAccounts: [],
+    pausePattern: '',
+    pauseAction: 'PAUSED',
+    pauseLevel: 'campaign',
+    pausePreview: [],
+    pauseLoadingAccounts: false,
+    pauseRunning: false,
+    pauseLog: [],
+
+    /* zombies */
+    zombieBizId: getBizId(),
+    zombieDays: 7,
+    zombieMinSpend: 5,
+    zombies: [],
+    zombieLoading: false,
+
+    /* audiences */
+    audBizId: getBizId(),
+    audAccounts: [],
+    audList: [],
+    audLoading: false,
+
+    status: { type:'info', text:'Select a tool.' },
+  };
+
+  function setStatus(type, text) { ops.status={type,text}; render(); }
+  function addLog(arr, type, msg) { arr.push({type,msg,ts:new Date().toLocaleTimeString()}); render(); }
+  const SC = {info:'#3b82f6',success:'#22c55e',error:'#ef4444',warning:'#f59e0b'};
+  const SI = {info:'ℹ',success:'✓',error:'!',warning:'⚠'};
+
+  function logHtml(arr) {
+    return arr.slice(-80).map(l=>`<div style="font-size:11px;color:${SC[l.type]||SC.info};white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span style="opacity:.5">${esc(l.ts)}</span> ${esc(l.msg)}</div>`).join('');
+  }
+
+  /* ==================== SPEND DASHBOARD ==================== */
+  async function loadSpend() {
+    ops.spendLoading = true; ops.spendAccounts = [];
+    setStatus('info', 'Loading accounts...');
+    try {
+      const bizId = ops.spendBizId || getBizId();
+      if (!bizId) throw new Error('No BM ID found. Open Ads Manager inside a BM.');
+      const accounts = await apiAll(`/${bizId}/owned_ad_accounts`, {
+        fields: 'id,account_id,name,account_status,amount_spent,balance,spend_cap,currency,disable_reason',
+        limit: 200,
+      });
+      const client = await apiAll(`/${bizId}/client_ad_accounts`, {
+        fields: 'id,account_id,name,account_status,amount_spent,balance,spend_cap,currency,disable_reason',
+        limit: 200,
+      }).catch(()=>[]);
+      const all = [...accounts, ...client];
+      const seen = new Set();
+      ops.spendAccounts = all.filter(a => { const id=String(a.account_id||a.id||'').replace(/^act_/,''); if(!id||seen.has(id))return false; seen.add(id); return true; })
+        .map(a => ({
+          id: String(a.account_id||a.id||'').replace(/^act_/,''),
+          name: a.name||'Untitled',
+          status: a.account_status,
+          spent: parseFloat(a.amount_spent||0)/100,
+          balance: parseFloat(a.balance||0)/100,
+          spendCap: parseFloat(a.spend_cap||0)/100,
+          currency: a.currency||'USD',
+          disableReason: a.disable_reason||0,
+        }))
+        .sort((a,b) => b.spent - a.spent);
+      setStatus('success', `Loaded ${ops.spendAccounts.length} accounts.`);
+    } catch(e) { setStatus('error', e.message); }
+    finally { ops.spendLoading = false; render(); }
+  }
+
+  function renderSpend() {
+    const STATUS_LABEL = {1:'Active',2:'Disabled',3:'Unsettled',7:'Pending',8:'Pending',9:'In Review',100:'Closed',101:'Any Closed',201:'Flagged'};
+    const STATUS_COLOR = {1:'#22c55e',2:'#ef4444',3:'#f59e0b',7:'#f59e0b',8:'#f59e0b',9:'#f59e0b',100:'#64748b',101:'#64748b',201:'#ef4444'};
+
+    let accs = ops.spendAccounts;
+    if (ops.spendFilter==='active')  accs = accs.filter(a=>a.status===1);
+    if (ops.spendFilter==='issues')  accs = accs.filter(a=>a.status!==1);
+
+    const totalSpent   = ops.spendAccounts.reduce((s,a)=>s+a.spent,0);
+    const totalBalance = ops.spendAccounts.reduce((s,a)=>s+a.balance,0);
+    const activeCount  = ops.spendAccounts.filter(a=>a.status===1).length;
+    const issueCount   = ops.spendAccounts.filter(a=>a.status!==1).length;
+
+    const rows = accs.map(a => {
+      const capPct = a.spendCap>0 ? Math.min(100,Math.round(a.spent/a.spendCap*100)) : null;
+      const capBar = capPct!==null ? `<div style="margin-top:3px;background:var(--bdr);border-radius:2px;height:3px;width:80px"><div style="background:${capPct>85?'#ef4444':'#3b82f6'};width:${capPct}%;height:100%;border-radius:2px"></div></div><span style="font-size:10px;color:#64748b">${capPct}% of cap</span>` : '';
+      return `<tr>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
+          <div style="font-size:12px;font-weight:600;color:var(--txt)">${esc(a.name)}</div>
+          <div style="font-size:10px;color:#64748b">${esc(a.id)}</div>
+        </td>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
+          <span style="font-size:11px;font-weight:700;color:${STATUS_COLOR[a.status]||'#64748b'}">${STATUS_LABEL[a.status]||a.status}</span>
+        </td>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--txt);text-align:right;white-space:nowrap">
+          $${a.spent.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})}
+          ${capBar}
+        </td>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--txt);text-align:right">
+          $${a.balance.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})}
+        </td>
+      </tr>`;
+    }).join('');
+
+    return `
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:10px 14px;min-width:110px">
+          <div style="font-size:11px;color:#64748b">Total Spent</div>
+          <div style="font-size:16px;font-weight:700;color:var(--txt)">$${totalSpent.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+        </div>
+        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:10px 14px;min-width:110px">
+          <div style="font-size:11px;color:#64748b">Total Balance</div>
+          <div style="font-size:16px;font-weight:700;color:var(--txt)">$${totalBalance.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+        </div>
+        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:10px 14px;min-width:90px">
+          <div style="font-size:11px;color:#64748b">Active</div>
+          <div style="font-size:16px;font-weight:700;color:#22c55e">${activeCount}</div>
+        </div>
+        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:10px 14px;min-width:90px">
+          <div style="font-size:11px;color:#64748b">Issues</div>
+          <div style="font-size:16px;font-weight:700;color:#ef4444">${issueCount}</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
+        <button class="ar-btn ar-btn-primary ar-btn-sm" data-opsact="spend-load" ${ops.spendLoading?'disabled':''}>${ops.spendLoading?'Loading…':'↻ Refresh'}</button>
+        <button class="ar-btn ar-btn-ghost ar-btn-sm ${ops.spendFilter==='all'?'active':''}" data-opsact="spend-filter-all">All</button>
+        <button class="ar-btn ar-btn-ghost ar-btn-sm ${ops.spendFilter==='active'?'active':''}" data-opsact="spend-filter-active">Active only</button>
+        <button class="ar-btn ar-btn-ghost ar-btn-sm ${ops.spendFilter==='issues'?'active':''}" data-opsact="spend-filter-issues">Issues only</button>
+        <button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="spend-csv" ${!ops.spendAccounts.length?'disabled':''}>⬇ CSV</button>
+      </div>
+      ${ops.spendAccounts.length ? `
+        <div style="overflow:auto;max-height:360px;background:var(--card);border:1px solid var(--bdr);border-radius:8px">
+          <table style="width:100%;border-collapse:collapse">
+            <thead><tr style="background:var(--bg)">
+              <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Account</th>
+              <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Status</th>
+              <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Spent (lifetime)</th>
+              <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Balance</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      ` : `<div style="font-size:13px;color:#64748b;padding:16px 0">Click Refresh to load accounts.</div>`}
+    `;
+  }
+
+  /* ==================== BULK COPY CAMPAIGN ==================== */
+  async function loadCopyAccounts() {
+    ops.copyLoadingAccounts = true; setStatus('info','Loading accounts...'); render();
+    try {
+      const bizId = ops.copyBizId || getBizId();
+      if (!bizId) throw new Error('No BM ID found.');
+      const [owned, client] = await Promise.all([
+        apiAll(`/${bizId}/owned_ad_accounts`,{fields:'id,account_id,name',limit:200}),
+        apiAll(`/${bizId}/client_ad_accounts`,{fields:'id,account_id,name',limit:200}).catch(()=>[]),
+      ]);
+      const seen=new Set();
+      ops.copyAccounts = [...owned,...client].filter(a=>{
+        const id=String(a.account_id||a.id||'').replace(/^act_/,'');
+        if(!id||seen.has(id))return false; seen.add(id); return true;
+      }).map(a=>({id:String(a.account_id||a.id||'').replace(/^act_/,''),name:a.name||'Untitled',label:`${a.name||'Untitled'} (${String(a.account_id||a.id||'').replace(/^act_/,'')})`}))
+        .sort((a,b)=>a.name.localeCompare(b.name));
+      ops.copySrcAccId = ops.copyAccounts[0]?.id||'';
+      setStatus('success',`${ops.copyAccounts.length} accounts loaded.`);
+    } catch(e) { setStatus('error',e.message); }
+    finally { ops.copyLoadingAccounts=false; render(); }
+  }
+
+  async function loadCopyCampaigns() {
+    if (!ops.copySrcAccId) return;
+    ops.copyLoadingCampaigns=true; ops.copyCampaigns=[]; setStatus('info','Loading campaigns...'); render();
+    try {
+      const campaigns = await apiAll(`/act_${ops.copySrcAccId}/campaigns`,{
+        fields:'id,name,status,objective,daily_budget,lifetime_budget',limit:200
+      });
+      ops.copyCampaigns = campaigns.map(c=>({
+        id:String(c.id), name:c.name||'Untitled',
+        status:c.status, objective:c.objective||'',
+        budget: c.daily_budget ? `$${(+c.daily_budget/100).toFixed(2)}/day` : c.lifetime_budget ? `$${(+c.lifetime_budget/100).toFixed(2)} total` : '—',
+      })).sort((a,b)=>a.name.localeCompare(b.name));
+      ops.copySelectedCampaignId = ops.copyCampaigns[0]?.id||'';
+      setStatus('success',`${ops.copyCampaigns.length} campaigns loaded.`);
+    } catch(e) { setStatus('error',e.message); }
+    finally { ops.copyLoadingCampaigns=false; render(); }
+  }
+
+  async function runBulkCopy() {
+    const targetIds = [...ops.copyTargetAccIds];
+    if (!ops.copySelectedCampaignId) { setStatus('error','Select a campaign to copy.'); return; }
+    if (!targetIds.length) { setStatus('error','Select at least one target account.'); return; }
+    ops.copyRunning=true; ops.copyLog=[]; ops.copyDone=0; ops.copyTotal=targetIds.length;
+    addLog(ops.copyLog,'info',`Copying campaign to ${targetIds.length} accounts...`);
+    for (const accId of targetIds) {
+      const acc = ops.copyAccounts.find(a=>a.id===accId);
+      try {
+        await apiFetch(`/act_${accId}/campaigns`,{method:'POST',body:{
+          copied_campaign_id: ops.copySelectedCampaignId,
+          status_override: 'PAUSED',
+        }});
+        addLog(ops.copyLog,'success',`✓ → ${acc?.name||accId}`);
+      } catch(e) {
+        addLog(ops.copyLog,'error',`✗ → ${acc?.name||accId}: ${e.message}`);
+      }
+      ops.copyDone++;
+      if (ops.copyDone < targetIds.length) await sleep(1500);
+    }
+    const ok=ops.copyLog.filter(l=>l.type==='success').length;
+    const err=ops.copyLog.filter(l=>l.type==='error').length;
+    setStatus(err?'error':'success',`Done: ${ok} copied, ${err} errors. All copied as PAUSED.`);
+    ops.copyRunning=false; render();
+  }
+
+  function renderBulkCopy() {
+    const srcOpts = ops.copyAccounts.map(a=>`<option value="${esc(a.id)}" ${a.id===ops.copySrcAccId?'selected':''}>${esc(a.label)}</option>`).join('');
+    const campaignOpts = ops.copyCampaigns.map(c=>`<option value="${esc(c.id)}" ${c.id===ops.copySelectedCampaignId?'selected':''}>[${esc(c.status)}] ${esc(c.name)} — ${esc(c.budget)}</option>`).join('');
+    const tgtRows = ops.copyAccounts.filter(a=>a.id!==ops.copySrcAccId).map(a=>`
+      <label style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:5px;cursor:pointer;font-size:12px;color:var(--txt);background:${ops.copyTargetAccIds.has(a.id)?'rgba(59,130,246,.1)':''}">
+        <input type="checkbox" data-copyacc="${esc(a.id)}" ${ops.copyTargetAccIds.has(a.id)?'checked':''} style="accent-color:var(--acc)">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(a.label)}</span>
+      </label>`).join('') || '<div style="font-size:12px;color:#64748b;padding:8px">Load accounts first.</div>';
+
+    const progress = ops.copyTotal ? Math.round(ops.copyDone/ops.copyTotal*100) : 0;
+    const copyDisabled = ops.copyRunning||ops.copyLoadingCampaigns||!ops.copySelectedCampaignId||!ops.copyTargetAccIds.size;
+
+    return `
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:flex-end">
+        <div class="ar-field" style="flex:1;min-width:180px">
+          <label class="ar-label">Source Account</label>
+          <select class="ar-select" id="copy-src-acc" ${ops.copyLoadingAccounts?'disabled':''}>${srcOpts||'<option>Load accounts first</option>'}</select>
+        </div>
+        <button class="ar-btn ar-btn-primary ar-btn-sm" data-opsact="copy-load-accounts" ${ops.copyLoadingAccounts?'disabled':''}>${ops.copyLoadingAccounts?'Loading…':'Load Accounts'}</button>
+      </div>
+      ${ops.copyCampaigns.length||ops.copyLoadingCampaigns ? `
+        <div class="ar-field" style="margin-bottom:12px">
+          <label class="ar-label">Campaign to copy</label>
+          <select class="ar-select" id="copy-campaign" ${ops.copyLoadingCampaigns?'disabled':''}>${campaignOpts||'<option>Loading…</option>'}</select>
+        </div>` : ''}
+      ${ops.copyAccounts.length ? `
+        <div style="margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <div style="font-size:12px;font-weight:700;color:var(--txt)">Target Accounts <span style="font-weight:400;color:#64748b">${ops.copyTargetAccIds.size} selected</span></div>
+            <div style="display:flex;gap:6px">
+              <button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="copy-sel-all">All</button>
+              <button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="copy-sel-none">None</button>
+            </div>
+          </div>
+          <div style="max-height:200px;overflow:auto;background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:6px">${tgtRows}</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+          <button class="ar-btn ar-btn-primary" data-opsact="copy-run" ${copyDisabled?'disabled':''}>
+            ${ops.copyRunning?`Copying… ${ops.copyDone}/${ops.copyTotal}`:`▶ Copy to ${ops.copyTargetAccIds.size} accounts`}
+          </button>
+          ${ops.copyTotal?`<div style="flex:1;min-width:80px;background:var(--bdr);border-radius:4px;height:6px"><div style="background:var(--acc);width:${progress}%;height:100%;border-radius:4px;transition:width .3s"></div></div><span style="font-size:11px;color:#64748b">${progress}%</span>`:''}
+        </div>` : ''}
+      ${ops.copyLog.length?`<div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 10px;max-height:140px;overflow:auto;font-family:ui-monospace,monospace">${logHtml(ops.copyLog)}</div>`:''}
+      <div style="margin-top:8px;font-size:11px;color:#64748b">⚠ Copied campaigns are created as PAUSED. Review before activating.</div>
+    `;
+  }
+
+  /* ==================== BULK PAUSE / RESUME ==================== */
+  async function loadPauseAccounts() {
+    ops.pauseLoadingAccounts=true; setStatus('info','Loading accounts...'); render();
+    try {
+      const bizId = ops.pauseBizId||getBizId();
+      if (!bizId) throw new Error('No BM ID found.');
+      const [owned,client] = await Promise.all([
+        apiAll(`/${bizId}/owned_ad_accounts`,{fields:'id,account_id,name',limit:200}),
+        apiAll(`/${bizId}/client_ad_accounts`,{fields:'id,account_id,name',limit:200}).catch(()=>[]),
+      ]);
+      const seen=new Set();
+      ops.pauseAccounts = [...owned,...client].filter(a=>{
+        const id=String(a.account_id||a.id||'').replace(/^act_/,'');
+        if(!id||seen.has(id))return false; seen.add(id); return true;
+      }).map(a=>({id:String(a.account_id||a.id||'').replace(/^act_/,''),name:a.name||'Untitled'}))
+        .sort((a,b)=>a.name.localeCompare(b.name));
+      setStatus('success',`${ops.pauseAccounts.length} accounts loaded.`);
+    } catch(e) { setStatus('error',e.message); }
+    finally { ops.pauseLoadingAccounts=false; render(); }
+  }
+
+  async function buildPausePreview() {
+    if (!ops.pausePattern.trim()||!ops.pauseAccounts.length) { ops.pausePreview=[]; render(); return; }
+    setStatus('info','Building preview...'); render();
+    const pattern = ops.pausePattern.trim().toLowerCase();
+    const results=[];
+    for (const acc of ops.pauseAccounts) {
+      try {
+        const edge = ops.pauseLevel==='campaign' ? 'campaigns' : ops.pauseLevel==='adset' ? 'adsets' : 'ads';
+        const items = await apiAll(`/act_${acc.id}/${edge}`,{fields:'id,name,status',limit:200});
+        items.filter(i=>(i.name||'').toLowerCase().includes(pattern) && i.status!==ops.pauseAction)
+          .forEach(i=>results.push({accId:acc.id,accName:acc.name,id:i.id,name:i.name,currentStatus:i.status,level:ops.pauseLevel}));
+      } catch {}
+      await sleep(200);
+    }
+    ops.pausePreview=results;
+    setStatus(results.length?'info':'success', results.length?`Found ${results.length} matching items. Review and confirm.`:'No matching items found.');
+    render();
+  }
+
+  async function runBulkPause() {
+    if (!ops.pausePreview.length) return;
+    ops.pauseRunning=true; ops.pauseLog=[]; render();
+    addLog(ops.pauseLog,'info',`Setting ${ops.pauseAction} on ${ops.pausePreview.length} items...`);
+    for (const item of ops.pausePreview) {
+      try {
+        await apiFetch(`/${item.id}`,{method:'POST',body:{status:ops.pauseAction}});
+        addLog(ops.pauseLog,'success',`✓ [${item.level}] ${item.name} (${item.accName})`);
+      } catch(e) { addLog(ops.pauseLog,'error',`✗ ${item.name}: ${e.message}`); }
+      await sleep(300);
+    }
+    const ok=ops.pauseLog.filter(l=>l.type==='success').length;
+    const err=ops.pauseLog.filter(l=>l.type==='error').length;
+    setStatus(err?'error':'success',`Done: ${ok} updated, ${err} errors.`);
+    ops.pauseRunning=false; ops.pausePreview=[]; render();
+  }
+
+  function renderBulkPause() {
+    const previewRows = ops.pausePreview.map(i=>`
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--txt)">
+        <div><span style="color:#64748b;font-size:10px">[${esc(i.level)}]</span> ${esc(i.name)}</div>
+        <div style="font-size:11px;color:#64748b">${esc(i.accName)}</div>
+      </div>`).join('');
+
+    return `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        <div class="ar-field">
+          <label class="ar-label">Name contains (substring)</label>
+          <input class="ar-input" id="pause-pattern" value="${esc(ops.pausePattern)}" placeholder="e.g. test, 0414, insurance...">
+        </div>
+        <div class="ar-field">
+          <label class="ar-label">Action</label>
+          <select class="ar-select" id="pause-action">
+            <option value="PAUSED" ${ops.pauseAction==='PAUSED'?'selected':''}>Pause</option>
+            <option value="ACTIVE" ${ops.pauseAction==='ACTIVE'?'selected':''}>Resume (set Active)</option>
+          </select>
+        </div>
+        <div class="ar-field">
+          <label class="ar-label">Level</label>
+          <select class="ar-select" id="pause-level">
+            <option value="campaign" ${ops.pauseLevel==='campaign'?'selected':''}>Campaigns</option>
+            <option value="adset" ${ops.pauseLevel==='adset'?'selected':''}>Ad Sets</option>
+            <option value="ad" ${ops.pauseLevel==='ad'?'selected':''}>Ads</option>
+          </select>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+        <button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="pause-load-accounts" ${ops.pauseLoadingAccounts?'disabled':''}>${ops.pauseLoadingAccounts?'Loading…':'Load Accounts'}</button>
+        <button class="ar-btn ar-btn-primary ar-btn-sm" data-opsact="pause-preview" ${!ops.pauseAccounts.length||!ops.pausePattern.trim()?'disabled':''}>🔍 Preview</button>
+      </div>
+      ${ops.pauseAccounts.length?`<div style="font-size:11px;color:#64748b;margin-bottom:8px">${ops.pauseAccounts.length} accounts loaded.</div>`:''}
+      ${ops.pausePreview.length?`
+        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;margin-bottom:10px;max-height:220px;overflow:auto">
+          <div style="padding:8px 10px;border-bottom:1px solid var(--bdr);font-size:12px;font-weight:700;color:var(--txt)">${ops.pausePreview.length} items will be set to ${ops.pauseAction}</div>
+          ${previewRows}
+        </div>
+        <button class="ar-btn ar-btn-primary" data-opsact="pause-run" ${ops.pauseRunning?'disabled':''}>
+          ${ops.pauseRunning?'Running…':`▶ Apply ${ops.pauseAction} to ${ops.pausePreview.length} items`}
+        </button>` : ''}
+      ${ops.pauseLog.length?`<div style="margin-top:10px;background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 10px;max-height:140px;overflow:auto;font-family:ui-monospace,monospace">${logHtml(ops.pauseLog)}</div>`:''}
+    `;
+  }
+
+  /* ==================== ZOMBIE CAMPAIGNS ==================== */
+  async function loadZombies() {
+    ops.zombieLoading=true; ops.zombies=[]; setStatus('info','Scanning for zombie campaigns...'); render();
+    try {
+      const bizId = ops.zombieBizId||getBizId();
+      if (!bizId) throw new Error('No BM ID found.');
+      const [owned,client] = await Promise.all([
+        apiAll(`/${bizId}/owned_ad_accounts`,{fields:'id,account_id,name',limit:200}),
+        apiAll(`/${bizId}/client_ad_accounts`,{fields:'id,account_id,name',limit:200}).catch(()=>[]),
+      ]);
+      const seen=new Set();
+      const accounts = [...owned,...client].filter(a=>{
+        const id=String(a.account_id||a.id||'').replace(/^act_/,'');
+        if(!id||seen.has(id))return false; seen.add(id); return true;
+      }).map(a=>({id:String(a.account_id||a.id||'').replace(/^act_/,''),name:a.name||'Untitled'}));
+
+      const cutoff = Date.now() - ops.zombieDays * 86400000;
+      const minSpendCents = ops.zombieMinSpend * 100;
+      const results=[];
+
+      setStatus('info',`Scanning ${accounts.length} accounts...`);
+
+      await Promise.all(accounts.map(async acc => {
+        try {
+          const campaigns = await apiAll(`/act_${acc.id}/campaigns`,{
+            fields:`id,name,status,objective,spend_cap,created_time,insights.date_preset(lifetime){spend,actions}`,
+            limit:100,
+            filtering: JSON.stringify([{field:'effective_status',operator:'IN',value:['ACTIVE']}]),
+          });
+          for (const c of campaigns) {
+            const spend = parseFloat(c.insights?.data?.[0]?.spend||0)*100;
+            const actions = c.insights?.data?.[0]?.actions||[];
+            const leads = actions.filter(a=>['lead','offsite_conversion.fb_pixel_lead','onsite_conversion.lead_grouped'].includes(a.action_type)).reduce((s,a)=>s+parseInt(a.value||0),0);
+            const lastUpdate = new Date(c.insights?.data?.[0]?.date_stop||c.created_time).getTime();
+            if (spend >= minSpendCents && leads === 0 && lastUpdate < cutoff) {
+              results.push({ accId:acc.id, accName:acc.name, id:c.id, name:c.name, spend:spend/100, leads, objective:c.objective||'' });
+            }
+          }
+        } catch {}
+      }));
+
+      ops.zombies = results.sort((a,b)=>b.spend-a.spend);
+      setStatus(results.length?'warning':'success', results.length?`Found ${results.length} zombie campaigns ($${results.reduce((s,z)=>s+z.spend,0).toFixed(2)} wasted).`:'No zombies found. All active campaigns have conversions.');
+    } catch(e) { setStatus('error',e.message); }
+    finally { ops.zombieLoading=false; render(); }
+  }
+
+  function renderZombies() {
+    const totalWaste = ops.zombies.reduce((s,z)=>s+z.spend,0);
+    const rows = ops.zombies.map(z=>`<tr>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
+        <div style="font-size:12px;font-weight:600;color:var(--txt)">${esc(z.name)}</div>
+        <div style="font-size:10px;color:#64748b">${esc(z.accName)} · ${esc(z.objective)}</div>
+      </td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:#ef4444;text-align:right;font-weight:700">$${z.spend.toFixed(2)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:#64748b;text-align:center">0</td>
+    </tr>`).join('');
+
+    return `
+      <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:flex-end">
+        <div class="ar-field">
+          <label class="ar-label">No conversions for (days)</label>
+          <input class="ar-input" id="zombie-days" type="number" value="${ops.zombieDays}" min="1" max="90" style="width:80px">
+        </div>
+        <div class="ar-field">
+          <label class="ar-label">Min spend ($)</label>
+          <input class="ar-input" id="zombie-spend" type="number" value="${ops.zombieMinSpend}" min="0" step="1" style="width:80px">
+        </div>
+        <button class="ar-btn ar-btn-primary ar-btn-sm" data-opsact="zombie-scan" ${ops.zombieLoading?'disabled':''}>${ops.zombieLoading?'Scanning…':'🔍 Scan'}</button>
+        ${ops.zombies.length?`<button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="zombie-csv">⬇ CSV</button>`:''}
+      </div>
+      ${ops.zombies.length?`
+        <div style="display:flex;gap:10px;margin-bottom:10px">
+          <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:10px 14px">
+            <div style="font-size:11px;color:#64748b">Zombie campaigns</div>
+            <div style="font-size:18px;font-weight:700;color:#f59e0b">${ops.zombies.length}</div>
+          </div>
+          <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:10px 14px">
+            <div style="font-size:11px;color:#64748b">Total wasted spend</div>
+            <div style="font-size:18px;font-weight:700;color:#ef4444">$${totalWaste.toFixed(2)}</div>
+          </div>
+        </div>
+        <div style="overflow:auto;max-height:280px;background:var(--card);border:1px solid var(--bdr);border-radius:8px">
+          <table style="width:100%;border-collapse:collapse">
+            <thead><tr style="background:var(--bg)">
+              <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Campaign</th>
+              <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Spent</th>
+              <th style="padding:6px 8px;text-align:center;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Leads</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>` : `<div style="font-size:13px;color:#64748b;padding:16px 0">Set parameters and click Scan.</div>`}
+    `;
+  }
+
+  /* ==================== CUSTOM AUDIENCES ==================== */
+  async function loadAudiences() {
+    ops.audLoading=true; ops.audList=[]; setStatus('info','Loading audiences...'); render();
+    try {
+      const bizId = ops.audBizId||getBizId();
+      if (!bizId) throw new Error('No BM ID found.');
+      const [owned,client] = await Promise.all([
+        apiAll(`/${bizId}/owned_ad_accounts`,{fields:'id,account_id,name',limit:200}),
+        apiAll(`/${bizId}/client_ad_accounts`,{fields:'id,account_id,name',limit:200}).catch(()=>[]),
+      ]);
+      const seen=new Set();
+      ops.audAccounts = [...owned,...client].filter(a=>{
+        const id=String(a.account_id||a.id||'').replace(/^act_/,'');
+        if(!id||seen.has(id))return false; seen.add(id); return true;
+      }).map(a=>({id:String(a.account_id||a.id||'').replace(/^act_/,''),name:a.name||'Untitled'}));
+
+      const allAud=[];
+      await Promise.all(ops.audAccounts.map(async acc=>{
+        try {
+          const auds = await apiAll(`/act_${acc.id}/customaudiences`,{
+            fields:'id,name,subtype,approximate_count_lower_bound,approximate_count_upper_bound,data_source,delivery_status,operation_status',
+            limit:100
+          });
+          auds.forEach(a=>allAud.push({
+            accId:acc.id, accName:acc.name,
+            id:a.id, name:a.name||'Untitled',
+            subtype:a.subtype||'—',
+            count: a.approximate_count_upper_bound>0 ? `${(a.approximate_count_lower_bound/1000).toFixed(0)}k–${(a.approximate_count_upper_bound/1000).toFixed(0)}k` : '<1k',
+            status: a.operation_status?.code===200?'Ready':a.operation_status?.description||'—',
+          }));
+        } catch {}
+      }));
+      ops.audList = allAud.sort((a,b)=>a.name.localeCompare(b.name));
+      setStatus('success',`${ops.audList.length} audiences across ${ops.audAccounts.length} accounts.`);
+    } catch(e) { setStatus('error',e.message); }
+    finally { ops.audLoading=false; render(); }
+  }
+
+  function renderAudiences() {
+    const subtypes=[...new Set(ops.audList.map(a=>a.subtype))].sort();
+    const rows = ops.audList.map(a=>`<tr>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
+        <div style="font-size:12px;font-weight:600;color:var(--txt)">${esc(a.name)}</div>
+        <div style="font-size:10px;color:#64748b">${esc(a.accName)}</div>
+      </td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)"><span style="font-size:11px;background:rgba(59,130,246,.1);color:#60a5fa;border-radius:4px;padding:1px 6px">${esc(a.subtype)}</span></td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--txt);text-align:right">${esc(a.count)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:${a.status==='Ready'?'#22c55e':'#f59e0b'}">${esc(a.status)}</td>
+    </tr>`).join('');
+
+    return `
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+        <button class="ar-btn ar-btn-primary ar-btn-sm" data-opsact="aud-load" ${ops.audLoading?'disabled':''}>${ops.audLoading?'Loading…':'↻ Load Audiences'}</button>
+        ${ops.audList.length?`<button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="aud-csv">⬇ CSV</button>`:''}
+        ${ops.audList.length?`<span style="font-size:12px;color:#64748b">${ops.audList.length} total · ${subtypes.length} types</span>`:''}
+      </div>
+      ${ops.audList.length?`
+        <div style="overflow:auto;max-height:380px;background:var(--card);border:1px solid var(--bdr);border-radius:8px">
+          <table style="width:100%;border-collapse:collapse">
+            <thead><tr style="background:var(--bg)">
+              <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Audience</th>
+              <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Type</th>
+              <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Size</th>
+              <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Status</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>` : `<div style="font-size:13px;color:#64748b;padding:16px 0">Click Load to scan all accounts for custom audiences.</div>`}
+    `;
+  }
+
+  /* ==================== RENDER ==================== */
+  const TABS = [
+    {id:'spend',    label:'💰 Spend Dashboard'},
+    {id:'copy',     label:'📋 Bulk Copy Campaign'},
+    {id:'pause',    label:'⏸ Bulk Pause/Resume'},
+    {id:'zombies',  label:'🧟 Zombie Campaigns'},
+    {id:'audiences',label:'👥 Custom Audiences'},
+  ];
+
+  function render() {
+    const tabBar = TABS.map(t=>`<button class="ar-tab ${ops.tab===t.id?'active':''}" data-opstab="${t.id}">${t.label}</button>`).join('');
+
+    let content = '';
+    if (ops.tab==='spend')     content = renderSpend();
+    if (ops.tab==='copy')      content = renderBulkCopy();
+    if (ops.tab==='pause')     content = renderBulkPause();
+    if (ops.tab==='zombies')   content = renderZombies();
+    if (ops.tab==='audiences') content = renderAudiences();
+
+    container.innerHTML = `
+      <div style="padding:6px 0">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--bdr)">${tabBar}</div>
+        ${content}
+        <div style="margin-top:12px;padding:9px 12px;border-radius:8px;border:1px solid;font-size:12px;line-height:1.5;color:${SC[ops.status.type]||SC.info};background:${SC[ops.status.type]||SC.info}18;border-color:${SC[ops.status.type]||SC.info}30">
+          ${SI[ops.status.type]||'i'} ${esc(ops.status.text)}
+        </div>
+      </div>
+    `;
+
+    /* tab switcher */
+    container.querySelectorAll('[data-opstab]').forEach(el => {
+      el.addEventListener('click', () => { ops.tab = el.getAttribute('data-opstab'); render(); });
+    });
+
+    /* spend actions */
+    const sa = (id, fn) => { const el=container.querySelector(`[data-opsact="${id}"]`); if(el) el.addEventListener('click', fn); };
+    sa('spend-load', loadSpend);
+    sa('spend-filter-all',    ()=>{ops.spendFilter='all'; render();});
+    sa('spend-filter-active', ()=>{ops.spendFilter='active'; render();});
+    sa('spend-filter-issues', ()=>{ops.spendFilter='issues'; render();});
+    sa('spend-csv', ()=>{
+      exportCsv([['Name','ID','Status','Spent','Balance','SpendCap','Currency'],...ops.spendAccounts.map(a=>[a.name,a.id,a.status,a.spent,a.balance,a.spendCap,a.currency])],'spend_dashboard.csv');
+    });
+
+    /* copy actions */
+    sa('copy-load-accounts', async ()=>{ await loadCopyAccounts(); await loadCopyCampaigns(); });
+    sa('copy-run', runBulkCopy);
+    sa('copy-sel-all', ()=>{ ops.copyAccounts.filter(a=>a.id!==ops.copySrcAccId).forEach(a=>ops.copyTargetAccIds.add(a.id)); render(); });
+    sa('copy-sel-none', ()=>{ ops.copyTargetAccIds.clear(); render(); });
+    const srcSel = container.querySelector('#copy-src-acc');
+    if (srcSel) srcSel.addEventListener('change', async ()=>{ ops.copySrcAccId=srcSel.value; ops.copyTargetAccIds.clear(); await loadCopyCampaigns(); });
+    const campSel = container.querySelector('#copy-campaign');
+    if (campSel) campSel.addEventListener('change', ()=>{ ops.copySelectedCampaignId=campSel.value; });
+    container.querySelectorAll('[data-copyacc]').forEach(el=>{
+      el.addEventListener('change',()=>{ const id=el.getAttribute('data-copyacc'); el.checked?ops.copyTargetAccIds.add(id):ops.copyTargetAccIds.delete(id); render(); });
+    });
+
+    /* pause actions */
+    sa('pause-load-accounts', loadPauseAccounts);
+    sa('pause-preview', buildPausePreview);
+    sa('pause-run', runBulkPause);
+    const ppat = container.querySelector('#pause-pattern');
+    if (ppat) ppat.addEventListener('input', ()=>{ ops.pausePattern=ppat.value; });
+    const pact = container.querySelector('#pause-action');
+    if (pact) pact.addEventListener('change', ()=>{ ops.pauseAction=pact.value; });
+    const plvl = container.querySelector('#pause-level');
+    if (plvl) plvl.addEventListener('change', ()=>{ ops.pauseLevel=plvl.value; });
+
+    /* zombie actions */
+    sa('zombie-scan', ()=>{
+      const d=container.querySelector('#zombie-days'); if(d) ops.zombieDays=parseInt(d.value)||7;
+      const s=container.querySelector('#zombie-spend'); if(s) ops.zombieMinSpend=parseFloat(s.value)||5;
+      loadZombies();
+    });
+    sa('zombie-csv', ()=>{
+      exportCsv([['Campaign','Account','Spent','Leads','Objective'],...ops.zombies.map(z=>[z.name,z.accName,z.spend,z.leads,z.objective])],'zombie_campaigns.csv');
+    });
+
+    /* audience actions */
+    sa('aud-load', loadAudiences);
+    sa('aud-csv', ()=>{
+      exportCsv([['Audience','Account','Type','Size','Status'],...ops.audList.map(a=>[a.name,a.accName,a.subtype,a.count,a.status])],'custom_audiences.csv');
+    });
+  }
+
+  render();
+}
+
 /* -------------------- BOOT -------------------- */
 if (!TOKEN) {
   alert('Access token (__accessToken) not found.\nOpen Ads Manager inside Business Manager and run again.');
@@ -4706,6 +5395,7 @@ if (!TOKEN) {
   mountAnalytics(ui.anl);
   mountInspector(ui.insp);
   mountPixelManager(ui.px);
+  mountOperations(ui.ops);
 }
 
 })();
