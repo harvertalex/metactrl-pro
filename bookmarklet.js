@@ -5215,6 +5215,10 @@ function mountOperations(container) {
     const copyDisabled = ops.copyRunning||ops.copyLoadingCampaigns||!ops.copySelectedCampaignId||!ops.copyTargetAccIds.size;
 
     return `
+      <div style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.2);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:11px;color:#94a3b8;line-height:1.5">
+        ⚠️ <b style="color:#cbd5e1">Ограничение FB API:</b> копируются только кампании формата <b style="color:#cbd5e1">1 кампания → 1 адсет → 1 объявление</b>.<br>
+        Воркфлоу: создай шаблонную кампанию 1×1×1 → скопируй на все аккаунты → добавь объявления вручную в каждом аккаунте.
+      </div>
       <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:flex-end">
         <div class="ar-field" style="flex:1;min-width:180px">
           <label class="ar-label">Source Account</label>
