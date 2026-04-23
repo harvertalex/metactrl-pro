@@ -554,25 +554,22 @@ function makeModal() {
       <button id="ar-close" class="ar-btn ar-btn-danger ar-btn-sm">✕ Close</button>
     </div>
     <div style="display:flex;gap:8px;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--bdr)">
-      <button id="tab-gen" class="ar-tab active">⚙️Rules Generator</button>
-      <button id="tab-mgr" class="ar-tab">📁 Rules Manager</button>
-      <button id="tab-col" class="ar-tab">📋 Column Presets</button>
-      <button id="tab-anl" class="ar-tab">📊 Analytics</button>
-      <button id="tab-insp" class="ar-tab">🔍 Inspector</button>
-      <button id="tab-px" class="ar-tab">🔗 Pixel Manager</button>
-      <button id="tab-ops" class="ar-tab">🛠 Ops</button>
+      <button id="tab-ar"   class="ar-tab active">⚙️ Autorules</button>
+      <button id="tab-col"  class="ar-tab">📋 Column Presets</button>
+      <button id="tab-anl"  class="ar-tab">📊 Analytics</button>
+      <button id="tab-insp" class="ar-tab">🔎 Accounts</button>
+      <button id="tab-px"   class="ar-tab">🔗 Pixel Manager</button>
+      <button id="tab-ops"  class="ar-tab">🛠 Ops</button>
     </div>
   `;
 
-  const gen = document.createElement('div'); gen.id = 'ar-gen';
-  const mgr = document.createElement('div'); mgr.id = 'ar-mgr';
-  const col = document.createElement('div'); col.id = 'ar-col';
+  const ar   = document.createElement('div'); ar.id   = 'ar-ar';
+  const col  = document.createElement('div'); col.id  = 'ar-col';
   const anl  = document.createElement('div'); anl.id  = 'ar-anl';
   const insp = document.createElement('div'); insp.id = 'ar-insp';
   const px   = document.createElement('div'); px.id   = 'ar-px';
   const ops  = document.createElement('div'); ops.id  = 'ar-ops';
-  wrap.appendChild(gen);
-  wrap.appendChild(mgr);
+  wrap.appendChild(ar);
   wrap.appendChild(col);
   wrap.appendChild(anl);
   wrap.appendChild(insp);
@@ -580,33 +577,30 @@ function makeModal() {
   wrap.appendChild(ops);
   document.body.appendChild(wrap);
 
-  wrap.querySelector('#ar-close').onclick = () => wrap.remove();
-  wrap.querySelector('#tab-gen').onclick  = () => { setTab('gen'); };
-  wrap.querySelector('#tab-mgr').onclick  = () => { setTab('mgr'); };
-  wrap.querySelector('#tab-col').onclick  = () => { setTab('col'); };
-  wrap.querySelector('#tab-anl').onclick  = () => { setTab('anl'); };
-  wrap.querySelector('#tab-insp').onclick = () => { setTab('insp'); };
-  wrap.querySelector('#tab-px').onclick   = () => { setTab('px'); };
-  wrap.querySelector('#tab-ops').onclick  = () => { setTab('ops'); };
+  wrap.querySelector('#ar-close').onclick  = () => wrap.remove();
+  wrap.querySelector('#tab-ar').onclick    = () => { setTab('ar'); };
+  wrap.querySelector('#tab-col').onclick   = () => { setTab('col'); };
+  wrap.querySelector('#tab-anl').onclick   = () => { setTab('anl'); };
+  wrap.querySelector('#tab-insp').onclick  = () => { setTab('insp'); };
+  wrap.querySelector('#tab-px').onclick    = () => { setTab('px'); };
+  wrap.querySelector('#tab-ops').onclick   = () => { setTab('ops'); };
 
   function setTab(t) {
-    gen.style.display  = t === 'gen'  ? 'block' : 'none';
-    mgr.style.display  = t === 'mgr'  ? 'block' : 'none';
+    ar.style.display   = t === 'ar'   ? 'block' : 'none';
     col.style.display  = t === 'col'  ? 'block' : 'none';
     anl.style.display  = t === 'anl'  ? 'block' : 'none';
     insp.style.display = t === 'insp' ? 'block' : 'none';
     px.style.display   = t === 'px'   ? 'block' : 'none';
     ops.style.display  = t === 'ops'  ? 'block' : 'none';
-    wrap.querySelector('#tab-gen').classList.toggle('active', t === 'gen');
-    wrap.querySelector('#tab-mgr').classList.toggle('active', t === 'mgr');
-    wrap.querySelector('#tab-col').classList.toggle('active', t === 'col');
-    wrap.querySelector('#tab-anl').classList.toggle('active', t === 'anl');
+    wrap.querySelector('#tab-ar').classList.toggle('active',   t === 'ar');
+    wrap.querySelector('#tab-col').classList.toggle('active',  t === 'col');
+    wrap.querySelector('#tab-anl').classList.toggle('active',  t === 'anl');
     wrap.querySelector('#tab-insp').classList.toggle('active', t === 'insp');
-    wrap.querySelector('#tab-px').classList.toggle('active', t === 'px');
-    wrap.querySelector('#tab-ops').classList.toggle('active', t === 'ops');
+    wrap.querySelector('#tab-px').classList.toggle('active',   t === 'px');
+    wrap.querySelector('#tab-ops').classList.toggle('active',  t === 'ops');
   }
-  setTab('gen');
-  return { wrap, gen, mgr, col, anl, insp, px, ops };
+  setTab('ar');
+  return { wrap, ar, col, anl, insp, px, ops };
 }
 
 /* -------------------- UI: GENERATOR -------------------- */
@@ -5546,13 +5540,53 @@ function mountOperations(container) {
   render();
 }
 
+/* -------------------- UI: AUTORULES -------------------- */
+function mountAutorules(container) {
+  container.innerHTML = '';
+  const AR_TABS = [
+    { id: 'gen', label: '⚙️ Generator' },
+    { id: 'mgr', label: '📁 Manager' },
+  ];
+  let arTab = 'gen';
+
+  const tabBar = document.createElement('div');
+  tabBar.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--bdr)';
+
+  const genDiv = document.createElement('div');
+  const mgrDiv = document.createElement('div');
+
+  function renderArTabs() {
+    tabBar.innerHTML = AR_TABS.map(t =>
+      `<button class="ar-tab${arTab===t.id?' active':''}" data-artab="${t.id}">${t.label}</button>`
+    ).join('');
+    tabBar.querySelectorAll('[data-artab]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        arTab = btn.dataset.artab;
+        genDiv.style.display = arTab === 'gen' ? 'block' : 'none';
+        mgrDiv.style.display = arTab === 'mgr' ? 'block' : 'none';
+        renderArTabs();
+      });
+    });
+  }
+
+  container.appendChild(tabBar);
+  container.appendChild(genDiv);
+  container.appendChild(mgrDiv);
+
+  mountGenerator(genDiv);
+  mountManager(mgrDiv);
+
+  genDiv.style.display = 'block';
+  mgrDiv.style.display = 'none';
+  renderArTabs();
+}
+
 /* -------------------- BOOT -------------------- */
 if (!TOKEN) {
   alert('Access token (__accessToken) not found.\nOpen Ads Manager inside Business Manager and run again.');
 } else {
   const ui = makeModal();
-  mountGenerator(ui.gen);
-  mountManager(ui.mgr);
+  mountAutorules(ui.ar);
   mountColumnManager(ui.col);
   mountAnalytics(ui.anl);
   mountInspector(ui.insp);
