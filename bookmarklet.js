@@ -5156,20 +5156,43 @@ function mountOperations(container) {
     if (!targetIds.length) { setStatus('error','Select at least one target account.'); return; }
     ops.copyRunning=true; ops.copyLog=[]; ops.copyDone=0; ops.copyTotal=targetIds.length;
     addLog(ops.copyLog,'info',`Copying campaign to ${targetIds.length} accounts...`);
-    for (const accId of targetIds) {
-      const acc = ops.copyAccounts.find(a=>a.id===accId);
+    // FB API async batch: POST to /{campaign}/copies with multiple destination accounts
+    // Batch requests: up to 50 per call
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < targetIds.length; i += BATCH_SIZE) {
+      const chunk = targetIds.slice(i, i + BATCH_SIZE);
+      const batch = chunk.map(accId => ({
+        method: 'POST',
+        relative_url: `${ops.copySelectedCampaignId}/copies`,
+        body: `deep_copy=1&status_override=PAUSED&destination_ad_account_id=${encodeURIComponent(accId)}`,
+      }));
       try {
-        await apiFetch(`/${ops.copySelectedCampaignId}/copies`,{method:'POST',body:{
-          deep_copy: '1',
-          status_override: 'PAUSED',
-          destination_ad_account_id: accId,
+        const results = await apiFetch('/', {method:'POST', body:{
+          batch: JSON.stringify(batch),
+          include_headers: 'false',
         }});
-        addLog(ops.copyLog,'success',`✓ → ${acc?.name||accId}`);
+        const arr = Array.isArray(results) ? results : [];
+        chunk.forEach((accId, idx) => {
+          const acc = ops.copyAccounts.find(a=>a.id===accId);
+          const r = arr[idx];
+          if (r && r.code >= 200 && r.code < 300) {
+            addLog(ops.copyLog,'success',`✓ → ${acc?.name||accId}`);
+          } else {
+            let msg = 'Unknown error';
+            try { msg = JSON.parse(r?.body)?.error?.message || `HTTP ${r?.code}`; } catch {}
+            addLog(ops.copyLog,'error',`✗ → ${acc?.name||accId}: ${msg}`);
+          }
+          ops.copyDone++;
+        });
       } catch(e) {
-        addLog(ops.copyLog,'error',`✗ → ${acc?.name||accId}: ${e.message}`);
+        chunk.forEach(accId => {
+          const acc = ops.copyAccounts.find(a=>a.id===accId);
+          addLog(ops.copyLog,'error',`✗ → ${acc?.name||accId}: ${e.message}`);
+          ops.copyDone++;
+        });
       }
-      ops.copyDone++;
-      if (ops.copyDone < targetIds.length) await sleep(1500);
+      render();
+      if (i + BATCH_SIZE < targetIds.length) await sleep(2000);
     }
     const ok=ops.copyLog.filter(l=>l.type==='success').length;
     const err=ops.copyLog.filter(l=>l.type==='error').length;
