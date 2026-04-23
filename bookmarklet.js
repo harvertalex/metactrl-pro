@@ -5537,10 +5537,19 @@ function mountOperations(container) {
             const objectStorySpec = { page_id: pageId };
             if (igId) objectStorySpec.instagram_actor_id = igId;
             if (videoId) {
+              // FB requires a thumbnail (image_url or image_hash) for video ads.
+              // Fetch auto-generated thumbnail from the video itself.
+              let thumbUrl = '';
+              try {
+                const vInfo = await apiFetch(`/${videoId}`, {params:{fields:'picture,thumbnails{uri,is_preferred}'}});
+                const prefThumb = vInfo?.thumbnails?.data?.find(t=>t.is_preferred)?.uri;
+                thumbUrl = prefThumb || vInfo?.thumbnails?.data?.[0]?.uri || vInfo?.picture || '';
+              } catch(_) {}
               objectStorySpec.video_data = {
                 video_id: videoId,
                 call_to_action: { type: cta, value: { link } },
               };
+              if (thumbUrl) objectStorySpec.video_data.image_url = thumbUrl;
             } else if (imageHash) {
               objectStorySpec.link_data = {
                 image_hash: imageHash,
