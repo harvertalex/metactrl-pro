@@ -5065,6 +5065,18 @@ function mountOperations(container) {
     audList: [],
     audLoading: false,
 
+    /* csv launch */
+    csvBizId: getBizId(),
+    csvAccounts: [],
+    csvTargetAccIds: new Set(),
+    csvLoadingAccounts: false,
+    csvFileName: '',
+    csvRows: [],           // parsed rows from CSV
+    csvCampaignNameTpl: 'COLD TEST | CBO ${budget}/d | 1as{ad_count}ads | {date} | {acc_id}',
+    csvSub2Mode: 'acc_id', // acc_id | keep | empty
+    csvRunning: false,
+    csvLog: [], csvDone: 0, csvTotal: 0,
+
     status: { type:'info', text:'Select a tool.' },
   };
 
@@ -5300,6 +5312,348 @@ function mountOperations(container) {
     ops.pauseRunning=false; ops.pausePreview=[]; render();
   }
 
+  /* =============== CSV LAUNCH =============== */
+
+  async function loadCsvAccounts() {
+    if (!ops.csvBizId) { setStatus('error','No business_id found.'); return; }
+    ops.csvLoadingAccounts=true; setStatus('info','Loading accounts...'); render();
+    try {
+      const owned  = await apiAll(`/${ops.csvBizId}/owned_ad_accounts`, {fields:'id,account_id,name,currency'});
+      const client = await apiAll(`/${ops.csvBizId}/client_ad_accounts`,{fields:'id,account_id,name,currency'});
+      const seen = new Set();
+      ops.csvAccounts = [...owned, ...client].filter(a=>{if(seen.has(a.account_id)) return false; seen.add(a.account_id); return true;})
+        .map(a=>({id:String(a.account_id), name:a.name, label:`${a.name} (${a.account_id})`}));
+      ops.csvAccounts.sort((a,b)=>a.name.localeCompare(b.name));
+      setStatus('success',`${ops.csvAccounts.length} accounts loaded.`);
+    } catch(e) { setStatus('error',e.message); }
+    finally { ops.csvLoadingAccounts=false; render(); }
+  }
+
+  /** Parse FB Ads Manager CSV export (UTF-16 LE or UTF-8, tab-separated). */
+  function parseFbCsv(buf) {
+    let text;
+    const view = new Uint8Array(buf);
+    // UTF-16 LE BOM (FF FE) or UTF-16 BE (FE FF)
+    if (view[0]===0xFF && view[1]===0xFE) text = new TextDecoder('utf-16le').decode(buf.slice(2));
+    else if (view[0]===0xFE && view[1]===0xFF) text = new TextDecoder('utf-16be').decode(buf.slice(2));
+    else if (view[0]===0xEF && view[1]===0xBB && view[2]===0xBF) text = new TextDecoder('utf-8').decode(buf.slice(3));
+    else text = new TextDecoder('utf-8').decode(buf);
+
+    // Proper CSV parse with quoted fields + tab separator
+    const rows = [];
+    let row = [], cur = '', inQ = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (inQ) {
+        if (ch === '"' && text[i+1] === '"') { cur += '"'; i++; }
+        else if (ch === '"') inQ = false;
+        else cur += ch;
+      } else {
+        if (ch === '"') inQ = true;
+        else if (ch === '\t') { row.push(cur); cur = ''; }
+        else if (ch === '\r') { /* skip */ }
+        else if (ch === '\n') { row.push(cur); cur = ''; rows.push(row); row = []; }
+        else cur += ch;
+      }
+    }
+    if (cur || row.length) { row.push(cur); rows.push(row); }
+    if (rows.length < 2) return [];
+    const header = rows[0].map(h=>String(h).trim());
+    return rows.slice(1).filter(r=>r.some(c=>c&&c.trim())).map(r=>{
+      const o = {};
+      header.forEach((h,i)=> o[h] = (r[i]||'').trim());
+      return o;
+    });
+  }
+
+  async function onCsvFile(file) {
+    try {
+      const buf = await file.arrayBuffer();
+      const rows = parseFbCsv(buf);
+      if (!rows.length) { setStatus('error','CSV is empty or invalid.'); return; }
+      ops.csvFileName = file.name;
+      ops.csvRows = rows;
+      setStatus('success',`Parsed ${rows.length} rows from ${file.name}`);
+      render();
+    } catch(e) { setStatus('error',`CSV parse error: ${e.message}`); }
+  }
+
+  /** Build campaign name from template tokens. */
+  function csvRenderTpl(tpl, ctx) {
+    return String(tpl||'').replace(/\{(\w+)\}|\$\{(\w+)\}/g, (_,a,b) => String(ctx[a||b] ?? ''));
+  }
+
+  /** Transform URL Tags — set sub2 based on mode. */
+  function csvTransformUrlTags(raw, accId, mode) {
+    if (!raw) return raw;
+    const pairs = String(raw).split('&').map(p=>{
+      const [k,...rest] = p.split('=');
+      return [k, rest.join('=')];
+    });
+    const kept = [];
+    let sawSub2 = false;
+    for (const [k,v] of pairs) {
+      if (k === 'sub2') {
+        sawSub2 = true;
+        if (mode === 'acc_id') kept.push(['sub2', accId]);
+        else if (mode === 'keep') kept.push(['sub2', v]);
+        else kept.push(['sub2', '']);
+      } else kept.push([k,v]);
+    }
+    if (!sawSub2 && mode === 'acc_id') kept.push(['sub2', accId]);
+    return kept.map(([k,v]) => v===''?`${k}=`:`${k}=${v}`).join('&');
+  }
+
+  /** Map Objective label from CSV to API enum. */
+  function csvObjectiveMap(o) {
+    const n = String(o||'').toUpperCase().trim();
+    const m = {
+      'OUTCOME SALES':'OUTCOME_SALES','SALES':'OUTCOME_SALES',
+      'OUTCOME LEADS':'OUTCOME_LEADS','LEADS':'OUTCOME_LEADS',
+      'OUTCOME TRAFFIC':'OUTCOME_TRAFFIC','TRAFFIC':'OUTCOME_TRAFFIC',
+      'OUTCOME ENGAGEMENT':'OUTCOME_ENGAGEMENT','ENGAGEMENT':'OUTCOME_ENGAGEMENT',
+      'OUTCOME AWARENESS':'OUTCOME_AWARENESS','AWARENESS':'OUTCOME_AWARENESS',
+      'OUTCOME APP PROMOTION':'OUTCOME_APP_PROMOTION','APP PROMOTION':'OUTCOME_APP_PROMOTION',
+    };
+    return m[n] || n.replace(/\s+/g,'_');
+  }
+
+  function csvBidStrategyMap(b) {
+    const n = String(b||'').toLowerCase();
+    if (n.includes('highest value')) return 'LOWEST_COST_WITHOUT_CAP';
+    if (n.includes('highest volume')) return 'LOWEST_COST_WITHOUT_CAP';
+    if (n.includes('cost cap')) return 'COST_CAP';
+    if (n.includes('bid cap')) return 'LOWEST_COST_WITH_BID_CAP';
+    return 'LOWEST_COST_WITHOUT_CAP';
+  }
+
+  /** Strip FB ID prefixes like "cg:", "c:", "a:", "o:", "tp:", "v:", "x:" */
+  function csvStripPrefix(v) {
+    return String(v||'').replace(/^[a-z]+:/,'');
+  }
+
+  async function runCsvLaunch() {
+    if (!ops.csvRows.length) { setStatus('error','Load a CSV first.'); return; }
+    const targets = [...ops.csvTargetAccIds];
+    if (!targets.length) { setStatus('error','Select at least one target account.'); return; }
+
+    // group rows by ad set (1×1×N case — single campaign + single adset + N ads)
+    const firstRow = ops.csvRows[0];
+    const adRows = ops.csvRows;
+    const adCount = adRows.length;
+
+    ops.csvRunning = true; ops.csvLog = []; ops.csvDone = 0; ops.csvTotal = targets.length;
+    const now = new Date();
+    const dateStr = String(now.getMonth()+1).padStart(2,'0') + String(now.getDate()).padStart(2,'0') + String(now.getFullYear()).slice(-2);
+
+    addLog(ops.csvLog,'info',`Launching to ${targets.length} accounts × ${adCount} ads...`);
+    render();
+
+    for (const accId of targets) {
+      const acc = ops.csvAccounts.find(a=>a.id===accId);
+      const accLabel = acc?.name || accId;
+      try {
+        // --- Campaign ---
+        const budget = firstRow['Campaign Daily Budget'] || '50';
+        const campaignName = csvRenderTpl(ops.csvCampaignNameTpl, {
+          budget, ad_count: adCount, date: dateStr, acc_id: accId,
+          source_name: firstRow['Campaign Name']||'',
+        });
+        const objective = csvObjectiveMap(firstRow['Campaign Objective']);
+        const bidStrategy = csvBidStrategyMap(firstRow['Campaign Bid Strategy']);
+        addLog(ops.csvLog,'info',`[${accLabel}] creating campaign "${campaignName}"...`);
+        const campaign = await apiFetch(`/act_${accId}/campaigns`,{method:'POST',body:{
+          name: campaignName,
+          objective,
+          status: 'PAUSED',
+          special_ad_categories: '[]',
+          buying_type: firstRow['Buying Type'] || 'AUCTION',
+          daily_budget: String(Math.round((+budget||50)*100)),
+          bid_strategy: bidStrategy,
+        }});
+        const campaignId = campaign.id;
+        addLog(ops.csvLog,'success',`[${accLabel}] ✓ campaign id=${campaignId}`);
+
+        // --- Ad Set ---
+        const adsetName = firstRow['Ad Set Name'] || 'Ad Set 1';
+        const countries = String(firstRow['Countries']||'').split(',').map(s=>s.trim()).filter(Boolean);
+        const ageMin = +firstRow['Age Min'] || 18;
+        const ageMax = +firstRow['Age Max'] || 65;
+        const gender = String(firstRow['Gender']||'').toLowerCase();
+        const genders = gender.includes('men') && !gender.includes('women') ? [1]
+                      : gender.includes('women') && !gender.includes('men') ? [2] : [1,2];
+        const publisherPlatforms = String(firstRow['Publisher Platforms']||'')
+          .split(',').map(s=>s.trim()).filter(Boolean);
+        const fbPositions = String(firstRow['Facebook Positions']||'').split(',').map(s=>s.trim()).filter(Boolean);
+        const igPositions = String(firstRow['Instagram Positions']||'').split(',').map(s=>s.trim()).filter(Boolean);
+        const devicePlatforms = String(firstRow['Device Platforms']||'').split(',').map(s=>s.trim()).filter(Boolean);
+        const pixelId = csvStripPrefix(firstRow['Optimized Conversion Tracking Pixels']);
+        const customEventType = firstRow['Optimized Event'] || 'PURCHASE';
+        const optGoal = firstRow['Optimization Goal'] || 'OFFSITE_CONVERSIONS';
+        const billingEvent = firstRow['Billing Event'] || 'IMPRESSIONS';
+
+        const targeting = {
+          geo_locations: { countries, location_types: String(firstRow['Location Types']||'home,recent').split(',').map(s=>s.trim()).filter(Boolean) },
+          age_min: ageMin, age_max: ageMax,
+          genders,
+          publisher_platforms: publisherPlatforms,
+          device_platforms: devicePlatforms,
+          targeting_automation: { advantage_audience: +(firstRow['Advantage Audience']||0) },
+        };
+        if (fbPositions.length) targeting.facebook_positions = fbPositions;
+        if (igPositions.length) targeting.instagram_positions = igPositions;
+
+        const promoted = { pixel_id: pixelId, custom_event_type: customEventType };
+
+        addLog(ops.csvLog,'info',`[${accLabel}] creating adset...`);
+        const adset = await apiFetch(`/act_${accId}/adsets`,{method:'POST',body:{
+          name: adsetName,
+          campaign_id: campaignId,
+          status: 'PAUSED',
+          optimization_goal: optGoal,
+          billing_event: billingEvent,
+          targeting: JSON.stringify(targeting),
+          promoted_object: JSON.stringify(promoted),
+          attribution_spec: firstRow['Attribution Spec'] || '[{"event_type":"CLICK_THROUGH","window_days":1}]',
+        }});
+        const adsetId = adset.id;
+        addLog(ops.csvLog,'success',`[${accLabel}] ✓ adset id=${adsetId}`);
+
+        // --- Ads ---
+        let adOk = 0, adErr = 0;
+        for (let i = 0; i < adRows.length; i++) {
+          const r = adRows[i];
+          const adName = r['Ad Name'] || `Ad ${i+1}`;
+          try {
+            const pageId = r['Link Object ID'] ? csvStripPrefix(r['Link Object ID']) : '';
+            const igId = r['Instagram Account ID'] || '';
+            const link = r['Link'] || '';
+            const videoId = r['Video ID'] ? csvStripPrefix(r['Video ID']) : '';
+            const imageHash = (r['Image Hash']||'').split(':').pop(); // strip "accid:hash"
+            const urlTagsRaw = r['URL Tags'] || '';
+            const urlTags = csvTransformUrlTags(urlTagsRaw, accId, ops.csvSub2Mode);
+            const cta = r['Call to Action'] || 'LEARN_MORE';
+
+            const objectStorySpec = { page_id: pageId };
+            if (igId) objectStorySpec.instagram_actor_id = igId;
+            if (videoId) {
+              objectStorySpec.video_data = {
+                video_id: videoId,
+                call_to_action: { type: cta, value: { link } },
+              };
+            } else if (imageHash) {
+              objectStorySpec.link_data = {
+                image_hash: imageHash,
+                link,
+                call_to_action: { type: cta, value: { link } },
+              };
+            }
+
+            const creativeBody = {
+              object_story_spec: JSON.stringify(objectStorySpec),
+            };
+            if (urlTags) creativeBody.url_tags = urlTags;
+
+            const creative = await apiFetch(`/act_${accId}/adcreatives`,{method:'POST',body:creativeBody});
+
+            await apiFetch(`/act_${accId}/ads`,{method:'POST',body:{
+              name: adName,
+              adset_id: adsetId,
+              creative: JSON.stringify({ creative_id: creative.id }),
+              status: 'PAUSED',
+            }});
+            adOk++;
+            addLog(ops.csvLog,'success',`[${accLabel}] ✓ ad "${adName}"`);
+          } catch(e) {
+            adErr++;
+            addLog(ops.csvLog,'error',`[${accLabel}] ✗ ad "${adName}": ${e.message}`);
+          }
+          await sleep(400);
+        }
+        addLog(ops.csvLog, adErr?'warning':'success', `[${accLabel}] done: ${adOk}/${adRows.length} ads`);
+      } catch(e) {
+        addLog(ops.csvLog,'error',`[${accLabel}] ✗ ${e.message}`);
+      }
+      ops.csvDone++;
+      render();
+      if (ops.csvDone < targets.length) await sleep(1500);
+    }
+    const ok = ops.csvLog.filter(l=>l.type==='success').length;
+    const err = ops.csvLog.filter(l=>l.type==='error').length;
+    setStatus(err?'error':'success',`Done. ${ok} ok / ${err} errors. All created as PAUSED.`);
+    ops.csvRunning = false; render();
+  }
+
+  function renderCsvLaunch() {
+    const accRows = ops.csvAccounts.map(a=>`
+      <label style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:5px;cursor:pointer;font-size:12px;color:var(--txt);background:${ops.csvTargetAccIds.has(a.id)?'rgba(59,130,246,.1)':''}">
+        <input type="checkbox" data-csvacc="${esc(a.id)}" ${ops.csvTargetAccIds.has(a.id)?'checked':''} style="accent-color:var(--acc)">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(a.label)}</span>
+      </label>`).join('') || '<div style="font-size:12px;color:#64748b;padding:8px">Click "Load Accounts" first.</div>';
+
+    const preview = ops.csvRows.length ? (() => {
+      const r = ops.csvRows[0];
+      return `
+        <div style="font-size:11px;color:#94a3b8;line-height:1.6;background:rgba(0,0,0,.15);padding:8px 12px;border-radius:6px;border:1px solid var(--bdr)">
+          <b style="color:#cbd5e1">Parsed ${ops.csvRows.length} ad rows.</b><br>
+          Campaign: ${esc(r['Campaign Name']||'—')} | ${esc(r['Campaign Objective']||'—')} | $${esc(r['Campaign Daily Budget']||'0')}/day<br>
+          Ad Set: ${esc(r['Ad Set Name']||'—')} | ${esc(r['Countries']||'')} | ${esc(r['Age Min']||'')}-${esc(r['Age Max']||'')} | ${esc(r['Gender']||'')}<br>
+          Pixel: ${esc(r['Optimized Conversion Tracking Pixels']||'—')} | Event: ${esc(r['Optimized Event']||'—')} | URL: ${esc(r['Link']||'—')}
+        </div>`;
+    })() : '';
+
+    const progress = ops.csvTotal ? Math.round(ops.csvDone/ops.csvTotal*100) : 0;
+    const runDisabled = ops.csvRunning||!ops.csvRows.length||!ops.csvTargetAccIds.size;
+
+    return `
+      <div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:11px;color:#cbd5e1;line-height:1.5">
+        ⚡ <b>CSV Launch:</b> загрузи FB Ads Manager export (UTF-16 LE) — создаст кампанию+адсет+объявления на каждом target аккаунте. Всё создаётся в <b>PAUSED</b>.<br>
+        <b>Видео/картинки</b> используются как есть (могут не работать на другом аккаунте — тогда ad failed, кампания и адсет создадутся).
+      </div>
+
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:flex-end">
+        <div style="flex:1;min-width:280px">
+          <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">CSV file (FB Ads Manager export)</div>
+          <input type="file" id="csv-file" accept=".csv,.tsv,.txt" style="width:100%;padding:6px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px">
+        </div>
+        <button class="ar-btn" data-opsact="csv-load-accounts" ${ops.csvLoadingAccounts?'disabled':''}>${ops.csvLoadingAccounts?'Loading…':'Load Accounts'}</button>
+      </div>
+
+      ${ops.csvFileName ? `<div style="font-size:11px;color:#22c55e;margin-bottom:8px">📄 ${esc(ops.csvFileName)}</div>` : ''}
+      ${preview}
+
+      <div style="margin:12px 0">
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Campaign Name Template — tokens: <code>{budget}</code> <code>{ad_count}</code> <code>{date}</code> <code>{acc_id}</code> <code>{source_name}</code></div>
+        <input type="text" id="csv-tpl" value="${esc(ops.csvCampaignNameTpl)}" style="width:100%;padding:7px 9px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;font-family:monospace">
+      </div>
+
+      <div style="margin:8px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <span style="font-size:11px;color:#94a3b8">URL Tag sub2:</span>
+        <label style="font-size:12px;color:var(--txt);display:flex;align-items:center;gap:4px"><input type="radio" name="csv-sub2" value="acc_id" ${ops.csvSub2Mode==='acc_id'?'checked':''}> = target account ID</label>
+        <label style="font-size:12px;color:var(--txt);display:flex;align-items:center;gap:4px"><input type="radio" name="csv-sub2" value="keep"  ${ops.csvSub2Mode==='keep'?'checked':''}> keep as in CSV</label>
+        <label style="font-size:12px;color:var(--txt);display:flex;align-items:center;gap:4px"><input type="radio" name="csv-sub2" value="empty" ${ops.csvSub2Mode==='empty'?'checked':''}> empty</label>
+      </div>
+
+      <div style="margin-top:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <div style="font-size:12px;color:var(--txt);font-weight:600">Target Accounts <span style="color:#64748b;font-weight:normal">${ops.csvTargetAccIds.size} selected</span></div>
+          <div style="display:flex;gap:5px">
+            <button class="ar-btn" data-opsact="csv-sel-all" style="padding:3px 8px;font-size:11px">All</button>
+            <button class="ar-btn" data-opsact="csv-sel-none" style="padding:3px 8px;font-size:11px">None</button>
+          </div>
+        </div>
+        <div style="max-height:200px;overflow-y:auto;border:1px solid var(--bdr);border-radius:6px;padding:4px;background:var(--bg)">${accRows}</div>
+      </div>
+
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+        <button class="ar-btn primary" data-opsact="csv-run" ${runDisabled?'disabled':''} style="flex:1">${ops.csvRunning?`Running ${ops.csvDone}/${ops.csvTotal}…`:`🚀 Launch to ${ops.csvTargetAccIds.size} accounts`}</button>
+      </div>
+      ${ops.csvTotal?`<div style="margin-top:8px;height:5px;border-radius:3px;background:var(--bdr);overflow:hidden"><div style="width:${progress}%;height:100%;background:var(--acc);transition:width .3s"></div></div>`:''}
+
+      ${ops.csvLog.length?`<div style="margin-top:12px;padding:8px 10px;border-radius:6px;background:rgba(0,0,0,.2);border:1px solid var(--bdr);max-height:220px;overflow-y:auto;font-family:monospace">${logHtml(ops.csvLog)}</div>`:''}
+    `;
+  }
+
   function renderBulkPause() {
     const previewRows = ops.pausePreview.map(i=>`
       <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--txt)">
@@ -5497,6 +5851,7 @@ function mountOperations(container) {
   /* ==================== RENDER ==================== */
   const TABS = [
     {id:'copy',     label:'📋 Bulk Copy Campaign'},
+    {id:'csv',      label:'📥 CSV Launch'},
     {id:'pause',    label:'⏸ Bulk Pause/Resume'},
     {id:'zombies',  label:'🧟 Zombie Campaigns'},
     {id:'audiences',label:'👥 Custom Audiences'},
@@ -5507,6 +5862,7 @@ function mountOperations(container) {
 
     let content = '';
     if (ops.tab==='copy')      content = renderBulkCopy();
+    if (ops.tab==='csv')       content = renderCsvLaunch();
     if (ops.tab==='pause')     content = renderBulkPause();
     if (ops.tab==='zombies')   content = renderZombies();
     if (ops.tab==='audiences') content = renderAudiences();
@@ -5538,6 +5894,22 @@ function mountOperations(container) {
     if (campSel) campSel.addEventListener('change', ()=>{ ops.copySelectedCampaignId=campSel.value; });
     container.querySelectorAll('[data-copyacc]').forEach(el=>{
       el.addEventListener('change',()=>{ const id=el.getAttribute('data-copyacc'); el.checked?ops.copyTargetAccIds.add(id):ops.copyTargetAccIds.delete(id); render(); });
+    });
+
+    /* csv launch actions */
+    sa('csv-load-accounts', loadCsvAccounts);
+    sa('csv-run', runCsvLaunch);
+    sa('csv-sel-all', ()=>{ ops.csvAccounts.forEach(a=>ops.csvTargetAccIds.add(a.id)); render(); });
+    sa('csv-sel-none', ()=>{ ops.csvTargetAccIds.clear(); render(); });
+    const csvFile = container.querySelector('#csv-file');
+    if (csvFile) csvFile.addEventListener('change', (e)=>{ const f=e.target.files?.[0]; if(f) onCsvFile(f); });
+    const csvTpl = container.querySelector('#csv-tpl');
+    if (csvTpl) csvTpl.addEventListener('input', ()=>{ ops.csvCampaignNameTpl = csvTpl.value; });
+    container.querySelectorAll('input[name="csv-sub2"]').forEach(el=>{
+      el.addEventListener('change', ()=>{ if (el.checked) ops.csvSub2Mode = el.value; });
+    });
+    container.querySelectorAll('[data-csvacc]').forEach(el=>{
+      el.addEventListener('change', ()=>{ const id=el.getAttribute('data-csvacc'); el.checked?ops.csvTargetAccIds.add(id):ops.csvTargetAccIds.delete(id); render(); });
     });
 
     /* pause actions */
