@@ -1762,16 +1762,15 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
   function execChangeBudgetPct(etype, pct, limitCents) {
     if (etype === 'AD') return null;
     return {
-      execution_type: etype === 'CAMPAIGN' ? 'CHANGE_CAMPAIGN_BUDGET' : 'CHANGE_BUDGET',
+      execution_type: etype === 'CAMPAIGN' ? 'CHANGE_DAILY_BUDGET' : 'CHANGE_BUDGET',
       execution_options: [{ field:'change_spec', operator:'EQUAL', value: { amount:+pct, unit:'PERCENTAGE', ...(limitCents ? { limit:limitCents } : {}) } }]
     };
   }
 
-  // FIX: consistent indentation
   function execIncreaseBudgetByAmount(etype, addCents, maxCapCents) {
     if (etype === 'AD') return null;
     return {
-      execution_type: etype === 'CAMPAIGN' ? 'CHANGE_CAMPAIGN_BUDGET' : 'CHANGE_BUDGET',
+      execution_type: etype === 'CAMPAIGN' ? 'CHANGE_DAILY_BUDGET' : 'CHANGE_BUDGET',
       execution_options: [{
         field: 'change_spec', operator: 'EQUAL',
         value: { amount: +addCents, unit: 'ACCOUNT_CURRENCY', ...(maxCapCents != null ? { limit: +maxCapCents } : {}) }
