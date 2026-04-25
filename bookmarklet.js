@@ -2298,7 +2298,7 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
             { field:'offsite_conversion.fb_pixel_lead',     operator:'GREATER_THAN',   value: Math.max(0, N-1) },
             presetToday
           ]),
-          exec, schedSemi
+          exec, { schedule_type: 'HOURLY' }
         );
       }
     }
