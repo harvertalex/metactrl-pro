@@ -2279,7 +2279,6 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
           kw([
             { field:'entity_type',                          operator:'EQUAL',          value: artype },
             { field:'offsite_conversion.fb_pixel_lead',     operator:'GREATER_THAN',   value: Math.max(0, N-1) },
-            { field:'time_since_last_budget_increase',      operator:'GREATER_THAN',   value: 24 },
             presetToday
           ]),
           exec, schedSemi
