@@ -1395,7 +1395,8 @@ function mountGenerator(container) {
       ACCOUNTS_CACHE.forEach(a => {
         const o = document.createElement('option');
         o.value = a.id;
-        o.textContent = `${a.status === 1 ? '🟢' : '🔴'} ${a.id} — ${a.name} [${a.ruleCount} rules] ${a.currency}`;
+        o.textContent = `${a.status === 1 ? '● ' : a.status === 2 || a.status === 101 ? '● ' : '● '}${a.name} (${a.id}) [${a.ruleCount}r] ${a.currency}`;
+        o.style.color = a.status === 1 ? '#22c55e' : (a.status === 2 || a.status === 101) ? '#ef4444' : '#f59e0b';
         accList.appendChild(o);
       });
       accList.style.display = ACCOUNTS_CACHE.length ? 'block' : 'none';
@@ -2469,8 +2470,8 @@ function mountManager(container) {
     ACCOUNTS_CACHE.forEach(a => {
       const o = document.createElement('option');
       o.value = a.id;
-      const statusBadge = a.status === 1 ? '🟢' : '🔴';
-      o.textContent = `${statusBadge} ${a.id} — ${a.name} [${a.ruleCount} rules] ${a.currency}`;
+      o.textContent = `● ${a.name} (${a.id}) [${a.ruleCount}r] ${a.currency}`;
+      o.style.color = a.status === 1 ? '#22c55e' : (a.status === 2 || a.status === 101) ? '#ef4444' : '#f59e0b';
       sel.appendChild(o);
     });
     host.appendChild(sel);
@@ -2523,7 +2524,8 @@ function mountManager(container) {
     ACCOUNTS_CACHE.forEach(a => {
       const o = document.createElement('option');
       o.value = a.id;
-      o.textContent = `${a.id} — ${a.name} [${a.ruleCount}] ${a.currency}`;
+      o.textContent = `● ${a.name} (${a.id}) [${a.ruleCount}r] ${a.currency}`;
+      o.style.color = a.status === 1 ? '#22c55e' : (a.status === 2 || a.status === 101) ? '#ef4444' : '#f59e0b';
       sel.appendChild(o);
     });
     host.appendChild(sel);
@@ -3648,6 +3650,12 @@ function statusBadge(code) {
   return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:' + bg + ';color:' + color + '">' + label + '</span>';
 }
 
+function accStatusDot(code) {
+  const color = code === 1 ? '#22c55e' : (code === 2 || code === 101) ? '#ef4444' : code ? '#f59e0b' : '#64748b';
+  const title = ACC_STATUS[code] || (code ? 'Status ' + code : '');
+  return '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:' + color + ';flex-shrink:0;vertical-align:middle;margin-right:2px" title="' + title + '"></span>';
+}
+
 function verBadge(v) {
   const ok    = v === 'verified';
   const color = ok ? '#22c55e' : '#94a3b8';
@@ -4448,11 +4456,11 @@ function mountPixelManager(container) {
   async function fetchAccounts(bizId) {
     const rows = [];
     for (const edge of ['owned_ad_accounts','client_ad_accounts']) {
-      try { rows.push(...await gFetchAll(`/${bizId}/${edge}`, { fields: 'id,account_id,name', limit: 200 })); } catch {}
+      try { rows.push(...await gFetchAll(`/${bizId}/${edge}`, { fields: 'id,account_id,name,account_status', limit: 200 })); } catch {}
     }
     return uniqBy(rows.map(i => {
       const rawId = String(i?.account_id||i?.id||'').replace(/^act_/, '');
-      return { id: rawId, apiId: String(i?.id||''), name: i?.name||'Untitled', label: `${i?.name||'Untitled'} (${rawId})` };
+      return { id: rawId, apiId: String(i?.id||''), name: i?.name||'Untitled', status: i?.account_status, label: `${i?.name||'Untitled'} (${rawId})` };
     }).filter(i => i.id), i => i.id).sort((a,b) => a.name.localeCompare(b.name));
   }
 
@@ -4752,7 +4760,7 @@ function mountPixelManager(container) {
     const alreadyConn = pxState.connectedAssets.some(a => a.id === pxState.selectedAccountId);
     const shareDisabled = pxState.sharing || pxState.loadingContext || !pxState.selectedPixelId || !pxState.selectedAccountId || alreadyConn;
     const pixOpts = pxState.pixels.map(p => `<option value="${esc(p.id)}" ${p.id===pxState.selectedPixelId?'selected':''}>${esc(p.label)}</option>`).join('') || '<option value="">No pixels</option>';
-    const accOpts = pxState.accounts.map(a => `<option value="${esc(a.id)}" ${a.id===pxState.selectedAccountId?'selected':''}>${esc(a.label)}</option>`).join('') || '<option value="">No accounts</option>';
+    const accOpts = pxState.accounts.map(a => { const c = a.status===1?'#22c55e':(a.status===2||a.status===101)?'#ef4444':a.status?'#f59e0b':''; return `<option value="${esc(a.id)}" ${a.id===pxState.selectedAccountId?'selected':''} style="color:${c}">● ${esc(a.label)}</option>`; }).join('') || '<option value="">No accounts</option>';
 
     let connHtml = '';
     if (pxState.loadingConnectedAssets) connHtml = `<div style="font-size:12px;color:#64748b;padding:6px 0">Loading...</div>`;
@@ -4805,12 +4813,16 @@ function mountPixelManager(container) {
       </label>
     `).join('') || '<div style="font-size:12px;color:#64748b;padding:8px">No pixels loaded. Click Scan first.</div>';
 
-    const accRows = pxState.accounts.map(a => `
+    const accRows = pxState.accounts.map(a => {
+      const stDot = a.status===1?'#22c55e':(a.status===2||a.status===101)?'#ef4444':a.status?'#f59e0b':'#64748b';
+      const stTitle = ACC_STATUS[a.status]||(a.status?'Status '+a.status:'');
+      return `
       <label style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:5px;cursor:pointer;font-size:12px;color:var(--txt);background:${pxState.bulkAccountIds.has(a.id)?'rgba(59,130,246,.1)':''}">
         <input type="checkbox" data-pxbulk="account" data-id="${esc(a.id)}" ${pxState.bulkAccountIds.has(a.id)?'checked':''} style="accent-color:var(--acc)">
+        <span style="width:7px;height:7px;border-radius:50%;background:${stDot};flex-shrink:0" title="${stTitle}"></span>
         <span title="${esc(a.label)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(a.label)}</span>
-      </label>
-    `).join('') || '<div style="font-size:12px;color:#64748b;padding:8px">No accounts. Load a BM first.</div>';
+      </label>`;
+    }).join('') || '<div style="font-size:12px;color:#64748b;padding:8px">No accounts. Load a BM first.</div>';
 
     const logHtml = pxState.bulkLog.slice(-60).map(l => `
       <div style="font-size:11px;color:${logColors[l.type]||logColors.info};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
@@ -5151,8 +5163,8 @@ function mountOperations(container) {
   async function loadCopyAccounts() {
     ops.copyLoadingAccounts = true; setStatus('info','Loading accounts across all BMs...'); render();
     try {
-      const raw = await fetchAllAccountsFlat('id,account_id,name');
-      ops.copyAccounts = raw.map(a=>({id:a._id, name:a._name, label:`${a._name} (${a._id})`}))
+      const raw = await fetchAllAccountsFlat('id,account_id,name,account_status');
+      ops.copyAccounts = raw.map(a=>({id:a._id, name:a._name, status:a.account_status, label:`${a._name} (${a._id})`}))
         .sort((a,b)=>a.name.localeCompare(b.name));
       ops.copySrcAccId = ops.copyAccounts[0]?.id||'';
       setStatus('success',`${ops.copyAccounts.length} accounts loaded.`);
@@ -5234,11 +5246,16 @@ function mountOperations(container) {
   function renderBulkCopy() {
     const srcOpts = ops.copyAccounts.map(a=>`<option value="${esc(a.id)}" ${a.id===ops.copySrcAccId?'selected':''}>${esc(a.label)}</option>`).join('');
     const campaignOpts = ops.copyCampaigns.map(c=>`<option value="${esc(c.id)}" ${c.id===ops.copySelectedCampaignId?'selected':''}>[${esc(c.status)}] ${esc(c.name)} — ${esc(c.budget)}</option>`).join('');
-    const tgtRows = ops.copyAccounts.filter(a=>a.id!==ops.copySrcAccId).map(a=>`
+    const tgtRows = ops.copyAccounts.filter(a=>a.id!==ops.copySrcAccId).map(a=>{
+      const stDot = a.status===1?'#22c55e':(a.status===2||a.status===101)?'#ef4444':a.status?'#f59e0b':'#64748b';
+      const stTitle = ACC_STATUS[a.status]||(a.status?'Status '+a.status:'');
+      return `
       <label style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:5px;cursor:pointer;font-size:12px;color:var(--txt);background:${ops.copyTargetAccIds.has(a.id)?'rgba(59,130,246,.1)':''}">
         <input type="checkbox" data-copyacc="${esc(a.id)}" ${ops.copyTargetAccIds.has(a.id)?'checked':''} style="accent-color:var(--acc)">
+        <span style="width:7px;height:7px;border-radius:50%;background:${stDot};flex-shrink:0" title="${stTitle}"></span>
         <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(a.label)}</span>
-      </label>`).join('') || '<div style="font-size:12px;color:#64748b;padding:8px">Load accounts first.</div>';
+      </label>`;
+    }).join('') || '<div style="font-size:12px;color:#64748b;padding:8px">Load accounts first.</div>';
 
     const progress = ops.copyTotal ? Math.round(ops.copyDone/ops.copyTotal*100) : 0;
     const copyDisabled = ops.copyRunning||ops.copyLoadingCampaigns||!ops.copySelectedCampaignId||!ops.copyTargetAccIds.size;
