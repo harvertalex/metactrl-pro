@@ -1321,7 +1321,7 @@ function mountGenerator(container) {
     ['__group__', '💰 Budget Scaling'],
     ['Budget: Increase budget by amount after N purchases',   'Scale budget by fixed amount when purchase count hits N', false],
     ['Budget: Boost % after N purchases with good CPP',       'Scale budget % when N+ purchases arrive at acceptable CPP', true],
-    ['Budget: Boost % after N leads with good CPL',           'Scale budget % once per day when N+ leads arrive — CAMPAIGN only', true],
+    ['Budget: Boost % after N leads with good CPL',           'Scale budget % every ~12h when N+ leads arrive (FB min interval for budget rules) — CAMPAIGN only', true],
     ['ROAS: Boost budget if high',                            'Boost budget at 09:00 & 12:00 when ROAS exceeds high threshold', false],
     ['ROAS: Cut budget if low',                               'Cut budget at 13:00 when ROAS is below low threshold', false],
     // 📊 ROAS Pause / Unpause
@@ -2292,7 +2292,7 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
       const exec = execChangeBudgetPct(artype, pct, cap || undefined);
       if (exec) {
         await addRule(
-          `BUDGET +${pct}% after ${N} lead(s) — 1×/day${cap ? ` (cap ${(cap/100).toFixed(2)})` : ''}`,
+          `BUDGET +${pct}% after ${N} lead(s)${cap ? ` (cap ${(cap/100).toFixed(2)})` : ''}`,
           kw([
             { field:'entity_type',                          operator:'EQUAL',          value: artype },
             { field:'offsite_conversion.fb_pixel_lead',     operator:'GREATER_THAN',   value: Math.max(0, N-1) },
