@@ -1422,7 +1422,15 @@ function mountGenerator(container) {
   const progressBar = document.createElement('div');
   progressBar.className = 'ar-progress-bar';
   progress.appendChild(progressBar);
+  const clearCb = document.createElement('input');
+  clearCb.type = 'checkbox'; clearCb.id = 'ar-clear-existing';
+  const clearLbl = document.createElement('label');
+  clearLbl.htmlFor = 'ar-clear-existing';
+  clearLbl.textContent = 'Delete existing rules';
+  clearLbl.style.cssText = 'font-size:12px;cursor:pointer;user-select:none';
   actRow.appendChild(btnGen);
+  actRow.appendChild(clearCb);
+  actRow.appendChild(clearLbl);
   actRow.appendChild(progress);
   container.appendChild(actRow);
 
@@ -1651,6 +1659,8 @@ function mountGenerator(container) {
         }
       };
 
+      ctx.clearExisting = clearCb.checked;
+
       // Collect target accounts: selected from list, or fallback to current
       const selectedAccIds = Array.from(accList.selectedOptions).map(o => o.value);
       const targetAccIds = selectedAccIds.length ? selectedAccIds : [null]; // null = current account
@@ -1706,10 +1716,13 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
   }
   accountId = String(accountId).replace('act_', '');
 
-  const existing = await Rules.list(accountId);
-  const cnt = existing?.data?.length || 0;
-  if (cnt > 0 && confirm(`Clear ${cnt} existing autorules first?`)) {
-    await Rules.clear(accountId, log);
+  if (ctx.clearExisting) {
+    const existing = await Rules.list(accountId);
+    const cnt = existing?.data?.length || 0;
+    if (cnt > 0) {
+      log(`🗑 Deleting ${cnt} existing rules…`, 'warning');
+      await Rules.clear(accountId, log);
+    }
   }
 
   const {
