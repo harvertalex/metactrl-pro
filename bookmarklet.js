@@ -1247,8 +1247,6 @@ function mountGenerator(container) {
   let boostLeadCountInput = field(pbGrid, 'Min leads to trigger', inp('5', 'e.g. 5'));
   let boostLeadAmtInput   = field(pbGrid, 'Increase budget by %', inp('20', 'e.g. 20'));
   let boostLeadCapInput   = field(pbGrid, 'Max daily budget cap (currency)', inp('200.00', 'e.g. 200.00'));
-  let boostLeadOnInput    = field(pbGrid, 'Check window — from (HH:MM)', inp('07:00', 'e.g. 07:00'), 'Rule checks every 30 min within this window');
-  let boostLeadOffInput   = field(pbGrid, 'Check window — until (HH:MM)', inp('23:00', 'e.g. 23:00'));
 
   // ROAS Budget Boost/Cut
   const roasBudScaleHdr = document.createElement('div');
@@ -1450,7 +1448,6 @@ function mountGenerator(container) {
     budgetExhaustion: budgetExhaustionInput,
     boostPurchCount: boostPurchCountInput, boostPurchCap: boostPurchCapInput, boostPurchPct: boostPurchAmtInput,
     boostLeadCount: boostLeadCountInput, boostLeadCap: boostLeadCapInput, boostLeadPct: boostLeadAmtInput,
-    boostLeadOn: boostLeadOnInput, boostLeadOff: boostLeadOffInput,
     minSpendCTR: minSpendCTRInput, minSpendFreq: minSpendFreqInput, minImpressionsFreq: minImpressionsFreqInput
   };
 
@@ -1621,8 +1618,6 @@ function mountGenerator(container) {
           boostLeadCount:        Math.max(1, parseInt(boostLeadCountInput.value||'5', 10) || 5),
           boostLeadCap:          Math.round(+(boostLeadCapInput.value||'200') * 100),
           boostLeadPct:          Math.max(1, +(boostLeadAmtInput.value||'20')),
-          boostLeadOnMinute:     parseTimeToMinutes(boostLeadOnInput.value),
-          boostLeadOffMinute:    parseTimeToMinutes(boostLeadOffInput.value),
           killMinute:            parseTimeToMinutes(killTimeInput.value),
           morningResetMinute:    parseTimeToMinutes(morningResetTimeInput.value),
           morningResetWindow:    mrWindowSel.value,
@@ -2294,20 +2289,16 @@ async function runGenerator(ctx, log = (() => {}), onProgress = (() => {})) {
       const N   = Math.max(1, protection.boostLeadCount || 5);
       const pct = protection.boostLeadPct || 20;
       const cap = protection.boostLeadCap || null;
-      const onMin  = protection.boostLeadOnMinute  ?? parseTimeToMinutes('07:00');
-      const offMin = protection.boostLeadOffMinute ?? parseTimeToMinutes('23:00');
       const exec = execChangeBudgetPct(artype, pct, cap || undefined);
       if (exec) {
-        const onStr  = minutesToTimeStr(onMin);
-        const offStr = minutesToTimeStr(offMin);
         await addRule(
-          `BUDGET +${pct}% after ${N} lead(s) ${onStr}–${offStr}${cap ? ` (cap ${(cap/100).toFixed(2)})` : ''}`,
+          `BUDGET +${pct}% after ${N} lead(s)${cap ? ` (cap ${(cap/100).toFixed(2)})` : ''}`,
           kw([
             { field:'entity_type',                          operator:'EQUAL',          value: artype },
             { field:'offsite_conversion.fb_pixel_lead',     operator:'GREATER_THAN',   value: Math.max(0, N-1) },
             presetToday
           ]),
-          exec, semiHourlyWindow(onMin, offMin)
+          exec, schedSemi
         );
       }
     }
