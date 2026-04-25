@@ -3381,7 +3381,7 @@ function mountAnalytics(container) {
     const wctr  = d.website_ctr || [];
     const oc    = d.outbound_clicks || [];
     const ua    = d.unique_actions || [];
-    const ilc   = d.inline_link_clicks || [];
+
     const v3s   = d.video_thruplay_watched_actions || [];
     const v25   = d.video_p25_watched_actions || [];
     const v50   = d.video_p50_watched_actions || [];
@@ -3397,7 +3397,7 @@ function mountAnalytics(container) {
     const v75val     = v75.find(x => x.action_type === 'video_view')?.value    || '';
     const v100val    = v100.find(x => x.action_type === 'video_view')?.value   || '';
     const vavgval    = vavg.find(x => x.action_type === 'video_view')?.value   || '';
-    const inlineClk  = ilc.find(x => x.action_type === 'link_click')?.value   || d.inline_link_clicks || '';
+    const inlineClk  = d.inline_link_clicks || '';
     const inlineCTR  = d.inline_link_click_ctr || '';
     const uniqueClk  = d.unique_clicks || '';
     const uniqueCTR  = d.unique_ctr || '';
