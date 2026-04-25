@@ -5335,11 +5335,11 @@ function mountOperations(container) {
     if (!ops.csvBizId) { setStatus('error','No business_id found.'); return; }
     ops.csvLoadingAccounts=true; setStatus('info','Loading accounts...'); render();
     try {
-      const owned  = await apiAll(`/${ops.csvBizId}/owned_ad_accounts`, {fields:'id,account_id,name,currency'});
-      const client = await apiAll(`/${ops.csvBizId}/client_ad_accounts`,{fields:'id,account_id,name,currency'});
+      const owned  = await apiAll(`/${ops.csvBizId}/owned_ad_accounts`, {fields:'id,account_id,name,currency,account_status'});
+      const client = await apiAll(`/${ops.csvBizId}/client_ad_accounts`,{fields:'id,account_id,name,currency,account_status'});
       const seen = new Set();
       ops.csvAccounts = [...owned, ...client].filter(a=>{if(seen.has(a.account_id)) return false; seen.add(a.account_id); return true;})
-        .map(a=>({id:String(a.account_id), name:a.name, label:`${a.name} (${a.account_id})`}));
+        .map(a=>({id:String(a.account_id), name:a.name, status:a.account_status, label:`${a.name} (${a.account_id})`}));
       ops.csvAccounts.sort((a,b)=>a.name.localeCompare(b.name));
       setStatus('success',`${ops.csvAccounts.length} accounts loaded.`);
     } catch(e) { setStatus('error',e.message); }
@@ -5613,11 +5613,16 @@ function mountOperations(container) {
   }
 
   function renderCsvLaunch() {
-    const accRows = ops.csvAccounts.map(a=>`
+    const accRows = ops.csvAccounts.map(a=>{
+      const stDot = a.status===1 ? '#22c55e' : (a.status===2||a.status===101) ? '#ef4444' : a.status ? '#f59e0b' : '#64748b';
+      const stTitle = ACC_STATUS[a.status] || (a.status ? 'Status '+a.status : '');
+      return `
       <label style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:5px;cursor:pointer;font-size:12px;color:var(--txt);background:${ops.csvTargetAccIds.has(a.id)?'rgba(59,130,246,.1)':''}">
         <input type="checkbox" data-csvacc="${esc(a.id)}" ${ops.csvTargetAccIds.has(a.id)?'checked':''} style="accent-color:var(--acc)">
+        <span style="width:7px;height:7px;border-radius:50%;background:${stDot};flex-shrink:0" title="${stTitle}"></span>
         <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(a.label)}</span>
-      </label>`).join('') || '<div style="font-size:12px;color:#64748b;padding:8px">Click "Load Accounts" first.</div>';
+      </label>`;
+    }).join('') || '<div style="font-size:12px;color:#64748b;padding:8px">Click "Load Accounts" first.</div>';
 
     const preview = ops.csvRows.length ? (() => {
       const r = ops.csvRows[0];
