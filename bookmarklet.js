@@ -5051,26 +5051,30 @@ function mountOperations(container) {
     setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
   }
 
-  /* ---- shared account cache (loaded once, reused across all tools) ---- */
+  /* ---- shared account cache ---- */
   let OPS_ACCOUNTS_CACHE = [];
   let OPS_ACCOUNTS_LOADING = false;
 
-  async function ensureAccounts() {
-    if (OPS_ACCOUNTS_CACHE.length) return OPS_ACCOUNTS_CACHE;
-    if (OPS_ACCOUNTS_LOADING) {
-      while (OPS_ACCOUNTS_LOADING) await sleep(100);
-      return OPS_ACCOUNTS_CACHE;
-    }
+  function parseAccounts(items) {
+    const seen = new Set();
+    return items
+      .filter(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); if(!id||seen.has(id))return false; seen.add(id); return true; })
+      .map(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); return {id, name:a.name||'Untitled', status:a.account_status, currency:a.currency||'USD', label:`${a.name||'Untitled'} (${id})`}; })
+      .sort((a,b)=>a.name.localeCompare(b.name));
+  }
+
+  async function loadOpsAccounts(force) {
+    if (OPS_ACCOUNTS_LOADING) return;
+    if (!force && OPS_ACCOUNTS_CACHE.length) { setStatus('success', `${OPS_ACCOUNTS_CACHE.length} accounts loaded.`); render(); return; }
     OPS_ACCOUNTS_LOADING = true;
+    setStatus('info','Loading accounts...');
+    render();
     try {
       const items = await apiAll('/me/adaccounts', {fields:'id,account_id,name,currency,account_status', limit:200});
-      const seen = new Set();
-      OPS_ACCOUNTS_CACHE = items
-        .filter(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); if(!id||seen.has(id))return false; seen.add(id); return true; })
-        .map(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); return {id, name:a.name||'Untitled', status:a.account_status, currency:a.currency||'USD', label:`${a.name||'Untitled'} (${id})`}; })
-        .sort((a,b)=>a.name.localeCompare(b.name));
-    } finally { OPS_ACCOUNTS_LOADING = false; }
-    return OPS_ACCOUNTS_CACHE;
+      OPS_ACCOUNTS_CACHE = parseAccounts(items);
+      setStatus('success', `${OPS_ACCOUNTS_CACHE.length} accounts loaded.`);
+    } catch(e) { setStatus('error', e.message); }
+    finally { OPS_ACCOUNTS_LOADING = false; render(); }
   }
 
   /* ---- sub-tab state ---- */
@@ -5102,9 +5106,7 @@ function mountOperations(container) {
 
     /* csv launch */
     csvAccFilter: '',
-    csvAccounts: [],
     csvTargetAccIds: new Set(),
-    csvLoadingAccounts: false,
     csvFileName: '',
     csvRows: [],
     csvCampaignNameTpl: 'COLD TEST | CBO ${budget}/d | 1as{ad_count}ads | {date} | {acc_id}',
@@ -5169,14 +5171,7 @@ function mountOperations(container) {
   }
 
   /* ==================== BULK PAUSE / RESUME ==================== */
-  async function loadPauseAccounts() {
-    ops.pauseLoadingAccounts=true; setStatus('info','Loading accounts...'); render();
-    try {
-      await ensureAccounts();
-      setStatus('success',`${OPS_ACCOUNTS_CACHE.length} accounts loaded.`);
-    } catch(e) { setStatus('error',e.message); }
-    finally { ops.pauseLoadingAccounts=false; render(); }
-  }
+  async function loadPauseAccounts() { await loadOpsAccounts(); }
 
   async function buildPausePreview() {
     const accounts = OPS_ACCOUNTS_CACHE;
@@ -5218,14 +5213,7 @@ function mountOperations(container) {
 
   /* =============== CSV LAUNCH =============== */
 
-  async function loadCsvAccounts() {
-    ops.csvLoadingAccounts=true; setStatus('info','Loading accounts...'); render();
-    try {
-      ops.csvAccounts = await ensureAccounts();
-      setStatus('success',`${ops.csvAccounts.length} accounts loaded.`);
-    } catch(e) { setStatus('error',e.message); }
-    finally { ops.csvLoadingAccounts=false; render(); }
-  }
+  async function loadCsvAccounts() { await loadOpsAccounts(); }
 
   /** Parse FB Ads Manager CSV export (UTF-16 LE or UTF-8, tab-separated). */
   function parseFbCsv(buf) {
@@ -5507,11 +5495,11 @@ function mountOperations(container) {
         <span style="width:7px;height:7px;border-radius:50%;background:${stDot};flex-shrink:0" title="${stTitle}"></span>
         <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(a.label)}</span>
       </label>`;
-    }).join('') || (ops.csvLoadingAccounts
-      ? '<div style="font-size:12px;color:#64748b;padding:8px">Loading accounts…</div>'
+    }).join('') || (OPS_ACCOUNTS_LOADING
+      ? '<div style="font-size:12px;color:#64748b;padding:8px">⏳ Loading accounts…</div>'
       : allAccounts.length
         ? '<div style="font-size:12px;color:#64748b;padding:8px">No accounts match filter.</div>'
-        : '<div style="font-size:12px;color:#64748b;padding:8px">Loading accounts…</div>');
+        : '<div style="font-size:12px;color:#64748b;padding:8px">Click "↻ Reload" to load accounts.</div>');
 
     const preview = ops.csvRows.length ? (() => {
       const r = ops.csvRows[0];
@@ -5578,6 +5566,7 @@ function mountOperations(container) {
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
           <div style="font-size:12px;color:var(--txt);font-weight:600">Target Accounts <span style="color:#64748b;font-weight:normal">${ops.csvTargetAccIds.size} selected${allAccounts.length?` / ${allAccounts.length}`:''}</span></div>
           <div style="display:flex;gap:5px">
+            <button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="csv-load-accounts" ${OPS_ACCOUNTS_LOADING?'disabled':''}>${OPS_ACCOUNTS_LOADING?'Loading…':'↻ Reload'}</button>
             <button class="ar-btn" data-opsact="csv-sel-all" style="padding:3px 8px;font-size:11px">All</button>
             <button class="ar-btn" data-opsact="csv-sel-none" style="padding:3px 8px;font-size:11px">None</button>
           </div>
@@ -5653,7 +5642,8 @@ function mountOperations(container) {
   async function loadZombies() {
     ops.zombieLoading=true; ops.zombies=[]; setStatus('info','Scanning for zombie campaigns...'); render();
     try {
-      const accounts = await ensureAccounts();
+      if (!OPS_ACCOUNTS_CACHE.length) await loadOpsAccounts();
+      const accounts = OPS_ACCOUNTS_CACHE;
 
       const cutoff = Date.now() - ops.zombieDays * 86400000;
       const minSpendCents = ops.zombieMinSpend * 100;
@@ -5759,7 +5749,8 @@ function mountOperations(container) {
   async function loadAudiences() {
     ops.audLoading=true; ops.audList=[]; setStatus('info','Loading audiences...'); render();
     try {
-      const accounts = await ensureAccounts();
+      if (!OPS_ACCOUNTS_CACHE.length) await loadOpsAccounts();
+      const accounts = OPS_ACCOUNTS_CACHE;
       const allAud=[];
       await Promise.all(accounts.map(async acc=>{
         try {
@@ -5853,7 +5844,7 @@ function mountOperations(container) {
     const sa = (id, fn) => { const el=container.querySelector(`[data-opsact="${id}"]`); if(el) el.addEventListener('click', fn); };
 
     /* csv launch actions */
-    sa('csv-load-accounts', loadCsvAccounts);
+    sa('csv-load-accounts', ()=>loadOpsAccounts(true));
     sa('csv-run', runCsvLaunch);
     sa('csv-sel-all', ()=>{ OPS_ACCOUNTS_CACHE.forEach(a=>ops.csvTargetAccIds.add(a.id)); render(); });
     sa('csv-sel-none', ()=>{ ops.csvTargetAccIds.clear(); render(); });
@@ -5876,7 +5867,7 @@ function mountOperations(container) {
     });
 
     /* pause actions */
-    sa('pause-load-accounts', loadPauseAccounts);
+    sa('pause-load-accounts', ()=>loadOpsAccounts(true));
     sa('pause-preview', buildPausePreview);
     sa('pause-run', runBulkPause);
     sa('pause-sel-all', ()=>{ ops.pausePreviewSel=new Set(ops.pausePreview.map(i=>i.id)); render(); });
@@ -5911,9 +5902,9 @@ function mountOperations(container) {
     if (audSearch) audSearch.addEventListener('input', ()=>{ ops.audSearch=audSearch.value; render(); });
   }
 
-  /* auto-load accounts when Ops panel opens */
-  ensureAccounts().then(()=>render()).catch(()=>{});
   render();
+  /* auto-load accounts in background — render() will re-fire when done */
+  loadOpsAccounts();
 }
 
 /* -------------------- UI: AUTORULES -------------------- */
