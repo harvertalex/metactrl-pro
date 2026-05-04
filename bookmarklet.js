@@ -5053,19 +5053,7 @@ function mountOperations(container) {
 
   /* ---- sub-tab state ---- */
   const ops = {
-    tab: 'copy',       /* copy | pause | zombies | audiences */
-
-    /* bulk copy */
-    copyBizId: getBizId(),
-    copySrcAccId: '',
-    copyCampaigns: [],
-    copyTargetAccIds: new Set(),
-    copyAccounts: [],
-    copyLoadingCampaigns: false,
-    copyLoadingAccounts: false,
-    copyRunning: false,
-    copyLog: [], copyDone: 0, copyTotal: 0,
-    copySelectedCampaignId: '',
+    tab: 'csv',        /* csv | pause | zombies | audiences */
 
     /* pause/resume */
     pauseBizId: getBizId(),
@@ -5157,149 +5145,6 @@ function mountOperations(container) {
       _id: String(a.account_id||a.id||'').replace(/^act_/,''),
       _name: a.name||'Untitled',
     }));
-  }
-
-  /* ==================== BULK COPY CAMPAIGN ==================== */
-  async function loadCopyAccounts() {
-    ops.copyLoadingAccounts = true; setStatus('info','Loading accounts...'); render();
-    try {
-      const items = await apiAll('/me/adaccounts', {fields:'id,account_id,name,account_status', limit:200});
-      const seen = new Set();
-      ops.copyAccounts = items
-        .filter(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); if(!id||seen.has(id))return false; seen.add(id); return true; })
-        .map(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); return {id, name:a.name||'Untitled', status:a.account_status, label:`${a.name||'Untitled'} (${id})`}; })
-        .sort((a,b)=>a.name.localeCompare(b.name));
-      ops.copySrcAccId = ops.copyAccounts[0]?.id||'';
-      setStatus('success',`${ops.copyAccounts.length} accounts loaded.`);
-    } catch(e) { setStatus('error',e.message); }
-    finally { ops.copyLoadingAccounts=false; render(); }
-  }
-
-  async function loadCopyCampaigns() {
-    if (!ops.copySrcAccId) return;
-    ops.copyLoadingCampaigns=true; ops.copyCampaigns=[]; setStatus('info','Loading campaigns...'); render();
-    try {
-      const campaigns = await apiAll(`/act_${ops.copySrcAccId}/campaigns`,{
-        fields:'id,name,status,objective,daily_budget,lifetime_budget,special_ad_categories',limit:200
-      });
-      ops.copyCampaigns = campaigns.map(c=>({
-        id:String(c.id), name:c.name||'Untitled',
-        status:c.status, objective:c.objective||'',
-        special_ad_categories: c.special_ad_categories||[],
-        budget: c.daily_budget ? `$${(+c.daily_budget/100).toFixed(2)}/day` : c.lifetime_budget ? `$${(+c.lifetime_budget/100).toFixed(2)} total` : '—',
-      })).sort((a,b)=>a.name.localeCompare(b.name));
-      ops.copySelectedCampaignId = ops.copyCampaigns[0]?.id||'';
-      setStatus('success',`${ops.copyCampaigns.length} campaigns loaded.`);
-    } catch(e) { setStatus('error',e.message); }
-    finally { ops.copyLoadingCampaigns=false; render(); }
-  }
-
-  async function runBulkCopy() {
-    const targetIds = [...ops.copyTargetAccIds];
-    if (!ops.copySelectedCampaignId) { setStatus('error','Select a campaign to copy.'); return; }
-    if (!targetIds.length) { setStatus('error','Select at least one target account.'); return; }
-    ops.copyRunning=true; ops.copyLog=[]; ops.copyDone=0; ops.copyTotal=targetIds.length;
-    addLog(ops.copyLog,'info',`Copying campaign to ${targetIds.length} accounts...`);
-    for (const accId of targetIds) {
-      const acc = ops.copyAccounts.find(a=>a.id===accId);
-      try {
-        // Step 1: kick off async copy
-        const r = await apiFetch(`/${ops.copySelectedCampaignId}/copies`,{method:'POST',body:{
-          deep_copy: '1',
-          status_override: 'PAUSED',
-          destination_ad_account_id: accId,
-          async: 'true',
-        }});
-        const sessionId = r?.async_session_id || r?.id;
-        if (!sessionId) throw new Error('No async_session_id returned');
-        // Step 2: poll until complete
-        let done = false, attempts = 0;
-        while (!done && attempts < 30) {
-          await sleep(3000);
-          attempts++;
-          const status = await apiFetch(`/${sessionId}`, {params:{fields:'completion_percent,status,result_ids,errors'}});
-          const pct = status?.completion_percent ?? 0;
-          addLog(ops.copyLog,'info',`⏳ → ${acc?.name||accId}: ${pct}%`);
-          render();
-          if (status?.completion_percent === 100 || status?.status === 'completed') {
-            if (status?.errors?.length) throw new Error(status.errors[0]?.error_message || 'Copy failed');
-            done = true;
-            // remove progress log, add success
-            ops.copyLog = ops.copyLog.filter(l=>!(l.type==='info'&&l.msg.includes(`→ ${acc?.name||accId}`)));
-            addLog(ops.copyLog,'success',`✓ → ${acc?.name||accId}`);
-          } else if (status?.status === 'failed') {
-            throw new Error(status?.errors?.[0]?.error_message || 'Async copy failed');
-          }
-        }
-        if (!done) throw new Error('Timeout waiting for copy');
-      } catch(e) {
-        ops.copyLog = ops.copyLog.filter(l=>!(l.type==='info'&&l.msg?.includes?.(`→ ${acc?.name||accId}`)));
-        addLog(ops.copyLog,'error',`✗ → ${acc?.name||accId}: ${e.message}`);
-      }
-      ops.copyDone++;
-      render();
-      if (ops.copyDone < targetIds.length) await sleep(1000);
-    }
-    const ok=ops.copyLog.filter(l=>l.type==='success').length;
-    const err=ops.copyLog.filter(l=>l.type==='error').length;
-    setStatus(err?'error':'success',`Done: ${ok} copied, ${err} errors. All copied as PAUSED.`);
-    ops.copyRunning=false; render();
-  }
-
-  function renderBulkCopy() {
-    const srcOpts = ops.copyAccounts.map(a=>`<option value="${esc(a.id)}" ${a.id===ops.copySrcAccId?'selected':''}>${esc(a.label)}</option>`).join('');
-    const campaignOpts = ops.copyCampaigns.map(c=>`<option value="${esc(c.id)}" ${c.id===ops.copySelectedCampaignId?'selected':''}>[${esc(c.status)}] ${esc(c.name)} — ${esc(c.budget)}</option>`).join('');
-    const tgtRows = ops.copyAccounts.filter(a=>a.id!==ops.copySrcAccId).map(a=>{
-      const stDot = a.status===1?'#22c55e':(a.status===2||a.status===101)?'#ef4444':a.status?'#f59e0b':'#64748b';
-      const stTitle = ACC_STATUS[a.status]||(a.status?'Status '+a.status:'');
-      return `
-      <label style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:5px;cursor:pointer;font-size:12px;color:var(--txt);background:${ops.copyTargetAccIds.has(a.id)?'rgba(59,130,246,.1)':''}">
-        <input type="checkbox" data-copyacc="${esc(a.id)}" ${ops.copyTargetAccIds.has(a.id)?'checked':''} style="accent-color:var(--acc)">
-        <span style="width:7px;height:7px;border-radius:50%;background:${stDot};flex-shrink:0" title="${stTitle}"></span>
-        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(a.label)}</span>
-      </label>`;
-    }).join('') || '<div style="font-size:12px;color:#64748b;padding:8px">Load accounts first.</div>';
-
-    const progress = ops.copyTotal ? Math.round(ops.copyDone/ops.copyTotal*100) : 0;
-    const copyDisabled = ops.copyRunning||ops.copyLoadingCampaigns||!ops.copySelectedCampaignId||!ops.copyTargetAccIds.size;
-
-    return `
-      <div style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.2);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:11px;color:#94a3b8;line-height:1.5">
-        ⚠️ <b style="color:#cbd5e1">Ограничение FB API:</b> копируются только кампании формата <b style="color:#cbd5e1">1 кампания → 1 адсет → 1 объявление</b>.<br>
-        Воркфлоу: создай шаблонную кампанию 1×1×1 → скопируй на все аккаунты → добавь объявления вручную в каждом аккаунте.
-      </div>
-      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:flex-end">
-        <div class="ar-field" style="flex:1;min-width:180px">
-          <label class="ar-label">Source Account</label>
-          <select class="ar-select" id="copy-src-acc" ${ops.copyLoadingAccounts?'disabled':''}>${srcOpts||'<option>Load accounts first</option>'}</select>
-        </div>
-        <button class="ar-btn ar-btn-primary ar-btn-sm" data-opsact="copy-load-accounts" ${ops.copyLoadingAccounts?'disabled':''}>${ops.copyLoadingAccounts?'Loading…':'Load Accounts'}</button>
-      </div>
-      ${ops.copyCampaigns.length||ops.copyLoadingCampaigns ? `
-        <div class="ar-field" style="margin-bottom:12px">
-          <label class="ar-label">Campaign to copy</label>
-          <select class="ar-select" id="copy-campaign" ${ops.copyLoadingCampaigns?'disabled':''}>${campaignOpts||'<option>Loading…</option>'}</select>
-        </div>` : ''}
-      ${ops.copyAccounts.length ? `
-        <div style="margin-bottom:10px">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-            <div style="font-size:12px;font-weight:700;color:var(--txt)">Target Accounts <span style="font-weight:400;color:#64748b">${ops.copyTargetAccIds.size} selected</span></div>
-            <div style="display:flex;gap:6px">
-              <button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="copy-sel-all">All</button>
-              <button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="copy-sel-none">None</button>
-            </div>
-          </div>
-          <div style="max-height:200px;overflow:auto;background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:6px">${tgtRows}</div>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-          <button class="ar-btn ar-btn-primary" data-opsact="copy-run" ${copyDisabled?'disabled':''}>
-            ${ops.copyRunning?`Copying… ${ops.copyDone}/${ops.copyTotal}`:`▶ Copy to ${ops.copyTargetAccIds.size} accounts`}
-          </button>
-          ${ops.copyTotal?`<div style="flex:1;min-width:80px;background:var(--bdr);border-radius:4px;height:6px"><div style="background:var(--acc);width:${progress}%;height:100%;border-radius:4px;transition:width .3s"></div></div><span style="font-size:11px;color:#64748b">${progress}%</span>`:''}
-        </div>` : ''}
-      ${ops.copyLog.length?`<div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 10px;max-height:140px;overflow:auto;font-family:ui-monospace,monospace">${logHtml(ops.copyLog)}</div>`:''}
-      <div style="margin-top:8px;font-size:11px;color:#64748b">⚠ Copied campaigns are created as PAUSED. Review before activating.</div>
-    `;
   }
 
   /* ==================== BULK PAUSE / RESUME ==================== */
@@ -5926,7 +5771,6 @@ function mountOperations(container) {
 
   /* ==================== RENDER ==================== */
   const TABS = [
-    {id:'copy',     label:'📋 Bulk Copy Campaign'},
     {id:'csv',      label:'📥 CSV Launch'},
     {id:'pause',    label:'⏸ Bulk Pause/Resume'},
     {id:'zombies',  label:'🧟 Zombie Campaigns'},
@@ -5937,7 +5781,6 @@ function mountOperations(container) {
     const tabBar = TABS.map(t=>`<button class="ar-tab ${ops.tab===t.id?'active':''}" data-opstab="${t.id}">${t.label}</button>`).join('');
 
     let content = '';
-    if (ops.tab==='copy')      content = renderBulkCopy();
     if (ops.tab==='csv')       content = renderCsvLaunch();
     if (ops.tab==='pause')     content = renderBulkPause();
     if (ops.tab==='zombies')   content = renderZombies();
@@ -5958,21 +5801,8 @@ function mountOperations(container) {
       el.addEventListener('click', () => { ops.tab = el.getAttribute('data-opstab'); render(); });
     });
 
-    /* copy actions */
-    const sa = (id, fn) => { const el=container.querySelector(`[data-opsact="${id}"]`); if(el) el.addEventListener('click', fn); };
-    sa('copy-load-accounts', async ()=>{ await loadCopyAccounts(); await loadCopyCampaigns(); });
-    sa('copy-run', runBulkCopy);
-    sa('copy-sel-all', ()=>{ ops.copyAccounts.filter(a=>a.id!==ops.copySrcAccId).forEach(a=>ops.copyTargetAccIds.add(a.id)); render(); });
-    sa('copy-sel-none', ()=>{ ops.copyTargetAccIds.clear(); render(); });
-    const srcSel = container.querySelector('#copy-src-acc');
-    if (srcSel) srcSel.addEventListener('change', async ()=>{ ops.copySrcAccId=srcSel.value; ops.copyTargetAccIds.clear(); await loadCopyCampaigns(); });
-    const campSel = container.querySelector('#copy-campaign');
-    if (campSel) campSel.addEventListener('change', ()=>{ ops.copySelectedCampaignId=campSel.value; });
-    container.querySelectorAll('[data-copyacc]').forEach(el=>{
-      el.addEventListener('change',()=>{ const id=el.getAttribute('data-copyacc'); el.checked?ops.copyTargetAccIds.add(id):ops.copyTargetAccIds.delete(id); render(); });
-    });
-
     /* csv launch actions */
+    const sa = (id, fn) => { const el=container.querySelector(`[data-opsact="${id}"]`); if(el) el.addEventListener('click', fn); };
     sa('csv-load-accounts', loadCsvAccounts);
     sa('csv-run', runCsvLaunch);
     sa('csv-sel-all', ()=>{ ops.csvAccounts.forEach(a=>ops.csvTargetAccIds.add(a.id)); render(); });
