@@ -5051,46 +5051,67 @@ function mountOperations(container) {
     setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
   }
 
+  /* ---- shared account cache (loaded once, reused across all tools) ---- */
+  let OPS_ACCOUNTS_CACHE = [];
+  let OPS_ACCOUNTS_LOADING = false;
+
+  async function ensureAccounts() {
+    if (OPS_ACCOUNTS_CACHE.length) return OPS_ACCOUNTS_CACHE;
+    if (OPS_ACCOUNTS_LOADING) {
+      while (OPS_ACCOUNTS_LOADING) await sleep(100);
+      return OPS_ACCOUNTS_CACHE;
+    }
+    OPS_ACCOUNTS_LOADING = true;
+    try {
+      const items = await apiAll('/me/adaccounts', {fields:'id,account_id,name,currency,account_status', limit:200});
+      const seen = new Set();
+      OPS_ACCOUNTS_CACHE = items
+        .filter(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); if(!id||seen.has(id))return false; seen.add(id); return true; })
+        .map(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); return {id, name:a.name||'Untitled', status:a.account_status, currency:a.currency||'USD', label:`${a.name||'Untitled'} (${id})`}; })
+        .sort((a,b)=>a.name.localeCompare(b.name));
+    } finally { OPS_ACCOUNTS_LOADING = false; }
+    return OPS_ACCOUNTS_CACHE;
+  }
+
   /* ---- sub-tab state ---- */
   const ops = {
     tab: 'csv',        /* csv | pause | zombies | audiences */
 
     /* pause/resume */
-    pauseBizId: getBizId(),
-    pauseAccounts: [],
+    pauseAccFilter: '',
     pausePattern: '',
     pauseAction: 'PAUSED',
     pauseLevel: 'campaign',
     pausePreview: [],
+    pausePreviewSel: new Set(),
     pauseLoadingAccounts: false,
     pauseRunning: false,
     pauseLog: [],
 
     /* zombies */
-    zombieBizId: getBizId(),
     zombieDays: 7,
     zombieMinSpend: 5,
     zombies: [],
     zombieLoading: false,
+    zombiePausingAll: false,
 
     /* audiences */
-    audBizId: getBizId(),
-    audAccounts: [],
     audList: [],
     audLoading: false,
+    audSearch: '',
 
     /* csv launch */
-    csvBizId: getBizId(),
+    csvAccFilter: '',
     csvAccounts: [],
     csvTargetAccIds: new Set(),
     csvLoadingAccounts: false,
     csvFileName: '',
-    csvRows: [],           // parsed rows from CSV
+    csvRows: [],
     csvCampaignNameTpl: 'COLD TEST | CBO ${budget}/d | 1as{ad_count}ads | {date} | {acc_id}',
     csvAdsetNameTpl: '{date} | {n}',
-    csvUrlTagParam: 'sub2',      // which param to modify (sub1..sub6, keyword, etc.)
-    csvUrlTagMode: 'acc_id',     // acc_id | keep | empty | custom
-    csvUrlTagCustom: '',         // value when mode = custom
+    csvUrlTagParam: 'sub2',
+    csvUrlTagMode: 'acc_id',
+    csvUrlTagCustom: '',
     csvRunning: false,
     csvLog: [], csvDone: 0, csvTotal: 0,
 
@@ -5151,41 +5172,38 @@ function mountOperations(container) {
   async function loadPauseAccounts() {
     ops.pauseLoadingAccounts=true; setStatus('info','Loading accounts...'); render();
     try {
-      const items = await apiAll('/me/adaccounts', {fields:'id,account_id,name', limit:200});
-      const seen = new Set();
-      ops.pauseAccounts = items
-        .filter(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); if(!id||seen.has(id))return false; seen.add(id); return true; })
-        .map(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); return {id, name:a.name||'Untitled'}; })
-        .sort((a,b)=>a.name.localeCompare(b.name));
-      setStatus('success',`${ops.pauseAccounts.length} accounts loaded.`);
+      await ensureAccounts();
+      setStatus('success',`${OPS_ACCOUNTS_CACHE.length} accounts loaded.`);
     } catch(e) { setStatus('error',e.message); }
     finally { ops.pauseLoadingAccounts=false; render(); }
   }
 
   async function buildPausePreview() {
-    if (!ops.pausePattern.trim()||!ops.pauseAccounts.length) { ops.pausePreview=[]; render(); return; }
-    setStatus('info','Building preview...'); render();
+    const accounts = OPS_ACCOUNTS_CACHE;
+    if (!ops.pausePattern.trim()||!accounts.length) { ops.pausePreview=[]; ops.pausePreviewSel=new Set(); render(); return; }
+    setStatus('info',`Scanning ${accounts.length} accounts...`); render();
     const pattern = ops.pausePattern.trim().toLowerCase();
+    const edge = ops.pauseLevel==='campaign' ? 'campaigns' : ops.pauseLevel==='adset' ? 'adsets' : 'ads';
     const results=[];
-    for (const acc of ops.pauseAccounts) {
+    await Promise.all(accounts.map(async acc=>{
       try {
-        const edge = ops.pauseLevel==='campaign' ? 'campaigns' : ops.pauseLevel==='adset' ? 'adsets' : 'ads';
         const items = await apiAll(`/act_${acc.id}/${edge}`,{fields:'id,name,status',limit:200});
         items.filter(i=>(i.name||'').toLowerCase().includes(pattern) && i.status!==ops.pauseAction)
           .forEach(i=>results.push({accId:acc.id,accName:acc.name,id:i.id,name:i.name,currentStatus:i.status,level:ops.pauseLevel}));
       } catch {}
-      await sleep(200);
-    }
-    ops.pausePreview=results;
+    }));
+    ops.pausePreview = results.sort((a,b)=>a.accName.localeCompare(b.accName)||a.name.localeCompare(b.name));
+    ops.pausePreviewSel = new Set(results.map(i=>i.id));
     setStatus(results.length?'info':'success', results.length?`Found ${results.length} matching items. Review and confirm.`:'No matching items found.');
     render();
   }
 
   async function runBulkPause() {
-    if (!ops.pausePreview.length) return;
+    const toApply = ops.pausePreview.filter(i=>ops.pausePreviewSel.has(i.id));
+    if (!toApply.length) return;
     ops.pauseRunning=true; ops.pauseLog=[]; render();
-    addLog(ops.pauseLog,'info',`Setting ${ops.pauseAction} on ${ops.pausePreview.length} items...`);
-    for (const item of ops.pausePreview) {
+    addLog(ops.pauseLog,'info',`Setting ${ops.pauseAction} on ${toApply.length} items...`);
+    for (const item of toApply) {
       try {
         await apiFetch(`/${item.id}`,{method:'POST',body:{status:ops.pauseAction}});
         addLog(ops.pauseLog,'success',`✓ [${item.level}] ${item.name} (${item.accName})`);
@@ -5195,7 +5213,7 @@ function mountOperations(container) {
     const ok=ops.pauseLog.filter(l=>l.type==='success').length;
     const err=ops.pauseLog.filter(l=>l.type==='error').length;
     setStatus(err?'error':'success',`Done: ${ok} updated, ${err} errors.`);
-    ops.pauseRunning=false; ops.pausePreview=[]; render();
+    ops.pauseRunning=false; ops.pausePreview=[]; ops.pausePreviewSel=new Set(); render();
   }
 
   /* =============== CSV LAUNCH =============== */
@@ -5203,12 +5221,7 @@ function mountOperations(container) {
   async function loadCsvAccounts() {
     ops.csvLoadingAccounts=true; setStatus('info','Loading accounts...'); render();
     try {
-      const items = await apiAll('/me/adaccounts', {fields:'id,account_id,name,currency,account_status', limit:200});
-      const seen = new Set();
-      ops.csvAccounts = items
-        .filter(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); if(!id||seen.has(id))return false; seen.add(id); return true; })
-        .map(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); return {id, name:a.name||'Untitled', status:a.account_status, label:`${a.name||'Untitled'} (${id})`}; })
-        .sort((a,b)=>a.name.localeCompare(b.name));
+      ops.csvAccounts = await ensureAccounts();
       setStatus('success',`${ops.csvAccounts.length} accounts loaded.`);
     } catch(e) { setStatus('error',e.message); }
     finally { ops.csvLoadingAccounts=false; render(); }
@@ -5335,7 +5348,7 @@ function mountOperations(container) {
     render();
 
     for (const accId of targets) {
-      const acc = ops.csvAccounts.find(a=>a.id===accId);
+      const acc = OPS_ACCOUNTS_CACHE.find(a=>a.id===accId);
       const accLabel = acc?.name || accId;
       try {
         // --- Campaign ---
@@ -5481,7 +5494,11 @@ function mountOperations(container) {
   }
 
   function renderCsvLaunch() {
-    const accRows = ops.csvAccounts.map(a=>{
+    const allAccounts = OPS_ACCOUNTS_CACHE;
+    const filterLc = ops.csvAccFilter.toLowerCase();
+    const visibleAccounts = filterLc ? allAccounts.filter(a=>a.name.toLowerCase().includes(filterLc)||a.id.includes(filterLc)) : allAccounts;
+
+    const accRows = visibleAccounts.map(a=>{
       const stDot = a.status===1 ? '#22c55e' : (a.status===2||a.status===101) ? '#ef4444' : a.status ? '#f59e0b' : '#64748b';
       const stTitle = ACC_STATUS[a.status] || (a.status ? 'Status '+a.status : '');
       return `
@@ -5490,16 +5507,27 @@ function mountOperations(container) {
         <span style="width:7px;height:7px;border-radius:50%;background:${stDot};flex-shrink:0" title="${stTitle}"></span>
         <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(a.label)}</span>
       </label>`;
-    }).join('') || '<div style="font-size:12px;color:#64748b;padding:8px">Click "Load Accounts" first.</div>';
+    }).join('') || (ops.csvLoadingAccounts
+      ? '<div style="font-size:12px;color:#64748b;padding:8px">Loading accounts…</div>'
+      : allAccounts.length
+        ? '<div style="font-size:12px;color:#64748b;padding:8px">No accounts match filter.</div>'
+        : '<div style="font-size:12px;color:#64748b;padding:8px">Loading accounts…</div>');
 
     const preview = ops.csvRows.length ? (() => {
       const r = ops.csvRows[0];
+      const adNames = [...new Set(ops.csvRows.map(x=>x['Ad Name']||x['Ad name']||'').filter(Boolean))];
       return `
-        <div style="font-size:11px;color:#94a3b8;line-height:1.6;background:rgba(0,0,0,.15);padding:8px 12px;border-radius:6px;border:1px solid var(--bdr)">
-          <b style="color:#cbd5e1">Parsed ${ops.csvRows.length} ad rows.</b><br>
-          Campaign: ${esc(r['Campaign Name']||'—')} | ${esc(r['Campaign Objective']||'—')} | $${esc(r['Campaign Daily Budget']||'0')}/day<br>
-          Ad Set: ${esc(r['Ad Set Name']||'—')} | ${esc(r['Countries']||'')} | ${esc(r['Age Min']||'')}-${esc(r['Age Max']||'')} | ${esc(r['Gender']||'')}<br>
-          Pixel: ${esc(r['Optimized Conversion Tracking Pixels']||'—')} | Event: ${esc(r['Optimized Event']||'—')} | URL: ${esc(r['Link']||'—')}
+        <div style="font-size:11px;color:#94a3b8;line-height:1.7;background:rgba(0,0,0,.15);padding:8px 12px;border-radius:6px;border:1px solid var(--bdr);margin-bottom:10px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 16px">
+            <span><b style="color:#cbd5e1">Ads:</b> ${ops.csvRows.length}</span>
+            <span><b style="color:#cbd5e1">Budget:</b> $${esc(r['Campaign Daily Budget']||'0')}/day</span>
+            <span><b style="color:#cbd5e1">Objective:</b> ${esc(r['Campaign Objective']||'—')}</span>
+            <span><b style="color:#cbd5e1">Event:</b> ${esc(r['Optimized Event']||'—')}</span>
+            <span><b style="color:#cbd5e1">Geo:</b> ${esc(r['Countries']||'—')}</span>
+            <span><b style="color:#cbd5e1">Age:</b> ${esc(r['Age Min']||'?')}–${esc(r['Age Max']||'?')} ${esc(r['Gender']||'')}</span>
+            <span style="grid-column:1/-1"><b style="color:#cbd5e1">Pixel:</b> ${esc(r['Optimized Conversion Tracking Pixels']||'—')}</span>
+            ${adNames.length?`<span style="grid-column:1/-1;color:#64748b">Ads: ${adNames.slice(0,3).map(n=>esc(n)).join(', ')}${adNames.length>3?` +${adNames.length-3} more`:''}</span>`:''}
+          </div>
         </div>`;
     })() : '';
 
@@ -5512,12 +5540,9 @@ function mountOperations(container) {
         <b>Видео/картинки</b> используются как есть (могут не работать на другом аккаунте — тогда ad failed, кампания и адсет создадутся).
       </div>
 
-      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:flex-end">
-        <div style="flex:1;min-width:280px">
-          <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">CSV file (FB Ads Manager export)</div>
-          <input type="file" id="csv-file" accept=".csv,.tsv,.txt" style="width:100%;padding:6px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px">
-        </div>
-        <button class="ar-btn" data-opsact="csv-load-accounts" ${ops.csvLoadingAccounts?'disabled':''}>${ops.csvLoadingAccounts?'Loading…':'Load Accounts'}</button>
+      <div style="margin-bottom:12px">
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">CSV file (FB Ads Manager export)</div>
+        <input type="file" id="csv-file" accept=".csv,.tsv,.txt" style="width:100%;padding:6px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px">
       </div>
 
       ${ops.csvFileName ? `<div style="font-size:11px;color:#22c55e;margin-bottom:8px">📄 ${esc(ops.csvFileName)}</div>` : ''}
@@ -5551,12 +5576,13 @@ function mountOperations(container) {
 
       <div style="margin-top:12px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <div style="font-size:12px;color:var(--txt);font-weight:600">Target Accounts <span style="color:#64748b;font-weight:normal">${ops.csvTargetAccIds.size} selected</span></div>
+          <div style="font-size:12px;color:var(--txt);font-weight:600">Target Accounts <span style="color:#64748b;font-weight:normal">${ops.csvTargetAccIds.size} selected${allAccounts.length?` / ${allAccounts.length}`:''}</span></div>
           <div style="display:flex;gap:5px">
             <button class="ar-btn" data-opsact="csv-sel-all" style="padding:3px 8px;font-size:11px">All</button>
             <button class="ar-btn" data-opsact="csv-sel-none" style="padding:3px 8px;font-size:11px">None</button>
           </div>
         </div>
+        <input type="text" id="csv-acc-filter" placeholder="Filter accounts…" value="${esc(ops.csvAccFilter)}" style="width:100%;padding:6px 8px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;margin-bottom:6px;box-sizing:border-box">
         <div style="max-height:200px;overflow-y:auto;border:1px solid var(--bdr);border-radius:6px;padding:4px;background:var(--bg)">${accRows}</div>
       </div>
 
@@ -5570,11 +5596,14 @@ function mountOperations(container) {
   }
 
   function renderBulkPause() {
+    const accounts = OPS_ACCOUNTS_CACHE;
+    const selCount = ops.pausePreviewSel.size;
     const previewRows = ops.pausePreview.map(i=>`
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--txt)">
-        <div><span style="color:#64748b;font-size:10px">[${esc(i.level)}]</span> ${esc(i.name)}</div>
-        <div style="font-size:11px;color:#64748b">${esc(i.accName)}</div>
-      </div>`).join('');
+      <label style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--txt);cursor:pointer;background:${ops.pausePreviewSel.has(i.id)?'rgba(59,130,246,.06)':''}">
+        <input type="checkbox" data-pauseitem="${esc(i.id)}" ${ops.pausePreviewSel.has(i.id)?'checked':''} style="accent-color:var(--acc);flex-shrink:0">
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(i.name)}</span>
+        <span style="font-size:10px;color:#64748b;flex-shrink:0">${esc(i.accName)}</span>
+      </label>`).join('');
 
     return `
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
@@ -5598,18 +5627,23 @@ function mountOperations(container) {
           </select>
         </div>
       </div>
-      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-        <button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="pause-load-accounts" ${ops.pauseLoadingAccounts?'disabled':''}>${ops.pauseLoadingAccounts?'Loading…':'Load Accounts'}</button>
-        <button class="ar-btn ar-btn-primary ar-btn-sm" data-opsact="pause-preview" ${!ops.pauseAccounts.length||!ops.pausePattern.trim()?'disabled':''}>🔍 Preview</button>
+      <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
+        <button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="pause-load-accounts" ${ops.pauseLoadingAccounts?'disabled':''}>${ops.pauseLoadingAccounts?'Loading…': accounts.length ? `↻ Reload (${accounts.length})` : 'Load Accounts'}</button>
+        <button class="ar-btn ar-btn-primary ar-btn-sm" data-opsact="pause-preview" ${!accounts.length||!ops.pausePattern.trim()?'disabled':''}>🔍 Preview across ${accounts.length||'?'} accounts</button>
       </div>
-      ${ops.pauseAccounts.length?`<div style="font-size:11px;color:#64748b;margin-bottom:8px">${ops.pauseAccounts.length} accounts loaded.</div>`:''}
       ${ops.pausePreview.length?`
-        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;margin-bottom:10px;max-height:220px;overflow:auto">
-          <div style="padding:8px 10px;border-bottom:1px solid var(--bdr);font-size:12px;font-weight:700;color:var(--txt)">${ops.pausePreview.length} items will be set to ${ops.pauseAction}</div>
-          ${previewRows}
+        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;margin-bottom:10px">
+          <div style="padding:7px 10px;border-bottom:1px solid var(--bdr);display:flex;align-items:center;justify-content:space-between">
+            <span style="font-size:12px;font-weight:700;color:var(--txt)">${ops.pausePreview.length} items found — <span style="color:var(--acc)">${selCount} selected</span></span>
+            <div style="display:flex;gap:6px">
+              <button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="pause-sel-all">All</button>
+              <button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="pause-sel-none">None</button>
+            </div>
+          </div>
+          <div style="max-height:220px;overflow:auto">${previewRows}</div>
         </div>
-        <button class="ar-btn ar-btn-primary" data-opsact="pause-run" ${ops.pauseRunning?'disabled':''}>
-          ${ops.pauseRunning?'Running…':`▶ Apply ${ops.pauseAction} to ${ops.pausePreview.length} items`}
+        <button class="ar-btn ar-btn-primary" data-opsact="pause-run" ${ops.pauseRunning||!selCount?'disabled':''}>
+          ${ops.pauseRunning?'Running…':`▶ Apply ${ops.pauseAction} to ${selCount} items`}
         </button>` : ''}
       ${ops.pauseLog.length?`<div style="margin-top:10px;background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 10px;max-height:140px;overflow:auto;font-family:ui-monospace,monospace">${logHtml(ops.pauseLog)}</div>`:''}
     `;
@@ -5619,11 +5653,7 @@ function mountOperations(container) {
   async function loadZombies() {
     ops.zombieLoading=true; ops.zombies=[]; setStatus('info','Scanning for zombie campaigns...'); render();
     try {
-      const items = await apiAll('/me/adaccounts', {fields:'id,account_id,name', limit:200});
-      const seen = new Set();
-      const accounts = items
-        .filter(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); if(!id||seen.has(id))return false; seen.add(id); return true; })
-        .map(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); return {id, name:a.name||'Untitled'}; });
+      const accounts = await ensureAccounts();
 
       const cutoff = Date.now() - ops.zombieDays * 86400000;
       const minSpendCents = ops.zombieMinSpend * 100;
@@ -5656,6 +5686,24 @@ function mountOperations(container) {
     finally { ops.zombieLoading=false; render(); }
   }
 
+  async function pauseAllZombies() {
+    if (!ops.zombies.length) return;
+    ops.zombiePausingAll=true; render();
+    setStatus('info',`Pausing ${ops.zombies.length} zombie campaigns...`);
+    let ok=0, err=0;
+    for (const z of ops.zombies) {
+      try {
+        await apiFetch(`/${z.id}`,{method:'POST',body:{status:'PAUSED'}});
+        ok++;
+      } catch { err++; }
+      await sleep(300);
+    }
+    ops.zombies = [];
+    ops.zombiePausingAll=false;
+    setStatus(err?'error':'success',`Paused ${ok} campaigns${err?`, ${err} errors`:''}. All zombies cleared.`);
+    render();
+  }
+
   function renderZombies() {
     const totalWaste = ops.zombies.reduce((s,z)=>s+z.spend,0);
     const rows = ops.zombies.map(z=>`<tr>
@@ -5677,8 +5725,11 @@ function mountOperations(container) {
           <label class="ar-label">Min spend ($)</label>
           <input class="ar-input" id="zombie-spend" type="number" value="${ops.zombieMinSpend}" min="0" step="1" style="width:80px">
         </div>
-        <button class="ar-btn ar-btn-primary ar-btn-sm" data-opsact="zombie-scan" ${ops.zombieLoading?'disabled':''}>${ops.zombieLoading?'Scanning…':'🔍 Scan'}</button>
-        ${ops.zombies.length?`<button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="zombie-csv">⬇ CSV</button>`:''}
+        <button class="ar-btn ar-btn-primary ar-btn-sm" data-opsact="zombie-scan" ${ops.zombieLoading||ops.zombiePausingAll?'disabled':''}>${ops.zombieLoading?'Scanning…':'🔍 Scan'}</button>
+        ${ops.zombies.length?`
+          <button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="zombie-csv">⬇ CSV</button>
+          <button class="ar-btn ar-btn-sm" data-opsact="zombie-pause-all" ${ops.zombiePausingAll?'disabled':''} style="background:rgba(239,68,68,.15);color:#ef4444;border:1px solid rgba(239,68,68,.3)">${ops.zombiePausingAll?'Pausing…':'⏸ Pause All Zombies'}</button>
+        `:''}
       </div>
       ${ops.zombies.length?`
         <div style="display:flex;gap:10px;margin-bottom:10px">
@@ -5708,14 +5759,9 @@ function mountOperations(container) {
   async function loadAudiences() {
     ops.audLoading=true; ops.audList=[]; setStatus('info','Loading audiences...'); render();
     try {
-      const items = await apiAll('/me/adaccounts', {fields:'id,account_id,name', limit:200});
-      const seen = new Set();
-      ops.audAccounts = items
-        .filter(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); if(!id||seen.has(id))return false; seen.add(id); return true; })
-        .map(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); return {id, name:a.name||'Untitled'}; });
-
+      const accounts = await ensureAccounts();
       const allAud=[];
-      await Promise.all(ops.audAccounts.map(async acc=>{
+      await Promise.all(accounts.map(async acc=>{
         try {
           const auds = await apiAll(`/act_${acc.id}/customaudiences`,{
             fields:'id,name,subtype,approximate_count_lower_bound,approximate_count_upper_bound,data_source,delivery_status,operation_status',
@@ -5731,14 +5777,16 @@ function mountOperations(container) {
         } catch {}
       }));
       ops.audList = allAud.sort((a,b)=>a.name.localeCompare(b.name));
-      setStatus('success',`${ops.audList.length} audiences across ${ops.audAccounts.length} accounts.`);
+      setStatus('success',`${ops.audList.length} audiences across ${accounts.length} accounts.`);
     } catch(e) { setStatus('error',e.message); }
     finally { ops.audLoading=false; render(); }
   }
 
   function renderAudiences() {
+    const searchLc = ops.audSearch.toLowerCase();
+    const filtered = searchLc ? ops.audList.filter(a=>a.name.toLowerCase().includes(searchLc)||a.accName.toLowerCase().includes(searchLc)||a.subtype.toLowerCase().includes(searchLc)) : ops.audList;
     const subtypes=[...new Set(ops.audList.map(a=>a.subtype))].sort();
-    const rows = ops.audList.map(a=>`<tr>
+    const rows = filtered.map(a=>`<tr>
       <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
         <div style="font-size:12px;font-weight:600;color:var(--txt)">${esc(a.name)}</div>
         <div style="font-size:10px;color:#64748b">${esc(a.accName)}</div>
@@ -5749,13 +5797,14 @@ function mountOperations(container) {
     </tr>`).join('');
 
     return `
-      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+      <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
         <button class="ar-btn ar-btn-primary ar-btn-sm" data-opsact="aud-load" ${ops.audLoading?'disabled':''}>${ops.audLoading?'Loading…':'↻ Load Audiences'}</button>
         ${ops.audList.length?`<button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="aud-csv">⬇ CSV</button>`:''}
-        ${ops.audList.length?`<span style="font-size:12px;color:#64748b">${ops.audList.length} total · ${subtypes.length} types</span>`:''}
+        ${ops.audList.length?`<span style="font-size:12px;color:#64748b">${filtered.length}${searchLc?` / ${ops.audList.length}`:''} audiences · ${subtypes.length} types</span>`:''}
       </div>
       ${ops.audList.length?`
-        <div style="overflow:auto;max-height:380px;background:var(--card);border:1px solid var(--bdr);border-radius:8px">
+        <input type="text" id="aud-search" placeholder="Search by name, account, type…" value="${esc(ops.audSearch)}" style="width:100%;padding:6px 8px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;margin-bottom:8px;box-sizing:border-box">
+        <div style="overflow:auto;max-height:360px;background:var(--card);border:1px solid var(--bdr);border-radius:8px">
           <table style="width:100%;border-collapse:collapse">
             <thead><tr style="background:var(--bg)">
               <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Audience</th>
@@ -5763,7 +5812,7 @@ function mountOperations(container) {
               <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Size</th>
               <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Status</th>
             </tr></thead>
-            <tbody>${rows}</tbody>
+            <tbody>${rows||`<tr><td colspan="4" style="padding:12px;text-align:center;color:#64748b;font-size:12px">No results.</td></tr>`}</tbody>
           </table>
         </div>` : `<div style="font-size:13px;color:#64748b;padding:16px 0">Click Load to scan all accounts for custom audiences.</div>`}
     `;
@@ -5801,11 +5850,12 @@ function mountOperations(container) {
       el.addEventListener('click', () => { ops.tab = el.getAttribute('data-opstab'); render(); });
     });
 
-    /* csv launch actions */
     const sa = (id, fn) => { const el=container.querySelector(`[data-opsact="${id}"]`); if(el) el.addEventListener('click', fn); };
+
+    /* csv launch actions */
     sa('csv-load-accounts', loadCsvAccounts);
     sa('csv-run', runCsvLaunch);
-    sa('csv-sel-all', ()=>{ ops.csvAccounts.forEach(a=>ops.csvTargetAccIds.add(a.id)); render(); });
+    sa('csv-sel-all', ()=>{ OPS_ACCOUNTS_CACHE.forEach(a=>ops.csvTargetAccIds.add(a.id)); render(); });
     sa('csv-sel-none', ()=>{ ops.csvTargetAccIds.clear(); render(); });
     const csvFile = container.querySelector('#csv-file');
     if (csvFile) csvFile.addEventListener('change', (e)=>{ const f=e.target.files?.[0]; if(f) onCsvFile(f); });
@@ -5819,6 +5869,8 @@ function mountOperations(container) {
     if (csvUrlMode) csvUrlMode.addEventListener('change', ()=>{ ops.csvUrlTagMode = csvUrlMode.value; render(); });
     const csvUrlCustom = container.querySelector('#csv-urltag-custom');
     if (csvUrlCustom) csvUrlCustom.addEventListener('input', ()=>{ ops.csvUrlTagCustom = csvUrlCustom.value; });
+    const csvAccFilter = container.querySelector('#csv-acc-filter');
+    if (csvAccFilter) csvAccFilter.addEventListener('input', ()=>{ ops.csvAccFilter=csvAccFilter.value; render(); });
     container.querySelectorAll('[data-csvacc]').forEach(el=>{
       el.addEventListener('change', ()=>{ const id=el.getAttribute('data-csvacc'); el.checked?ops.csvTargetAccIds.add(id):ops.csvTargetAccIds.delete(id); render(); });
     });
@@ -5827,12 +5879,17 @@ function mountOperations(container) {
     sa('pause-load-accounts', loadPauseAccounts);
     sa('pause-preview', buildPausePreview);
     sa('pause-run', runBulkPause);
+    sa('pause-sel-all', ()=>{ ops.pausePreviewSel=new Set(ops.pausePreview.map(i=>i.id)); render(); });
+    sa('pause-sel-none', ()=>{ ops.pausePreviewSel=new Set(); render(); });
     const ppat = container.querySelector('#pause-pattern');
     if (ppat) ppat.addEventListener('input', ()=>{ ops.pausePattern=ppat.value; });
     const pact = container.querySelector('#pause-action');
     if (pact) pact.addEventListener('change', ()=>{ ops.pauseAction=pact.value; });
     const plvl = container.querySelector('#pause-level');
     if (plvl) plvl.addEventListener('change', ()=>{ ops.pauseLevel=plvl.value; });
+    container.querySelectorAll('[data-pauseitem]').forEach(el=>{
+      el.addEventListener('change', ()=>{ const id=el.getAttribute('data-pauseitem'); el.checked?ops.pausePreviewSel.add(id):ops.pausePreviewSel.delete(id); render(); });
+    });
 
     /* zombie actions */
     sa('zombie-scan', ()=>{
@@ -5840,6 +5897,7 @@ function mountOperations(container) {
       const s=container.querySelector('#zombie-spend'); if(s) ops.zombieMinSpend=parseFloat(s.value)||5;
       loadZombies();
     });
+    sa('zombie-pause-all', pauseAllZombies);
     sa('zombie-csv', ()=>{
       exportCsv([['Campaign','Account','Spent','Leads','Objective'],...ops.zombies.map(z=>[z.name,z.accName,z.spend,z.leads,z.objective])],'zombie_campaigns.csv');
     });
@@ -5849,8 +5907,12 @@ function mountOperations(container) {
     sa('aud-csv', ()=>{
       exportCsv([['Audience','Account','Type','Size','Status'],...ops.audList.map(a=>[a.name,a.accName,a.subtype,a.count,a.status])],'custom_audiences.csv');
     });
+    const audSearch = container.querySelector('#aud-search');
+    if (audSearch) audSearch.addEventListener('input', ()=>{ ops.audSearch=audSearch.value; render(); });
   }
 
+  /* auto-load accounts when Ops panel opens */
+  ensureAccounts().then(()=>render()).catch(()=>{});
   render();
 }
 
