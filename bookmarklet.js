@@ -5161,10 +5161,13 @@ function mountOperations(container) {
 
   /* ==================== BULK COPY CAMPAIGN ==================== */
   async function loadCopyAccounts() {
-    ops.copyLoadingAccounts = true; setStatus('info','Loading accounts across all BMs...'); render();
+    ops.copyLoadingAccounts = true; setStatus('info','Loading accounts...'); render();
     try {
-      const raw = await fetchAllAccountsFlat('id,account_id,name,account_status');
-      ops.copyAccounts = raw.map(a=>({id:a._id, name:a._name, status:a.account_status, label:`${a._name} (${a._id})`}))
+      const items = await apiAll('/me/adaccounts', {fields:'id,account_id,name,account_status', limit:200});
+      const seen = new Set();
+      ops.copyAccounts = items
+        .filter(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); if(!id||seen.has(id))return false; seen.add(id); return true; })
+        .map(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); return {id, name:a.name||'Untitled', status:a.account_status, label:`${a.name||'Untitled'} (${id})`}; })
         .sort((a,b)=>a.name.localeCompare(b.name));
       ops.copySrcAccId = ops.copyAccounts[0]?.id||'';
       setStatus('success',`${ops.copyAccounts.length} accounts loaded.`);
@@ -5301,10 +5304,14 @@ function mountOperations(container) {
 
   /* ==================== BULK PAUSE / RESUME ==================== */
   async function loadPauseAccounts() {
-    ops.pauseLoadingAccounts=true; setStatus('info','Loading accounts across all BMs...'); render();
+    ops.pauseLoadingAccounts=true; setStatus('info','Loading accounts...'); render();
     try {
-      const raw = await fetchAllAccountsFlat('id,account_id,name');
-      ops.pauseAccounts = raw.map(a=>({id:a._id, name:a._name})).sort((a,b)=>a.name.localeCompare(b.name));
+      const items = await apiAll('/me/adaccounts', {fields:'id,account_id,name', limit:200});
+      const seen = new Set();
+      ops.pauseAccounts = items
+        .filter(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); if(!id||seen.has(id))return false; seen.add(id); return true; })
+        .map(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); return {id, name:a.name||'Untitled'}; })
+        .sort((a,b)=>a.name.localeCompare(b.name));
       setStatus('success',`${ops.pauseAccounts.length} accounts loaded.`);
     } catch(e) { setStatus('error',e.message); }
     finally { ops.pauseLoadingAccounts=false; render(); }
@@ -5349,10 +5356,13 @@ function mountOperations(container) {
   /* =============== CSV LAUNCH =============== */
 
   async function loadCsvAccounts() {
-    ops.csvLoadingAccounts=true; setStatus('info','Loading accounts across all BMs...'); render();
+    ops.csvLoadingAccounts=true; setStatus('info','Loading accounts...'); render();
     try {
-      const raw = await fetchAllAccountsFlat('id,account_id,name,currency,account_status');
-      ops.csvAccounts = raw.map(a=>({id:a._id, name:a._name, status:a.account_status, label:`${a._name} (${a._id})`}))
+      const items = await apiAll('/me/adaccounts', {fields:'id,account_id,name,currency,account_status', limit:200});
+      const seen = new Set();
+      ops.csvAccounts = items
+        .filter(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); if(!id||seen.has(id))return false; seen.add(id); return true; })
+        .map(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); return {id, name:a.name||'Untitled', status:a.account_status, label:`${a.name||'Untitled'} (${id})`}; })
         .sort((a,b)=>a.name.localeCompare(b.name));
       setStatus('success',`${ops.csvAccounts.length} accounts loaded.`);
     } catch(e) { setStatus('error',e.message); }
@@ -5764,8 +5774,11 @@ function mountOperations(container) {
   async function loadZombies() {
     ops.zombieLoading=true; ops.zombies=[]; setStatus('info','Scanning for zombie campaigns...'); render();
     try {
-      const raw = await fetchAllAccountsFlat('id,account_id,name');
-      const accounts = raw.map(a=>({id:a._id, name:a._name}));
+      const items = await apiAll('/me/adaccounts', {fields:'id,account_id,name', limit:200});
+      const seen = new Set();
+      const accounts = items
+        .filter(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); if(!id||seen.has(id))return false; seen.add(id); return true; })
+        .map(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); return {id, name:a.name||'Untitled'}; });
 
       const cutoff = Date.now() - ops.zombieDays * 86400000;
       const minSpendCents = ops.zombieMinSpend * 100;
@@ -5850,8 +5863,11 @@ function mountOperations(container) {
   async function loadAudiences() {
     ops.audLoading=true; ops.audList=[]; setStatus('info','Loading audiences...'); render();
     try {
-      const raw = await fetchAllAccountsFlat('id,account_id,name');
-      ops.audAccounts = raw.map(a=>({id:a._id, name:a._name}));
+      const items = await apiAll('/me/adaccounts', {fields:'id,account_id,name', limit:200});
+      const seen = new Set();
+      ops.audAccounts = items
+        .filter(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); if(!id||seen.has(id))return false; seen.add(id); return true; })
+        .map(a=>{ const id=String(a.account_id||a.id||'').replace(/^act_/,''); return {id, name:a.name||'Untitled'}; });
 
       const allAud=[];
       await Promise.all(ops.audAccounts.map(async acc=>{
