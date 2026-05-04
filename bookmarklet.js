@@ -5349,15 +5349,11 @@ function mountOperations(container) {
   /* =============== CSV LAUNCH =============== */
 
   async function loadCsvAccounts() {
-    if (!ops.csvBizId) { setStatus('error','No business_id found.'); return; }
-    ops.csvLoadingAccounts=true; setStatus('info','Loading accounts...'); render();
+    ops.csvLoadingAccounts=true; setStatus('info','Loading accounts across all BMs...'); render();
     try {
-      const owned  = await apiAll(`/${ops.csvBizId}/owned_ad_accounts`, {fields:'id,account_id,name,currency,account_status'});
-      const client = await apiAll(`/${ops.csvBizId}/client_ad_accounts`,{fields:'id,account_id,name,currency,account_status'});
-      const seen = new Set();
-      ops.csvAccounts = [...owned, ...client].filter(a=>{if(seen.has(a.account_id)) return false; seen.add(a.account_id); return true;})
-        .map(a=>({id:String(a.account_id), name:a.name, status:a.account_status, label:`${a.name} (${a.account_id})`}));
-      ops.csvAccounts.sort((a,b)=>a.name.localeCompare(b.name));
+      const raw = await fetchAllAccountsFlat('id,account_id,name,currency,account_status');
+      ops.csvAccounts = raw.map(a=>({id:a._id, name:a._name, status:a.account_status, label:`${a._name} (${a._id})`}))
+        .sort((a,b)=>a.name.localeCompare(b.name));
       setStatus('success',`${ops.csvAccounts.length} accounts loaded.`);
     } catch(e) { setStatus('error',e.message); }
     finally { ops.csvLoadingAccounts=false; render(); }
