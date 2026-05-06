@@ -5325,6 +5325,7 @@ function mountOperations(container) {
     const n = String(b||'').toLowerCase();
     if (n.includes('highest value')) return 'LOWEST_COST_WITHOUT_CAP';
     if (n.includes('highest volume')) return 'LOWEST_COST_WITHOUT_CAP';
+    if (n.includes('cost per result')) return 'COST_CAP';
     if (n.includes('cost cap')) return 'COST_CAP';
     if (n.includes('bid cap')) return 'LOWEST_COST_WITH_BID_CAP';
     return 'LOWEST_COST_WITHOUT_CAP';
