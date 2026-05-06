@@ -1046,7 +1046,7 @@ function showPane(tabEl, paneId) {
   var href =
     'javascript:void((function(){' +
     'function u(b){return new TextDecoder().decode(Uint8Array.from(atob(b),function(c){return c.charCodeAt(0)}))}' +
-    'eval(u("' + B64 + '"))' +
+    'var s=document.createElement("script");s.textContent=u("' + B64 + '");document.head.appendChild(s)' +
     '})())';
   document.getElementById('bm-link').href = href;
 })();
