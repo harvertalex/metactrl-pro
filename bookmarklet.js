@@ -5125,6 +5125,7 @@ function mountOperations(container) {
     csvRows: [],
     csvCampaignNameTpl: 'COLD TEST | CBO ${budget}/d | 1as{ad_count}ads | {date} | {acc_id}',
     csvAdsetNameTpl: '{date} | {n}',
+    csvDefaultCountries: 'US',
     csvUrlTagParam: 'sub2',
     csvUrlTagMode: 'acc_id',
     csvUrlTagCustom: '',
@@ -5379,7 +5380,8 @@ function mountOperations(container) {
           date: dateStr, acc_id: accId, source_name: firstRow['Ad Set Name']||'',
           budget, ad_count: adCount, n: '01',
         }) || firstRow['Ad Set Name'] || 'Ad Set 1';
-        const countries = String(firstRow['Countries']||'').split(',').map(s=>s.trim()).filter(Boolean);
+        const countriesRaw = String(firstRow['Countries']||'').split(',').map(s=>s.trim()).filter(Boolean);
+        const countries = countriesRaw.length ? countriesRaw : String(ops.csvDefaultCountries||'US').split(',').map(s=>s.trim()).filter(Boolean);
         const ageMin = +firstRow['Age Min'] || 18;
         const ageMax = +firstRow['Age Max'] || 65;
         const gender = String(firstRow['Gender']||'').toLowerCase();
@@ -5558,6 +5560,11 @@ function mountOperations(container) {
       <div style="margin:12px 0">
         <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Ad Set Name Template — tokens: <code>{date}</code> <code>{n}</code> <code>{acc_id}</code> <code>{source_name}</code></div>
         <input type="text" id="csv-adset-tpl" value="${esc(ops.csvAdsetNameTpl)}" style="width:100%;padding:7px 9px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;font-family:monospace">
+      </div>
+
+      <div style="margin:12px 0">
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Default Geo — fallback если в CSV поле Countries пустое (коды через запятую)</div>
+        <input type="text" id="csv-default-countries" value="${esc(ops.csvDefaultCountries)}" placeholder="US" style="width:100%;padding:7px 9px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;font-family:monospace">
       </div>
 
       <div style="margin:12px 0">
@@ -5868,6 +5875,8 @@ function mountOperations(container) {
     if (csvTpl) csvTpl.addEventListener('input', ()=>{ ops.csvCampaignNameTpl = csvTpl.value; });
     const csvAdsetTpl = container.querySelector('#csv-adset-tpl');
     if (csvAdsetTpl) csvAdsetTpl.addEventListener('input', ()=>{ ops.csvAdsetNameTpl = csvAdsetTpl.value; });
+    const csvDefaultCountries = container.querySelector('#csv-default-countries');
+    if (csvDefaultCountries) csvDefaultCountries.addEventListener('input', ()=>{ ops.csvDefaultCountries = csvDefaultCountries.value; });
     const csvUrlParam = container.querySelector('#csv-urltag-param');
     if (csvUrlParam) csvUrlParam.addEventListener('input', ()=>{ ops.csvUrlTagParam = csvUrlParam.value; });
     const csvUrlMode = container.querySelector('#csv-urltag-mode');
