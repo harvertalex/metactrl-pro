@@ -5363,9 +5363,8 @@ function mountOperations(container) {
         });
         const objective = csvObjectiveMap(firstRow['Campaign Objective']);
         const bidStrategy = csvBidStrategyMap(firstRow['Campaign Bid Strategy']);
-        /* parse Special Ad Categories from CSV — e.g. "Financial_Products_Services" → "FINANCIAL_PRODUCTS_SERVICES" */
-        const specialAdCatsRaw = String(firstRow['Special Ad Categories']||'').split(',').map(s=>s.trim().toUpperCase().replace(/\s+/g,'_')).filter(Boolean);
-        const specialAdCats = JSON.stringify(specialAdCatsRaw);
+        const specialAdCatsRaw = []; /* always empty — special ad categories block region targeting */
+        const specialAdCats = '[]';
         addLog(ops.csvLog,'info',`[${accLabel}] creating campaign "${campaignName}"...`);
         const campaign = await apiFetch(`/act_${accId}/campaigns`,{method:'POST',body:{
           name: campaignName,
@@ -5434,8 +5433,9 @@ function mountOperations(container) {
         const billingEvent = firstRow['Billing Event'] || 'IMPRESSIONS';
 
         const geoLocations = { location_types: String(firstRow['Location Types']||'home,recent').split(',').map(s=>s.trim()).filter(Boolean) };
-        if (fbRegions.length) {
-          geoLocations.regions = fbRegions;  /* regions already imply country — don't add countries[] too */
+        /* Special Ad Categories (Financial etc.) forbid region-level targeting — country only */
+        if (fbRegions.length && !specialAdCatsRaw.length) {
+          geoLocations.regions = fbRegions;
         } else {
           geoLocations.countries = countries;
         }
@@ -5463,7 +5463,6 @@ function mountOperations(container) {
           promoted_object: JSON.stringify(promoted),
           attribution_spec: firstRow['Attribution Spec'] || '[{"event_type":"CLICK_THROUGH","window_days":1}]',
         };
-        if (specialAdCatsRaw.length) adsetBody.special_ad_category_country = JSON.stringify(countries);
         const adset = await apiFetch(`/act_${accId}/adsets`,{method:'POST',body:adsetBody});
         const adsetId = adset.id;
         addLog(ops.csvLog,'success',`[${accLabel}] ✓ adset id=${adsetId}`);
