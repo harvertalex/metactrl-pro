@@ -560,6 +560,7 @@ function makeModal() {
       <button id="tab-insp" class="ar-tab">🔎 Accounts</button>
       <button id="tab-px"   class="ar-tab">🔗 Pixel Manager</button>
       <button id="tab-ops"  class="ar-tab">🛠 Ops</button>
+      <button id="tab-fix"  class="ar-tab">🐛 Bug Fixes</button>
     </div>
   `;
 
@@ -569,12 +570,14 @@ function makeModal() {
   const insp = document.createElement('div'); insp.id = 'ar-insp';
   const px   = document.createElement('div'); px.id   = 'ar-px';
   const ops  = document.createElement('div'); ops.id  = 'ar-ops';
+  const fix  = document.createElement('div'); fix.id  = 'ar-fix';
   wrap.appendChild(ar);
   wrap.appendChild(col);
   wrap.appendChild(anl);
   wrap.appendChild(insp);
   wrap.appendChild(px);
   wrap.appendChild(ops);
+  wrap.appendChild(fix);
   document.body.appendChild(wrap);
 
   wrap.querySelector('#ar-close').onclick  = () => wrap.remove();
@@ -584,6 +587,7 @@ function makeModal() {
   wrap.querySelector('#tab-insp').onclick  = () => { setTab('insp'); };
   wrap.querySelector('#tab-px').onclick    = () => { setTab('px'); };
   wrap.querySelector('#tab-ops').onclick   = () => { setTab('ops'); };
+  wrap.querySelector('#tab-fix').onclick   = () => { setTab('fix'); };
 
   function setTab(t) {
     ar.style.display   = t === 'ar'   ? 'block' : 'none';
@@ -592,15 +596,17 @@ function makeModal() {
     insp.style.display = t === 'insp' ? 'block' : 'none';
     px.style.display   = t === 'px'   ? 'block' : 'none';
     ops.style.display  = t === 'ops'  ? 'block' : 'none';
+    fix.style.display  = t === 'fix'  ? 'block' : 'none';
     wrap.querySelector('#tab-ar').classList.toggle('active',   t === 'ar');
     wrap.querySelector('#tab-col').classList.toggle('active',  t === 'col');
     wrap.querySelector('#tab-anl').classList.toggle('active',  t === 'anl');
     wrap.querySelector('#tab-insp').classList.toggle('active', t === 'insp');
     wrap.querySelector('#tab-px').classList.toggle('active',   t === 'px');
     wrap.querySelector('#tab-ops').classList.toggle('active',  t === 'ops');
+    wrap.querySelector('#tab-fix').classList.toggle('active',  t === 'fix');
   }
   setTab('ar');
-  return { wrap, ar, col, anl, insp, px, ops };
+  return { wrap, ar, col, anl, insp, px, ops, fix };
 }
 
 /* -------------------- UI: GENERATOR -------------------- */
@@ -5953,6 +5959,277 @@ function mountAutorules(container) {
   renderArTabs();
 }
 
+/* -------------------- UI: BUG FIXES -------------------- */
+function mountBugFixes(container) {
+  container.innerHTML = '';
+
+  /* ---- helpers ---- */
+  function esc(v) { return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  async function getToken() {
+    if (TOKEN) return TOKEN;
+    try {
+      const res = await fetch('https://business.facebook.com/ajax/bootloader-endpoint/?modules=AdsCanvasComposerDialog.react&__a=1', {credentials:'include'});
+      const txt = await res.text();
+      return txt.match(/"access_token":"(EAAI[^"]+)"/)?.[1] || '';
+    } catch { return ''; }
+  }
+
+  function getBizId() {
+    try {
+      const ctx = require('BusinessUnifiedNavigationContext');
+      if (ctx.businessID) return String(ctx.businessID);
+    } catch {}
+    const m = String(window.location.href).match(/[?&#]business_id=(\d+)/);
+    return m ? m[1] : '';
+  }
+
+  /* ---- BM Invite Tool state ---- */
+  const inv = {
+    token: '',
+    bmId: '',
+    emails: '',
+    role: 'admin',
+    running: false,
+    log: [],
+    result: null,
+  };
+
+  /* ---- Tool cards list ---- */
+  const tools = [
+    { id: 'bm-invite', label: '✉️ BM Bulk Invite', desc: 'Send bulk invitations to Business Manager via smvmail.com' },
+  ];
+  let activeTool = 'bm-invite';
+
+  function render() {
+    container.innerHTML = '';
+
+    /* top: tool selector pills */
+    const pills = document.createElement('div');
+    pills.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--bdr)';
+    tools.forEach(t => {
+      const btn = document.createElement('button');
+      btn.className = 'ar-tab' + (activeTool === t.id ? ' active' : '');
+      btn.textContent = t.label;
+      btn.title = t.desc;
+      btn.addEventListener('click', () => { activeTool = t.id; render(); });
+      pills.appendChild(btn);
+    });
+    container.appendChild(pills);
+
+    if (activeTool === 'bm-invite') renderBmInvite();
+  }
+
+  function renderBmInvite() {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap';
+
+    /* ---- left: main form ---- */
+    const left = document.createElement('div');
+    left.style.cssText = 'flex:1;min-width:320px';
+
+    /* status badges */
+    const statusRow = document.createElement('div');
+    statusRow.style.cssText = 'display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap';
+    const tokBadge = document.createElement('span');
+    tokBadge.className = 'ar-badge';
+    tokBadge.style.cssText = `background:${inv.token?'#22c55e':'#ef4444'};color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600`;
+    tokBadge.textContent = `Token: ${inv.token?'Valid':'Loading...'}`;
+    const bmBadge = document.createElement('span');
+    bmBadge.className = 'ar-badge';
+    bmBadge.style.cssText = `background:${inv.bmId?'#22c55e':'#ef4444'};color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600`;
+    bmBadge.textContent = `BM: ${inv.bmId||'Not found'}`;
+    statusRow.appendChild(tokBadge);
+    statusRow.appendChild(bmBadge);
+    left.appendChild(statusRow);
+
+    /* emails textarea */
+    const lblEmails = document.createElement('label');
+    lblEmails.className = 'ar-label';
+    lblEmails.textContent = '📧 Emails (one per line)';
+    left.appendChild(lblEmails);
+
+    const ta = document.createElement('textarea');
+    ta.value = inv.emails;
+    ta.placeholder = 'email1@smvmail.com\nemail2@smvmail.com\n...';
+    ta.style.cssText = 'width:100%;min-height:140px;padding:9px 11px;border:2px solid var(--bdr);border-radius:8px;font-size:13px;background:var(--surf);color:var(--txt);box-sizing:border-box;resize:vertical;margin-bottom:8px';
+    ta.addEventListener('input', () => { inv.emails = ta.value; });
+    left.appendChild(ta);
+
+    /* email action buttons */
+    const emailBtns = document.createElement('div');
+    emailBtns.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px';
+
+    const btnRandom = document.createElement('button');
+    btnRandom.className = 'ar-btn';
+    btnRandom.textContent = '🎲 Generate 8 random';
+    btnRandom.addEventListener('click', () => {
+      const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+      const list = [];
+      for (let i = 0; i < 8; i++) {
+        let s = '';
+        for (let j = 0; j < 10; j++) s += chars[Math.floor(Math.random()*chars.length)];
+        list.push(s + '@smvmail.com');
+      }
+      inv.emails = list.join('\n');
+      render();
+    });
+
+    const btnClear = document.createElement('button');
+    btnClear.className = 'ar-btn';
+    btnClear.textContent = 'Clear';
+    btnClear.addEventListener('click', () => { inv.emails = ''; render(); });
+
+    const btnInboxes = document.createElement('button');
+    btnInboxes.className = 'ar-btn';
+    btnInboxes.textContent = '🌐 Open inboxes';
+    btnInboxes.addEventListener('click', () => {
+      const emails = inv.emails.split('\n').map(e=>e.trim()).filter(e=>e.includes('@')&&e.includes('.'));
+      if (!emails.length) { alert('No valid emails.'); return; }
+      if (!confirm(`Open ${emails.length} inbox tabs?`)) return;
+      emails.forEach((e, i) => setTimeout(() => window.open(`https://smvmail.com/email/inbox?email=${encodeURIComponent(e)}`, '_blank'), i * 800));
+    });
+
+    emailBtns.appendChild(btnRandom);
+    emailBtns.appendChild(btnClear);
+    emailBtns.appendChild(btnInboxes);
+    left.appendChild(emailBtns);
+
+    /* role select */
+    const lblRole = document.createElement('label');
+    lblRole.className = 'ar-label';
+    lblRole.textContent = '👤 Role';
+    left.appendChild(lblRole);
+
+    const selRole = document.createElement('select');
+    selRole.style.cssText = 'width:100%;padding:9px 11px;border:2px solid var(--bdr);border-radius:8px;font-size:13px;background:var(--surf);color:var(--txt);margin-bottom:14px';
+    [['admin','Admin'],['employee','Employee']].forEach(([v,l]) => {
+      const opt = document.createElement('option');
+      opt.value = v; opt.textContent = l; if (inv.role === v) opt.selected = true;
+      selRole.appendChild(opt);
+    });
+    selRole.addEventListener('change', () => { inv.role = selRole.value; });
+    left.appendChild(selRole);
+
+    /* send button */
+    const btnSend = document.createElement('button');
+    btnSend.className = 'ar-btn ar-btn-primary';
+    btnSend.style.cssText = 'width:100%;padding:12px;font-size:14px;font-weight:700';
+    btnSend.textContent = inv.running ? 'Sending...' : '📨 Send Bulk Invites';
+    btnSend.disabled = inv.running || !inv.token || !inv.bmId;
+    btnSend.addEventListener('click', runBulkInvite);
+    left.appendChild(btnSend);
+
+    /* result */
+    if (inv.result) {
+      const res = document.createElement('div');
+      const isOk = inv.result.type === 'success';
+      res.style.cssText = `margin-top:12px;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:600;background:${isOk?'#d4edda':'#f8d7da'};color:${isOk?'#155724':'#721c24'};border:1px solid ${isOk?'#c3e6cb':'#f5c6cb'}`;
+      res.textContent = inv.result.msg;
+      left.appendChild(res);
+    }
+
+    /* log */
+    if (inv.log.length) {
+      const logEl = document.createElement('div');
+      logEl.style.cssText = 'margin-top:10px;max-height:180px;overflow-y:auto;font-size:11px;line-height:1.45;padding:8px;background:var(--surf);border:1px solid var(--bdr);border-radius:6px';
+      logEl.innerHTML = inv.log.slice(-60).map(l =>
+        `<div style="color:${l.t==='s'?'#22c55e':l.t==='e'?'#ef4444':'var(--muted)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span style="opacity:.5">${esc(l.ts)}</span> ${esc(l.msg)}</div>`
+      ).join('');
+      logEl.scrollTop = logEl.scrollHeight;
+      left.appendChild(logEl);
+    }
+
+    wrap.appendChild(left);
+
+    /* ---- right: info panel ---- */
+    const right = document.createElement('div');
+    right.style.cssText = 'flex:0 0 220px;background:var(--surf);border:1px solid var(--bdr);border-radius:10px;padding:14px;font-size:12px;color:var(--muted);line-height:1.5';
+    right.innerHTML = `
+      <div style="font-weight:700;color:var(--txt);margin-bottom:8px">ℹ️ Notes</div>
+      - Paste emails one per line<br>
+      - FB limit: ~20-50 invites/day per BM<br>
+      - Invites stay "Pending" until accepted<br>
+      - smvmail.com: quick disposable inboxes<br><br>
+      <div style="font-weight:700;color:var(--txt);margin-bottom:6px">⚡ Quick flow</div>
+      1. Generate random emails<br>
+      2. Send invites (Admin role)<br>
+      3. Click "Open inboxes"<br>
+      4. Accept from each inbox
+    `;
+    wrap.appendChild(right);
+
+    container.appendChild(wrap);
+  }
+
+  async function runBulkInvite() {
+    const emails = inv.emails.split('\n').map(e=>e.trim()).filter(e=>e.includes('@')&&e.includes('.'));
+    if (!emails.length) { inv.result={type:'error',msg:'No valid emails.'}; render(); return; }
+    if (!inv.token)     { inv.result={type:'error',msg:'Token not loaded — refresh page.'}; render(); return; }
+    if (!inv.bmId)      { inv.result={type:'error',msg:'BM ID not found — open Business Manager.'}; render(); return; }
+
+    inv.running = true; inv.log = []; inv.result = null; render();
+
+    const isAdmin = inv.role === 'admin';
+    const roles = isAdmin
+      ? '["DEFAULT","MANAGE","DEVELOPER","EMPLOYEE","ASSET_MANAGE","ASSET_VIEW","PEOPLE_MANAGE","PEOPLE_VIEW","PARTNERS_VIEW","PARTNERS_MANAGE","PROFILE_MANAGE"]'
+      : '["EMPLOYEE"]';
+
+    let ok = 0, fail = 0;
+
+    const addLog = (msg, t='i') => {
+      inv.log.push({msg, t, ts: new Date().toLocaleTimeString()});
+      render();
+    };
+
+    addLog(`Starting: ${emails.length} invites as ${isAdmin?'Admin':'Employee'}`);
+
+    for (let i = 0; i < emails.length; i++) {
+      const email = emails[i];
+      addLog(`[${i+1}/${emails.length}] → ${email}`);
+      try {
+        const url = `https://graph.facebook.com/v19.0/${inv.bmId}/business_users?access_token=${inv.token}`;
+        const body = new URLSearchParams({
+          brandId: inv.bmId,
+          email,
+          invite_origin: 'BM_INVITE_USER_FLOW',
+          method: 'post',
+          roles,
+          suppress_http_code: '1',
+        });
+        const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body, credentials:'include'});
+        const json = await res.json();
+        const success = json && !json.error && !json.errors && (JSON.stringify(json).includes('PENDING') || json.id);
+        if (success) {
+          addLog(`✓ Sent: ${email}`, 's');
+          ok++;
+        } else {
+          const errMsg = json?.error?.message || json?.error?.error_user_msg || JSON.stringify(json).slice(0,120);
+          addLog(`✗ Failed: ${email} → ${errMsg}`, 'e');
+          fail++;
+        }
+      } catch(e) {
+        addLog(`✗ Error: ${email} → ${e.message}`, 'e');
+        fail++;
+      }
+      await sleep(1200 + Math.random() * 1200);
+    }
+
+    inv.running = false;
+    inv.result = { type: ok >= fail ? 'success' : 'error', msg: `Done: ${ok} success / ${fail} failed` };
+    render();
+  }
+
+  /* init: load token + BM */
+  render();
+  (async () => {
+    inv.token = await getToken();
+    inv.bmId  = getBizId();
+    render();
+  })();
+}
+
 /* -------------------- BOOT -------------------- */
 if (!TOKEN) {
   alert('Access token (__accessToken) not found.\nOpen Ads Manager inside Business Manager and run again.');
@@ -5964,6 +6241,7 @@ if (!TOKEN) {
   mountInspector(ui.insp);
   mountPixelManager(ui.px);
   mountOperations(ui.ops);
+  mountBugFixes(ui.fix);
 }
 
 })();
