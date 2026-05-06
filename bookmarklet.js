@@ -5385,9 +5385,34 @@ function mountOperations(container) {
           budget, ad_count: adCount, n: '01',
         }) || firstRow['Ad Set Name'] || 'Ad Set 1';
         const countriesRaw = String(firstRow['Countries']||'').split(',').map(s=>s.trim()).filter(Boolean);
-        /* fallback chain: Countries col → Special Ad Category Country col → Regions col (extract 2-letter codes) → UI default */
         const specialAdCountry = String(firstRow['Special Ad Category Country']||'').split(',').map(s=>s.trim()).filter(Boolean);
+
+        /* US state name → FB region key */
+        const US_STATE_KEYS = {
+          'alabama':3847,'alaska':3848,'arizona':3849,'arkansas':3850,'california':3851,
+          'colorado':3852,'connecticut':3853,'delaware':3854,'florida':3855,'georgia':3856,
+          'hawaii':3857,'idaho':3858,'illinois':3859,'indiana':3860,'iowa':3861,
+          'kansas':3862,'kentucky':3863,'louisiana':3864,'maine':3865,'maryland':3866,
+          'massachusetts':3867,'michigan':3868,'minnesota':3869,'mississippi':3870,'missouri':3871,
+          'montana':3872,'nebraska':3873,'nevada':3874,'new hampshire':3875,'new jersey':3876,
+          'new mexico':3877,'new york':3878,'north carolina':3879,'north dakota':3880,'ohio':3881,
+          'oklahoma':3882,'oregon':3883,'pennsylvania':3884,'rhode island':3885,'south carolina':3886,
+          'south dakota':3887,'tennessee':3888,'texas':3889,'utah':3890,'vermont':3891,
+          'virginia':3892,'washington':3893,'west virginia':3894,'wisconsin':3895,'wyoming':3896,
+          'district of columbia':3847,'washington dc':3847,
+        };
+
+        /* Parse Regions col — "Alabama US, Arizona US, ..." → FB region objects */
         const regionsRaw = String(firstRow['Regions']||'');
+        const fbRegions = regionsRaw.length
+          ? regionsRaw.split(',').map(s => {
+              const name = s.trim().replace(/\s+US$/i,'').toLowerCase();
+              const key = US_STATE_KEYS[name];
+              return key ? { key: String(key), name: s.trim(), country: 'US' } : null;
+            }).filter(Boolean)
+          : [];
+
+        /* countries: explicit col → Special Ad Category Country → extract from Regions → UI default */
         const regionsCountries = [...new Set(regionsRaw.match(/\b([A-Z]{2})\b/g)||[])];
         const countries = countriesRaw.length ? countriesRaw
           : specialAdCountry.length ? specialAdCountry
@@ -5408,8 +5433,10 @@ function mountOperations(container) {
         const optGoal = firstRow['Optimization Goal'] || 'OFFSITE_CONVERSIONS';
         const billingEvent = firstRow['Billing Event'] || 'IMPRESSIONS';
 
+        const geoLocations = { countries, location_types: String(firstRow['Location Types']||'home,recent').split(',').map(s=>s.trim()).filter(Boolean) };
+        if (fbRegions.length) geoLocations.regions = fbRegions;
         const targeting = {
-          geo_locations: { countries, location_types: String(firstRow['Location Types']||'home,recent').split(',').map(s=>s.trim()).filter(Boolean) },
+          geo_locations: geoLocations,
           age_min: ageMin, age_max: ageMax,
           genders,
           publisher_platforms: publisherPlatforms,
