@@ -5126,6 +5126,7 @@ function mountOperations(container) {
     csvCampaignNameTpl: 'COLD TEST | CBO ${budget}/d | 1as{ad_count}ads | {date} | {acc_id}',
     csvAdsetNameTpl: '{date} | {n}',
     csvDefaultCountries: 'US',
+    csvPageIdOverride: '',
     csvUrlTagParam: 'sub2',
     csvUrlTagMode: 'acc_id',
     csvUrlTagCustom: '',
@@ -5442,7 +5443,7 @@ function mountOperations(container) {
           const r = adRows[i];
           const adName = r['Ad Name'] || `Ad ${i+1}`;
           try {
-            const pageId = r['Link Object ID'] ? csvStripPrefix(r['Link Object ID']) : '';
+            const pageId = ops.csvPageIdOverride || (r['Link Object ID'] ? csvStripPrefix(r['Link Object ID']) : '');
             const link = r['Link'] || '';
             const videoId = r['Video ID'] ? csvStripPrefix(r['Video ID']) : '';
             const imageHash = (r['Image Hash']||'').split(':').pop(); // strip "accid:hash"
@@ -5577,6 +5578,11 @@ function mountOperations(container) {
       <div style="margin:12px 0">
         <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Default Geo — fallback если в CSV поле Countries пустое (коды через запятую)</div>
         <input type="text" id="csv-default-countries" value="${esc(ops.csvDefaultCountries)}" placeholder="US" style="width:100%;padding:7px 9px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;font-family:monospace">
+      </div>
+
+      <div style="margin:12px 0">
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Override Page ID — заменяет page_id из CSV во всех адах (нужно если target аккаунт использует другую страницу)</div>
+        <input type="text" id="csv-page-id-override" value="${esc(ops.csvPageIdOverride)}" placeholder="оставь пустым — взять из CSV" style="width:100%;padding:7px 9px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;font-family:monospace">
       </div>
 
       <div style="margin:12px 0">
@@ -5889,6 +5895,8 @@ function mountOperations(container) {
     if (csvAdsetTpl) csvAdsetTpl.addEventListener('input', ()=>{ ops.csvAdsetNameTpl = csvAdsetTpl.value; });
     const csvDefaultCountries = container.querySelector('#csv-default-countries');
     if (csvDefaultCountries) csvDefaultCountries.addEventListener('input', ()=>{ ops.csvDefaultCountries = csvDefaultCountries.value; });
+    const csvPageIdOverride = container.querySelector('#csv-page-id-override');
+    if (csvPageIdOverride) csvPageIdOverride.addEventListener('input', ()=>{ ops.csvPageIdOverride = csvPageIdOverride.value.trim(); });
     const csvUrlParam = container.querySelector('#csv-urltag-param');
     if (csvUrlParam) csvUrlParam.addEventListener('input', ()=>{ ops.csvUrlTagParam = csvUrlParam.value; });
     const csvUrlMode = container.querySelector('#csv-urltag-mode');
