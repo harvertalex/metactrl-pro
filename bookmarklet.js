@@ -5362,12 +5362,15 @@ function mountOperations(container) {
         });
         const objective = csvObjectiveMap(firstRow['Campaign Objective']);
         const bidStrategy = csvBidStrategyMap(firstRow['Campaign Bid Strategy']);
+        /* parse Special Ad Categories from CSV — e.g. "Financial_Products_Services" → "FINANCIAL_PRODUCTS_SERVICES" */
+        const specialAdCatsRaw = String(firstRow['Special Ad Categories']||'').split(',').map(s=>s.trim().toUpperCase().replace(/\s+/g,'_')).filter(Boolean);
+        const specialAdCats = JSON.stringify(specialAdCatsRaw);
         addLog(ops.csvLog,'info',`[${accLabel}] creating campaign "${campaignName}"...`);
         const campaign = await apiFetch(`/act_${accId}/campaigns`,{method:'POST',body:{
           name: campaignName,
           objective,
           status: 'PAUSED',
-          special_ad_categories: '[]',
+          special_ad_categories: specialAdCats,
           buying_type: firstRow['Buying Type'] || 'AUCTION',
           daily_budget: String(Math.round((+budget||50)*100)),
           bid_strategy: bidStrategy,
@@ -5381,7 +5384,14 @@ function mountOperations(container) {
           budget, ad_count: adCount, n: '01',
         }) || firstRow['Ad Set Name'] || 'Ad Set 1';
         const countriesRaw = String(firstRow['Countries']||'').split(',').map(s=>s.trim()).filter(Boolean);
-        const countries = countriesRaw.length ? countriesRaw : String(ops.csvDefaultCountries||'US').split(',').map(s=>s.trim()).filter(Boolean);
+        /* fallback chain: Countries col → Special Ad Category Country col → Regions col (extract 2-letter codes) → UI default */
+        const specialAdCountry = String(firstRow['Special Ad Category Country']||'').split(',').map(s=>s.trim()).filter(Boolean);
+        const regionsRaw = String(firstRow['Regions']||'');
+        const regionsCountries = [...new Set(regionsRaw.match(/\b([A-Z]{2})\b/g)||[])];
+        const countries = countriesRaw.length ? countriesRaw
+          : specialAdCountry.length ? specialAdCountry
+          : regionsCountries.length ? regionsCountries
+          : String(ops.csvDefaultCountries||'US').split(',').map(s=>s.trim()).filter(Boolean);
         const ageMin = +firstRow['Age Min'] || 18;
         const ageMax = +firstRow['Age Max'] || 65;
         const gender = String(firstRow['Gender']||'').toLowerCase();
@@ -5411,7 +5421,7 @@ function mountOperations(container) {
         const promoted = { pixel_id: pixelId, custom_event_type: customEventType };
 
         addLog(ops.csvLog,'info',`[${accLabel}] creating adset...`);
-        const adset = await apiFetch(`/act_${accId}/adsets`,{method:'POST',body:{
+        const adsetBody = {
           name: adsetName,
           campaign_id: campaignId,
           status: 'PAUSED',
@@ -5420,7 +5430,9 @@ function mountOperations(container) {
           targeting: JSON.stringify(targeting),
           promoted_object: JSON.stringify(promoted),
           attribution_spec: firstRow['Attribution Spec'] || '[{"event_type":"CLICK_THROUGH","window_days":1}]',
-        }});
+        };
+        if (specialAdCatsRaw.length) adsetBody.special_ad_category_country = JSON.stringify(countries);
+        const adset = await apiFetch(`/act_${accId}/adsets`,{method:'POST',body:adsetBody});
         const adsetId = adset.id;
         addLog(ops.csvLog,'success',`[${accLabel}] ✓ adset id=${adsetId}`);
 
