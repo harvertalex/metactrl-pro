@@ -5503,6 +5503,8 @@ function mountOperations(container) {
             const urlTagsRaw = r['URL Tags'] || '';
             const urlTags = csvTransformUrlTags(urlTagsRaw, accId, ops.csvUrlTagParam, ops.csvUrlTagMode, ops.csvUrlTagCustom);
             const cta = r['Call to Action'] || 'LEARN_MORE';
+            const adBody = r['Body'] || '';
+            const adTitle = r['Title'] || '';
 
             const objectStorySpec = { page_id: pageId };
             // Skip instagram_actor_id: FB will auto-use the IG linked to the Page in each account ("from Page").
@@ -5519,6 +5521,8 @@ function mountOperations(container) {
                 video_id: videoId,
                 call_to_action: { type: cta, value: { link } },
               };
+              if (adBody) objectStorySpec.video_data.message = adBody;
+              if (adTitle) objectStorySpec.video_data.title = adTitle;
               if (thumbUrl) objectStorySpec.video_data.image_url = thumbUrl;
             } else if (imageHash) {
               objectStorySpec.link_data = {
@@ -5526,6 +5530,8 @@ function mountOperations(container) {
                 link,
                 call_to_action: { type: cta, value: { link } },
               };
+              if (adBody) objectStorySpec.link_data.message = adBody;
+              if (adTitle) objectStorySpec.link_data.name = adTitle;
             }
 
             const creativeBody = {
