@@ -5386,7 +5386,7 @@ function mountOperations(container) {
         const countriesRaw = String(firstRow['Countries']||'').split(',').map(s=>s.trim()).filter(Boolean);
         const specialAdCountry = String(firstRow['Special Ad Category Country']||'').split(',').map(s=>s.trim()).filter(Boolean);
 
-        /* US state name → FB region key */
+        /* US state name → real FB region key (from FB Marketing API targeting search) */
         const US_STATE_KEYS = {
           'alabama':3847,'alaska':3848,'arizona':3849,'arkansas':3850,'california':3851,
           'colorado':3852,'connecticut':3853,'delaware':3854,'florida':3855,'georgia':3856,
@@ -5398,18 +5398,34 @@ function mountOperations(container) {
           'oklahoma':3882,'oregon':3883,'pennsylvania':3884,'rhode island':3885,'south carolina':3886,
           'south dakota':3887,'tennessee':3888,'texas':3889,'utah':3890,'vermont':3891,
           'virginia':3892,'washington':3893,'west virginia':3894,'wisconsin':3895,'wyoming':3896,
-          'district of columbia':3847,'washington dc':3847,
+          'district of columbia':3853,'washington dc':3893,
         };
 
-        /* Parse Regions col — "Alabama US, Arizona US, ..." → FB region objects */
+        /* Parse Regions col — "Alabama US, Arizona US, ..." → FB region objects
+           Key must come from FB Targeting Search API — we fetch missing ones live */
         const regionsRaw = String(firstRow['Regions']||'');
-        const fbRegions = regionsRaw.length
-          ? regionsRaw.split(',').map(s => {
-              const name = s.trim().replace(/\s+US$/i,'').toLowerCase();
-              const key = US_STATE_KEYS[name];
-              return key ? { key: String(key), name: s.trim(), country: 'US' } : null;
-            }).filter(Boolean)
-          : [];
+        const fbRegions = [];
+        if (regionsRaw.length) {
+          const stateNames = regionsRaw.split(',').map(s => s.trim().replace(/\s+US$/i,'').trim()).filter(Boolean);
+          /* fetch real keys from FB Targeting Search for all states at once */
+          try {
+            const searchUrl = `https://graph.facebook.com/v19.0/search?type=adgeolocation&location_types=["region"]&country_code=US&limit=100&access_token=${TOKEN||inv?.token||''}`;
+            const searchRes = await apiFetch('/search', {params:{type:'adgeolocation',location_types:'["region"]',country_code:'US',limit:200}});
+            const fbStateMap = {};
+            (searchRes?.data||[]).forEach(r => { fbStateMap[r.name.toLowerCase()] = r.key; });
+            stateNames.forEach(name => {
+              const key = fbStateMap[name.toLowerCase()] || US_STATE_KEYS[name.toLowerCase()];
+              if (key) fbRegions.push({ key: String(key), name, country: 'US' });
+              else addLog(ops.csvLog,'warning',`Region not found: "${name}" — skipped`);
+            });
+          } catch(_) {
+            /* fallback to static map if API search fails */
+            stateNames.forEach(name => {
+              const key = US_STATE_KEYS[name.toLowerCase()];
+              if (key) fbRegions.push({ key: String(key), name, country: 'US' });
+            });
+          }
+        }
 
         /* countries: explicit col → Special Ad Category Country → extract from Regions → UI default */
         const regionsCountries = [...new Set(regionsRaw.match(/\b([A-Z]{2})\b/g)||[])];
