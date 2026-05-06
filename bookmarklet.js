@@ -3617,10 +3617,7 @@ function mountInspector(container) {
 
 const HOST_GRAPH = 'https://graph.facebook.com/v23.0';
 
-if (!TOKEN) {
-  alert('Token (__accessToken) not found.\nOpen Ads Manager inside Business Manager and try again.');
-  return;
-}
+/* TOKEN check moved to BOOT — panel now opens on any FB page */
 
 /* -- API -------------------------------------------------- */
 async function apiGet(path, params) {
