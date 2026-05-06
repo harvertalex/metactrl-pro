@@ -5130,6 +5130,7 @@ function mountOperations(container) {
     csvUrlTagParam: 'sub2',
     csvUrlTagMode: 'acc_id',
     csvUrlTagCustom: '',
+    csvCreateStatus: 'DRAFT',
     csvRunning: false,
     csvLog: [], csvDone: 0, csvTotal: 0,
 
@@ -5369,7 +5370,7 @@ function mountOperations(container) {
         const campaign = await apiFetch(`/act_${accId}/campaigns`,{method:'POST',body:{
           name: campaignName,
           objective,
-          status: 'PAUSED',
+          status: ops.csvCreateStatus,
           special_ad_categories: specialAdCats,
           buying_type: firstRow['Buying Type'] || 'AUCTION',
           daily_budget: String(Math.round((+budget||50)*100)),
@@ -5472,7 +5473,7 @@ function mountOperations(container) {
         const adsetBody = {
           name: adsetName,
           campaign_id: campaignId,
-          status: 'PAUSED',
+          status: ops.csvCreateStatus,
           optimization_goal: optGoal,
           billing_event: billingEvent,
           targeting: JSON.stringify(targeting),
@@ -5532,7 +5533,7 @@ function mountOperations(container) {
               name: adName,
               adset_id: adsetId,
               creative: JSON.stringify({ creative_id: creative.id }),
-              status: 'PAUSED',
+              status: ops.csvCreateStatus,
             }});
             adOk++;
             addLog(ops.csvLog,'success',`[${accLabel}] ✓ ad "${adName}"`);
@@ -5629,6 +5630,14 @@ function mountOperations(container) {
       <div style="margin:12px 0">
         <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Override Page ID — заменяет page_id из CSV во всех адах (нужно если target аккаунт использует другую страницу)</div>
         <input type="text" id="csv-page-id-override" value="${esc(ops.csvPageIdOverride)}" placeholder="оставь пустым — взять из CSV" style="width:100%;padding:7px 9px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;font-family:monospace">
+      </div>
+
+      <div style="margin:12px 0">
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Статус создания — PAUSED (можно потом включить) или DRAFT (черновик, не расходует бюджет)</div>
+        <div style="display:flex;gap:6px">
+          <button id="csv-status-paused" class="ar-btn${ops.csvCreateStatus==='PAUSED'?'':' ar-btn-ghost'}" style="padding:5px 16px;font-size:12px" data-opsact="csv-set-status-paused">PAUSED</button>
+          <button id="csv-status-draft" class="ar-btn${ops.csvCreateStatus==='DRAFT'?'':' ar-btn-ghost'}" style="padding:5px 16px;font-size:12px" data-opsact="csv-set-status-draft">DRAFT</button>
+        </div>
       </div>
 
       <div style="margin:12px 0">
@@ -5933,6 +5942,8 @@ function mountOperations(container) {
     sa('csv-run', runCsvLaunch);
     sa('csv-sel-all', ()=>{ OPS_ACCOUNTS_CACHE.forEach(a=>ops.csvTargetAccIds.add(a.id)); render(); });
     sa('csv-sel-none', ()=>{ ops.csvTargetAccIds.clear(); render(); });
+    sa('csv-set-status-paused', ()=>{ ops.csvCreateStatus='PAUSED'; render(); });
+    sa('csv-set-status-draft', ()=>{ ops.csvCreateStatus='DRAFT'; render(); });
     const csvFile = container.querySelector('#csv-file');
     if (csvFile) csvFile.addEventListener('change', (e)=>{ const f=e.target.files?.[0]; if(f) onCsvFile(f); });
     const csvTpl = container.querySelector('#csv-tpl');
