@@ -5988,12 +5988,29 @@ function mountBugFixes(container) {
     return m ? m[1] : '';
   }
 
+  /* ---- Mail services ---- */
+  const MAIL_SERVICES = [
+    {
+      id: 'smvmail',
+      label: 'smvmail.com',
+      domain: 'smvmail.com',
+      inboxUrl: e => `https://smvmail.com/email/inbox?email=${encodeURIComponent(e)}`,
+    },
+    {
+      id: 'dropinbox',
+      label: 'fviadropinbox.com',
+      domain: 'fviadropinbox.com',
+      inboxUrl: e => `https://fviadropinbox.com/inbox/${encodeURIComponent(e.split('@')[0])}`,
+    },
+  ];
+
   /* ---- BM Invite Tool state ---- */
   const inv = {
     token: '',
     bmId: '',
     emails: '',
     role: 'admin',
+    mailService: 'smvmail',
     running: false,
     log: [],
     result: null,
@@ -6001,7 +6018,7 @@ function mountBugFixes(container) {
 
   /* ---- Tool cards list ---- */
   const tools = [
-    { id: 'bm-invite', label: '✉️ BM Bulk Invite', desc: 'Send bulk invitations to Business Manager via smvmail.com' },
+    { id: 'bm-invite', label: '✉️ BM Bulk Invite', desc: 'Send bulk invitations to Business Manager' },
   ];
   let activeTool = 'bm-invite';
 
@@ -6048,6 +6065,26 @@ function mountBugFixes(container) {
     left.appendChild(statusRow);
 
     /* emails textarea */
+    /* mail service selector */
+    const lblSvc = document.createElement('label');
+    lblSvc.className = 'ar-label';
+    lblSvc.textContent = '📮 Mail service';
+    left.appendChild(lblSvc);
+
+    const svcRow = document.createElement('div');
+    svcRow.style.cssText = 'display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap';
+    MAIL_SERVICES.forEach(svc => {
+      const btn = document.createElement('button');
+      btn.className = 'ar-btn' + (inv.mailService === svc.id ? ' ar-btn-primary' : ' ar-btn-ghost');
+      btn.style.cssText = 'flex:1;font-size:12px;padding:7px 10px';
+      btn.textContent = svc.label;
+      btn.addEventListener('click', () => { inv.mailService = svc.id; render(); });
+      svcRow.appendChild(btn);
+    });
+    left.appendChild(svcRow);
+
+    const activeSvc = MAIL_SERVICES.find(s => s.id === inv.mailService) || MAIL_SERVICES[0];
+
     const lblEmails = document.createElement('label');
     lblEmails.className = 'ar-label';
     lblEmails.textContent = '📧 Emails (one per line)';
@@ -6055,7 +6092,7 @@ function mountBugFixes(container) {
 
     const ta = document.createElement('textarea');
     ta.value = inv.emails;
-    ta.placeholder = 'email1@smvmail.com\nemail2@smvmail.com\n...';
+    ta.placeholder = `email1@${activeSvc.domain}\nemail2@${activeSvc.domain}\n...`;
     ta.style.cssText = 'width:100%;min-height:140px;padding:9px 11px;border:2px solid var(--bdr);border-radius:8px;font-size:13px;background:var(--surf);color:var(--txt);box-sizing:border-box;resize:vertical;margin-bottom:8px';
     ta.addEventListener('input', () => { inv.emails = ta.value; });
     left.appendChild(ta);
@@ -6073,7 +6110,7 @@ function mountBugFixes(container) {
       for (let i = 0; i < 8; i++) {
         let s = '';
         for (let j = 0; j < 10; j++) s += chars[Math.floor(Math.random()*chars.length)];
-        list.push(s + '@smvmail.com');
+        list.push(s + '@' + activeSvc.domain);
       }
       inv.emails = list.join('\n');
       render();
@@ -6090,8 +6127,8 @@ function mountBugFixes(container) {
     btnInboxes.addEventListener('click', () => {
       const emails = inv.emails.split('\n').map(e=>e.trim()).filter(e=>e.includes('@')&&e.includes('.'));
       if (!emails.length) { alert('No valid emails.'); return; }
-      if (!confirm(`Open ${emails.length} inbox tabs?`)) return;
-      emails.forEach((e, i) => setTimeout(() => window.open(`https://smvmail.com/email/inbox?email=${encodeURIComponent(e)}`, '_blank'), i * 800));
+      if (!confirm(`Open ${emails.length} inbox tabs on ${activeSvc.label}?`)) return;
+      emails.forEach((e, i) => setTimeout(() => window.open(activeSvc.inboxUrl(e), '_blank'), i * 800));
     });
 
     emailBtns.appendChild(btnRandom);
@@ -6154,7 +6191,7 @@ function mountBugFixes(container) {
       - Paste emails one per line<br>
       - FB limit: ~20-50 invites/day per BM<br>
       - Invites stay "Pending" until accepted<br>
-      - smvmail.com: quick disposable inboxes<br><br>
+      - Active: <b style="color:var(--txt)">${activeSvc.label}</b><br><br>
       <div style="font-weight:700;color:var(--txt);margin-bottom:6px">⚡ Quick flow</div>
       1. Generate random emails<br>
       2. Send invites (Admin role)<br>
@@ -6277,6 +6314,7 @@ function mountQuickLinks(container) {
         { label: 'Sharing Debugger (OG)', url: 'https://developers.facebook.com/tools/debug/' },
         { label: 'Meta for Developers', url: 'https://developers.facebook.com/' },
         { label: 'smvmail.com (temp email)', url: 'https://smvmail.com' },
+        { label: 'fviadropinbox.com (temp email)', url: 'https://fviadropinbox.com' },
       ]
     },
     {
