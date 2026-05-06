@@ -5130,7 +5130,7 @@ function mountOperations(container) {
     csvUrlTagParam: 'sub2',
     csvUrlTagMode: 'acc_id',
     csvUrlTagCustom: '',
-    csvCreateStatus: 'DRAFT',
+    csvCreateStatus: 'PAUSED',
     csvRunning: false,
     csvLog: [], csvDone: 0, csvTotal: 0,
 
@@ -5633,14 +5633,6 @@ function mountOperations(container) {
       </div>
 
       <div style="margin:12px 0">
-        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Статус создания — PAUSED (можно потом включить) или DRAFT (черновик, не расходует бюджет)</div>
-        <div style="display:flex;gap:6px">
-          <button id="csv-status-paused" class="ar-btn${ops.csvCreateStatus==='PAUSED'?'':' ar-btn-ghost'}" style="padding:5px 16px;font-size:12px" data-opsact="csv-set-status-paused">PAUSED</button>
-          <button id="csv-status-draft" class="ar-btn${ops.csvCreateStatus==='DRAFT'?'':' ar-btn-ghost'}" style="padding:5px 16px;font-size:12px" data-opsact="csv-set-status-draft">DRAFT</button>
-        </div>
-      </div>
-
-      <div style="margin:12px 0">
         <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">URL Tag — выбери параметр и режим замены</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
           <input type="text" id="csv-urltag-param" value="${esc(ops.csvUrlTagParam)}" placeholder="sub2" style="width:90px;padding:6px 8px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;font-family:monospace">
@@ -5942,8 +5934,6 @@ function mountOperations(container) {
     sa('csv-run', runCsvLaunch);
     sa('csv-sel-all', ()=>{ OPS_ACCOUNTS_CACHE.forEach(a=>ops.csvTargetAccIds.add(a.id)); render(); });
     sa('csv-sel-none', ()=>{ ops.csvTargetAccIds.clear(); render(); });
-    sa('csv-set-status-paused', ()=>{ ops.csvCreateStatus='PAUSED'; render(); });
-    sa('csv-set-status-draft', ()=>{ ops.csvCreateStatus='DRAFT'; render(); });
     const csvFile = container.querySelector('#csv-file');
     if (csvFile) csvFile.addEventListener('change', (e)=>{ const f=e.target.files?.[0]; if(f) onCsvFile(f); });
     const csvTpl = container.querySelector('#csv-tpl');
