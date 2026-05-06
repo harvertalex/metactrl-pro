@@ -5433,8 +5433,12 @@ function mountOperations(container) {
         const optGoal = firstRow['Optimization Goal'] || 'OFFSITE_CONVERSIONS';
         const billingEvent = firstRow['Billing Event'] || 'IMPRESSIONS';
 
-        const geoLocations = { countries, location_types: String(firstRow['Location Types']||'home,recent').split(',').map(s=>s.trim()).filter(Boolean) };
-        if (fbRegions.length) geoLocations.regions = fbRegions;
+        const geoLocations = { location_types: String(firstRow['Location Types']||'home,recent').split(',').map(s=>s.trim()).filter(Boolean) };
+        if (fbRegions.length) {
+          geoLocations.regions = fbRegions;  /* regions already imply country — don't add countries[] too */
+        } else {
+          geoLocations.countries = countries;
+        }
         const targeting = {
           geo_locations: geoLocations,
           age_min: ageMin, age_max: ageMax,
