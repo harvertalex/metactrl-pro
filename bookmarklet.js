@@ -554,23 +554,25 @@ function makeModal() {
       <button id="ar-close" class="ar-btn ar-btn-danger ar-btn-sm">✕ Close</button>
     </div>
     <div style="display:flex;gap:8px;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--bdr)">
-      <button id="tab-ar"   class="ar-tab active">⚙️ Autorules</button>
-      <button id="tab-col"  class="ar-tab">📋 Column Presets</button>
-      <button id="tab-anl"  class="ar-tab">📊 Analytics</button>
-      <button id="tab-insp" class="ar-tab">🔎 Accounts</button>
-      <button id="tab-px"   class="ar-tab">🔗 Pixel Manager</button>
-      <button id="tab-ops"  class="ar-tab">🛠 Ops</button>
-      <button id="tab-fix"  class="ar-tab">🐛 Bug Fixes</button>
+      <button id="tab-ar"    class="ar-tab">⚙️ Autorules</button>
+      <button id="tab-col"   class="ar-tab">📋 Column Presets</button>
+      <button id="tab-anl"   class="ar-tab">📊 Analytics</button>
+      <button id="tab-insp"  class="ar-tab">🔎 Accounts</button>
+      <button id="tab-px"    class="ar-tab">🔗 Pixel Manager</button>
+      <button id="tab-ops"   class="ar-tab">🛠 Ops</button>
+      <button id="tab-fix"   class="ar-tab">🐛 Bug Fixes</button>
+      <button id="tab-links" class="ar-tab">🌐 Links</button>
     </div>
   `;
 
-  const ar   = document.createElement('div'); ar.id   = 'ar-ar';
-  const col  = document.createElement('div'); col.id  = 'ar-col';
-  const anl  = document.createElement('div'); anl.id  = 'ar-anl';
-  const insp = document.createElement('div'); insp.id = 'ar-insp';
-  const px   = document.createElement('div'); px.id   = 'ar-px';
-  const ops  = document.createElement('div'); ops.id  = 'ar-ops';
-  const fix  = document.createElement('div'); fix.id  = 'ar-fix';
+  const ar    = document.createElement('div'); ar.id    = 'ar-ar';
+  const col   = document.createElement('div'); col.id   = 'ar-col';
+  const anl   = document.createElement('div'); anl.id   = 'ar-anl';
+  const insp  = document.createElement('div'); insp.id  = 'ar-insp';
+  const px    = document.createElement('div'); px.id    = 'ar-px';
+  const ops   = document.createElement('div'); ops.id   = 'ar-ops';
+  const fix   = document.createElement('div'); fix.id   = 'ar-fix';
+  const links = document.createElement('div'); links.id = 'ar-links';
   wrap.appendChild(ar);
   wrap.appendChild(col);
   wrap.appendChild(anl);
@@ -578,36 +580,40 @@ function makeModal() {
   wrap.appendChild(px);
   wrap.appendChild(ops);
   wrap.appendChild(fix);
+  wrap.appendChild(links);
   document.body.appendChild(wrap);
 
-  wrap.querySelector('#ar-close').onclick  = () => wrap.remove();
-  wrap.querySelector('#tab-ar').onclick    = () => { setTab('ar'); };
-  wrap.querySelector('#tab-col').onclick   = () => { setTab('col'); };
-  wrap.querySelector('#tab-anl').onclick   = () => { setTab('anl'); };
-  wrap.querySelector('#tab-insp').onclick  = () => { setTab('insp'); };
-  wrap.querySelector('#tab-px').onclick    = () => { setTab('px'); };
-  wrap.querySelector('#tab-ops').onclick   = () => { setTab('ops'); };
-  wrap.querySelector('#tab-fix').onclick   = () => { setTab('fix'); };
+  wrap.querySelector('#ar-close').onclick    = () => wrap.remove();
+  wrap.querySelector('#tab-ar').onclick      = () => { setTab('ar'); };
+  wrap.querySelector('#tab-col').onclick     = () => { setTab('col'); };
+  wrap.querySelector('#tab-anl').onclick     = () => { setTab('anl'); };
+  wrap.querySelector('#tab-insp').onclick    = () => { setTab('insp'); };
+  wrap.querySelector('#tab-px').onclick      = () => { setTab('px'); };
+  wrap.querySelector('#tab-ops').onclick     = () => { setTab('ops'); };
+  wrap.querySelector('#tab-fix').onclick     = () => { setTab('fix'); };
+  wrap.querySelector('#tab-links').onclick   = () => { setTab('links'); };
 
   function setTab(t) {
-    ar.style.display   = t === 'ar'   ? 'block' : 'none';
-    col.style.display  = t === 'col'  ? 'block' : 'none';
-    anl.style.display  = t === 'anl'  ? 'block' : 'none';
-    insp.style.display = t === 'insp' ? 'block' : 'none';
-    px.style.display   = t === 'px'   ? 'block' : 'none';
-    ops.style.display  = t === 'ops'  ? 'block' : 'none';
-    fix.style.display  = t === 'fix'  ? 'block' : 'none';
-    wrap.querySelector('#tab-ar').classList.toggle('active',   t === 'ar');
-    wrap.querySelector('#tab-col').classList.toggle('active',  t === 'col');
-    wrap.querySelector('#tab-anl').classList.toggle('active',  t === 'anl');
-    wrap.querySelector('#tab-insp').classList.toggle('active', t === 'insp');
-    wrap.querySelector('#tab-px').classList.toggle('active',   t === 'px');
-    wrap.querySelector('#tab-ops').classList.toggle('active',  t === 'ops');
-    wrap.querySelector('#tab-fix').classList.toggle('active',  t === 'fix');
+    ar.style.display    = t === 'ar'    ? 'block' : 'none';
+    col.style.display   = t === 'col'   ? 'block' : 'none';
+    anl.style.display   = t === 'anl'   ? 'block' : 'none';
+    insp.style.display  = t === 'insp'  ? 'block' : 'none';
+    px.style.display    = t === 'px'    ? 'block' : 'none';
+    ops.style.display   = t === 'ops'   ? 'block' : 'none';
+    fix.style.display   = t === 'fix'   ? 'block' : 'none';
+    links.style.display = t === 'links' ? 'block' : 'none';
+    wrap.querySelector('#tab-ar').classList.toggle('active',    t === 'ar');
+    wrap.querySelector('#tab-col').classList.toggle('active',   t === 'col');
+    wrap.querySelector('#tab-anl').classList.toggle('active',   t === 'anl');
+    wrap.querySelector('#tab-insp').classList.toggle('active',  t === 'insp');
+    wrap.querySelector('#tab-px').classList.toggle('active',    t === 'px');
+    wrap.querySelector('#tab-ops').classList.toggle('active',   t === 'ops');
+    wrap.querySelector('#tab-fix').classList.toggle('active',   t === 'fix');
+    wrap.querySelector('#tab-links').classList.toggle('active', t === 'links');
   }
-  setTab('ar');
-  return { wrap, ar, col, anl, insp, px, ops, fix };
+  return { wrap, ar, col, anl, insp, px, ops, fix, links, setTab };
 }
+
 
 /* -------------------- UI: GENERATOR -------------------- */
 function mountGenerator(container) {
@@ -6230,18 +6236,117 @@ function mountBugFixes(container) {
   })();
 }
 
-/* -------------------- BOOT -------------------- */
-if (!TOKEN) {
-  alert('Access token (__accessToken) not found.\nOpen Ads Manager inside Business Manager and run again.');
-} else {
-  const ui = makeModal();
-  mountAutorules(ui.ar);
-  mountColumnManager(ui.col);
-  mountAnalytics(ui.anl);
-  mountInspector(ui.insp);
-  mountPixelManager(ui.px);
-  mountOperations(ui.ops);
-  mountBugFixes(ui.fix);
+/* -------------------- UI: QUICK LINKS -------------------- */
+function mountQuickLinks(container) {
+  container.innerHTML = '';
+
+  const groups = [
+    {
+      title: '📊 Ads Manager',
+      links: [
+        { label: 'Ads Manager', url: 'https://adsmanager.facebook.com/adsmanager' },
+        { label: 'Ads Manager (business.facebook.com)', url: 'https://business.facebook.com/adsmanager' },
+        { label: 'Campaign Reporting', url: 'https://adsmanager.facebook.com/adsmanager/reporting' },
+        { label: 'Audiences', url: 'https://adsmanager.facebook.com/adsmanager/audiences' },
+        { label: 'Creative Hub', url: 'https://www.facebook.com/ads/creativehub' },
+        { label: 'Meta Business Suite', url: 'https://business.facebook.com/' },
+      ]
+    },
+    {
+      title: '🏢 Business Manager',
+      links: [
+        { label: 'BM Settings → People', url: 'https://business.facebook.com/settings/people' },
+        { label: 'BM Settings → Ad Accounts', url: 'https://business.facebook.com/settings/ad-accounts' },
+        { label: 'BM Settings → Pages', url: 'https://business.facebook.com/settings/pages' },
+        { label: 'BM Settings → Pixels', url: 'https://business.facebook.com/settings/events-manager' },
+        { label: 'BM Security Center', url: 'https://business.facebook.com/settings/security' },
+        { label: 'BM Billing', url: 'https://business.facebook.com/settings/billing-and-payments' },
+      ]
+    },
+    {
+      title: '🔗 Pixels & CAPI',
+      links: [
+        { label: 'Events Manager', url: 'https://business.facebook.com/events_manager' },
+        { label: 'Test Events', url: 'https://business.facebook.com/events_manager/test-events' },
+        { label: 'Aggregated Event Measurement', url: 'https://business.facebook.com/events_manager/aggregated-event-measurement' },
+        { label: 'Offline Events', url: 'https://business.facebook.com/events_manager/offline-events' },
+      ]
+    },
+    {
+      title: '🛠 Tools & Debug',
+      links: [
+        { label: 'Facebook Graph API Explorer', url: 'https://developers.facebook.com/tools/explorer/' },
+        { label: 'Access Token Debugger', url: 'https://developers.facebook.com/tools/debug/accesstoken/' },
+        { label: 'Sharing Debugger (OG)', url: 'https://developers.facebook.com/tools/debug/' },
+        { label: 'Meta for Developers', url: 'https://developers.facebook.com/' },
+        { label: 'smvmail.com (temp email)', url: 'https://smvmail.com' },
+      ]
+    },
+    {
+      title: '📋 Policies & Help',
+      links: [
+        { label: 'Ads Policy', url: 'https://www.facebook.com/policies/ads/' },
+        { label: 'Meta Business Help Center', url: 'https://www.facebook.com/business/help' },
+        { label: 'Account Quality', url: 'https://business.facebook.com/accountquality' },
+        { label: 'Support Inbox', url: 'https://business.facebook.com/support' },
+      ]
+    },
+  ];
+
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px';
+
+  groups.forEach(g => {
+    const card = document.createElement('div');
+    card.style.cssText = 'background:var(--surf);border:1px solid var(--bdr);border-radius:10px;padding:14px';
+
+    const title = document.createElement('div');
+    title.style.cssText = 'font-weight:700;font-size:13px;color:var(--txt);margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--bdr)';
+    title.textContent = g.title;
+    card.appendChild(title);
+
+    g.links.forEach(l => {
+      const a = document.createElement('a');
+      a.href = l.url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = l.label;
+      a.style.cssText = 'display:block;padding:6px 8px;border-radius:6px;font-size:12px;color:var(--acc);text-decoration:none;transition:background .12s;margin-bottom:2px';
+      a.addEventListener('mouseenter', () => { a.style.background = 'rgba(59,130,246,.1)'; });
+      a.addEventListener('mouseleave', () => { a.style.background = ''; });
+      card.appendChild(a);
+    });
+
+    grid.appendChild(card);
+  });
+
+  container.appendChild(grid);
 }
+
+/* -------------------- BOOT -------------------- */
+(function boot() {
+  const ui = makeModal();
+  mountBugFixes(ui.fix);
+  mountQuickLinks(ui.links);
+
+  if (TOKEN) {
+    mountAutorules(ui.ar);
+    mountColumnManager(ui.col);
+    mountAnalytics(ui.anl);
+    mountInspector(ui.insp);
+    mountPixelManager(ui.px);
+    mountOperations(ui.ops);
+    ui.setTab('ar');
+  } else {
+    const notice = `<div style="padding:40px;text-align:center;color:var(--muted)">
+      <div style="font-size:32px;margin-bottom:12px">🔒</div>
+      <div style="font-size:14px;font-weight:600;color:var(--txt);margin-bottom:8px">Ads Manager required</div>
+      <div style="font-size:12px;line-height:1.6">This tab requires a Facebook access token.<br>
+      Open <a href="https://adsmanager.facebook.com/adsmanager" target="_blank" style="color:var(--acc)">Ads Manager</a> and run the bookmarklet there.</div>
+    </div>`;
+    [ui.ar, ui.col, ui.anl, ui.insp, ui.px, ui.ops].forEach(el => { el.innerHTML = notice; });
+    ui.setTab('fix');
+  }
+})();
 
 })();
