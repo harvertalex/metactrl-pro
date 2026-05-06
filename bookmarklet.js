@@ -5469,6 +5469,8 @@ function mountOperations(container) {
 
         const promoted = { pixel_id: pixelId, custom_event_type: customEventType };
 
+        const bidAmountRaw = firstRow['Bid Amount'];
+        if (bidAmountRaw && +bidAmountRaw > 0) addLog(ops.csvLog,'info',`[${accLabel}] bid_amount=$${bidAmountRaw} (${bidStrategy})`);
         addLog(ops.csvLog,'info',`[${accLabel}] creating adset...`);
         const adsetBody = {
           name: adsetName,
@@ -5479,6 +5481,7 @@ function mountOperations(container) {
           targeting: JSON.stringify(targeting),
           promoted_object: JSON.stringify(promoted),
           attribution_spec: firstRow['Attribution Spec'] || '[{"event_type":"CLICK_THROUGH","window_days":1}]',
+          ...(bidAmountRaw && +bidAmountRaw > 0 ? { bid_amount: String(Math.round(+bidAmountRaw * 100)) } : {}),
         };
         const adset = await apiFetch(`/act_${accId}/adsets`,{method:'POST',body:adsetBody});
         const adsetId = adset.id;
