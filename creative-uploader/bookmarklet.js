@@ -4,34 +4,61 @@
    v0.1 — MVP: images only (PNG/JPG), drag & drop, copy hashes
    ========================================================= */
 
-const VERSION = 'v0.1';
+const VERSION = 'v0.2';
 const API_VER = 'v23.0';
-const GRAPH   = 'https://graph.facebook.com/' + API_VER;
+// Ads Manager uses its own graph host — required for session-auth to work
+const GRAPH = 'https://adsmanager-graph.facebook.com/' + API_VER;
 
-// ── Token & Account (same approach as MetaCtrl PRO) ──────
-const TOKEN = typeof __accessToken !== 'undefined' ? __accessToken : null;
-
+// ── Token extraction (4 methods, same priority as MetaCtrl PRO) ──
 async function getToken() {
-  if (TOKEN) return TOKEN;
+  // 1. FB global injected variable (most reliable on business.facebook.com)
+  if (typeof __accessToken !== 'undefined' && __accessToken) return __accessToken;
+
+  // 2. Scan all inline scripts on the page for EAAI token pattern
+  for (const s of document.querySelectorAll('script:not([src])')) {
+    const m = s.textContent.match(/"access_token":"(EAAI[^"]+)"/);
+    if (m) return m[1];
+  }
+
+  // 3. Bootloader endpoint (works on some BM pages)
   try {
     const res = await fetch(
       'https://business.facebook.com/ajax/bootloader-endpoint/?modules=AdsCanvasComposerDialog.react&__a=1',
       { credentials: 'include' }
     );
     const txt = await res.text();
-    return txt.match(/"access_token":"(EAAI[^"]+)"/)?.[1] || '';
-  } catch { return ''; }
+    const m = txt.match(/"access_token":"(EAAI[^"]+)"/);
+    if (m) return m[1];
+  } catch {}
+
+  // 4. adsmanager async config endpoint
+  try {
+    const res = await fetch(
+      'https://adsmanager.facebook.com/async/store/initdata/?__a=1',
+      { credentials: 'include' }
+    );
+    const txt = await res.text();
+    const m = txt.match(/"access_token":"(EAAI[^"]+)"/);
+    if (m) return m[1];
+  } catch {}
+
+  return '';
 }
 
 function getAccountId() {
-  // Try URL first: ?act=123 or /act_123
-  const m = location.href.match(/[?&/]act[=_](\d+)/);
-  if (m) return m[1];
-  // Try FB internal context
+  // Try FB internal navigation context first (most accurate)
   try {
-    const nav = require('AdsManagerNavigationContext') || require('AdsManagerContext');
-    if (nav?.accountId) return String(nav.accountId).replace('act_','');
+    for (const mod of ['AdsManagerNavigationContext','AdsManagerContext','AdsManagerRouterContext']) {
+      try {
+        const ctx = require(mod);
+        if (ctx?.accountId) return String(ctx.accountId).replace('act_','');
+        if (ctx?.selectedAccountId) return String(ctx.selectedAccountId).replace('act_','');
+      } catch {}
+    }
   } catch {}
+  // Fallback: URL pattern ?act=123 or /act_123
+  const m = location.href.match(/[?&]act=(\d+)|\/act_(\d+)/);
+  if (m) return m[1] || m[2];
   return '';
 }
 
@@ -113,7 +140,7 @@ const STYLES = `
   .s-error    { color: #f87171; }
 
   #cu-actions { display: flex; gap: 8px; flex-shrink: 0; }
-  #cu-btn-upload, #cu-btn-copy, #cu-btn-clear {
+  #cu-btn-upload, #cu-btn-copy, #cu-btn-clear, #cu-btn-test {
     flex: 1; padding: 9px; border-radius: 8px; border: none; cursor: pointer;
     font-size: 12px; font-weight: 600; transition: background .15s;
   }
@@ -125,6 +152,8 @@ const STYLES = `
   #cu-btn-copy:disabled { opacity: .4; cursor: not-allowed; }
   #cu-btn-clear { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
   #cu-btn-clear:hover { background: #7f1d1d; color: #fca5a5; border-color: #991b1b; }
+  #cu-btn-test { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
+  #cu-btn-test:hover { background: #334155; color: #e2e8f0; }
 
   #cu-footer { padding: 8px 14px; border-top: 1px solid #1e293b; flex-shrink: 0; }
   #cu-status-line { font-size: 11px; color: #475569; min-height: 16px; }
@@ -270,7 +299,8 @@ function buildUI() {
       <input type="file" id="cu-file-input" multiple accept="image/png,image/jpeg,image/gif" />
       <div id="cu-queue"></div>
       <div id="cu-results"></div>
-      <div id="cu-actions">
+      <div id="cu-actions" style="flex-wrap:wrap;gap:6px">
+        <button id="cu-btn-test">🔑 Test token</button>
         <button id="cu-btn-upload">⬆ Upload</button>
         <button id="cu-btn-copy">📋 Copy hashes</button>
         <button id="cu-btn-clear">🗑 Clear</button>
@@ -321,6 +351,9 @@ function bindEvents() {
     e.target.value = '';
   });
 
+  // Test token button
+  wrap.querySelector('#cu-btn-test').addEventListener('click', testToken);
+
   // Upload button
   wrap.querySelector('#cu-btn-upload').addEventListener('click', startUpload);
 
@@ -346,6 +379,35 @@ function addFiles(files) {
     if (!existing.has(f.name)) state.files.push({ file: f, name: f.name, status: 'pending', hash: '', error: '' });
   });
   render();
+}
+
+// ── Test token ────────────────────────────────────────────
+async function testToken() {
+  setStatus('🔍 Detecting token…');
+  const token = state.token || await getToken();
+  if (!token) {
+    setStatus('❌ Token not found. Try opening Ads Manager inside Business Manager (business.facebook.com)');
+    return;
+  }
+  state.token = token;
+  render();
+  setStatus('🔍 Validating token with FB API…');
+  try {
+    const url = `${GRAPH}/me?fields=id,name&access_token=${encodeURIComponent(token)}`;
+    const res = await fetch(url, { credentials: 'include' });
+    const json = await res.json();
+    if (json.error) {
+      setStatus(`❌ Token invalid: [${json.error.code}] ${json.error.message}`);
+      const inp = wrap?.querySelector('#cu-token');
+      if (inp) inp.classList.replace('ok','err');
+    } else {
+      setStatus(`✅ Token OK — logged in as: ${json.name} (${json.id})`);
+      const inp = wrap?.querySelector('#cu-token');
+      if (inp) { inp.classList.remove('err'); inp.classList.add('ok'); }
+    }
+  } catch(e) {
+    setStatus(`❌ Network error: ${e.message}`);
+  }
 }
 
 // ── Upload logic ──────────────────────────────────────────
