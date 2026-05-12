@@ -40,12 +40,16 @@ async function apiGet(path, qsObj = {}) {
 }
 
 // XHR-based POST -- gives us upload.progress events (fetch can't)
+// Note: do NOT set withCredentials=true. Marketing API auth comes from
+// access_token in FormData; cookies aren't needed. Attaching an
+// upload.progress listener forces a CORS preflight, and FB's preflight
+// response returns Access-Control-Allow-Origin: * without Allow-Credentials,
+// which the browser rejects for credentialed requests -> "Network error".
 function apiPostForm(path, formData, onProgress) {
   return new Promise((resolve, reject) => {
     formData.append('access_token', TOKEN);
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `${BASE}/${path}`, true);
-    xhr.withCredentials = true;
     if (onProgress) {
       xhr.upload.addEventListener('progress', e => {
         if (e.lengthComputable) onProgress(e.loaded / e.total);
