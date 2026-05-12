@@ -1,13 +1,13 @@
 (() => {
 /* =========================================================
    Creative Uploader -- FB Ads image + video uploader via Marketing API
-   v0.4 -- unified drop zone (images + videos), per-file progress bar,
-          auto-polling video processing status
+   v0.4.1 -- unified drop zone (images + videos), per-file progress bar,
+            auto-polling video processing status
    ASCII-only source: index.html decodes B64 via atob() (Latin-1),
    so any multi-byte UTF-8 char (emoji/arrow/em-dash) would break.
    ========================================================= */
 
-const VERSION = 'v0.4';
+const VERSION = 'v0.4.1';
 
 // --Same config as MetaCtrl PRO ---------------------------
 const HOST    = 'https://adsmanager-graph.facebook.com';
