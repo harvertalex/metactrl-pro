@@ -1,10 +1,11 @@
 (() => {
 /* =========================================================
-   Creative Uploader — FB Ads image uploader via Marketing API
-   v0.3 — uses same API layer & token/account detection as MetaCtrl PRO
+   Creative Uploader — FB Ads image + video uploader via Marketing API
+   v0.4 — unified drop zone (images + videos), per-file progress bar,
+          auto-polling video processing status
    ========================================================= */
 
-const VERSION = 'v0.3';
+const VERSION = 'v0.4';
 
 // ── Same config as MetaCtrl PRO ───────────────────────────
 const HOST    = 'https://adsmanager-graph.facebook.com';
@@ -14,7 +15,7 @@ const BASE    = `${HOST}/${API_VER}`;
 // Global token injected by FB on business.facebook.com — identical to MetaCtrl PRO
 const TOKEN = typeof __accessToken !== 'undefined' ? __accessToken : null;
 
-// ── API layer — copied exactly from MetaCtrl PRO ──────────
+// ── API layer ─────────────────────────────────────────────
 const BASE_OPTS = {
   mode: 'cors',
   credentials: 'include',
@@ -36,15 +37,29 @@ async function apiGet(path, qsObj = {}) {
   return json;
 }
 
-async function apiPostForm(path, formData) {
-  // For file uploads — FormData body, access_token appended to FormData
-  formData.append('access_token', TOKEN);
-  const res = await fetch(`${BASE}/${path}`, {
-    ...BASE_OPTS, method: 'POST', body: formData,
+// XHR-based POST — gives us upload.progress events (fetch can't)
+function apiPostForm(path, formData, onProgress) {
+  return new Promise((resolve, reject) => {
+    formData.append('access_token', TOKEN);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${BASE}/${path}`, true);
+    xhr.withCredentials = true;
+    if (onProgress) {
+      xhr.upload.addEventListener('progress', e => {
+        if (e.lengthComputable) onProgress(e.loaded / e.total);
+      });
+    }
+    xhr.addEventListener('load', () => {
+      let json;
+      try { json = JSON.parse(xhr.responseText); }
+      catch { return reject(new Error(`HTTP ${xhr.status}: invalid JSON`)); }
+      if (json.error) return reject(new Error(`[${json.error.code}] ${json.error.message}`));
+      resolve(json);
+    });
+    xhr.addEventListener('error', () => reject(new Error('Network error')));
+    xhr.addEventListener('abort', () => reject(new Error('Upload aborted')));
+    xhr.send(formData);
   });
-  const json = await res.json();
-  if (json.error) throw new Error(`[${json.error.code}] ${json.error.message}`);
-  return json;
 }
 
 // ── Account detection — same as MetaCtrl PRO ─────────────
@@ -58,14 +73,39 @@ function getAccountId() {
 }
 
 // ── Upload single image ───────────────────────────────────
-async function uploadImage(accountId, file) {
+async function uploadImage(accountId, file, onProgress) {
   const fd = new FormData();
   fd.append('filename', file, file.name);
-  const result = await apiPostForm(`act_${accountId}/adimages`, fd);
+  const result = await apiPostForm(`act_${accountId}/adimages`, fd, onProgress);
   const key = Object.keys(result.images || {})[0];
   const img = result.images?.[key];
   if (!img?.hash) throw new Error('No hash in response');
   return img.hash;
+}
+
+// ── Upload single video (non-resumable, simple POST) ──────
+async function uploadVideo(accountId, file, onProgress) {
+  const fd = new FormData();
+  fd.append('source', file, file.name);
+  const result = await apiPostForm(`act_${accountId}/advideos`, fd, onProgress);
+  if (!result?.id) throw new Error('No video id in response');
+  return result.id;
+}
+
+// ── Poll video processing status until ready ──────────────
+// Returns when status.video_status === 'ready', throws on error/timeout.
+async function waitForVideoReady(videoId, onTick) {
+  const MAX_ATTEMPTS = 80;   // ~6.5 min @ 5s
+  const INTERVAL_MS  = 5000;
+  for (let i = 0; i < MAX_ATTEMPTS; i++) {
+    const data = await apiGet(videoId, { fields: 'status' });
+    const vs = data?.status?.video_status || 'unknown';
+    if (onTick) onTick(vs, i);
+    if (vs === 'ready')  return;
+    if (vs === 'error')  throw new Error('FB rejected video (processing error)');
+    await sleep(INTERVAL_MS);
+  }
+  throw new Error('Video processing timeout (>6 min)');
 }
 
 // ── Verify token works ────────────────────────────────────
@@ -80,9 +120,18 @@ const state = {
   accountId: '',
   tokenOk: false,
   tokenUser: '',
-  files: [],    // { file, name, status, hash, error }
+  files: [],    // { file, name, type:'image'|'video', status, progress, hash, videoId, processingStatus, error }
   uploading: false,
 };
+
+// ── MIME → type mapping ───────────────────────────────────
+const IMAGE_TYPES = new Set(['image/png','image/jpeg','image/gif','image/webp']);
+const VIDEO_TYPES = new Set(['video/mp4','video/quicktime','video/webm','video/x-m4v']);
+function classify(mime) {
+  if (IMAGE_TYPES.has(mime)) return 'image';
+  if (VIDEO_TYPES.has(mime)) return 'video';
+  return null;
+}
 
 // ── Styles ────────────────────────────────────────────────
 const STYLES = `
@@ -144,19 +193,45 @@ const STYLES = `
   #cu-drop.has-files { border-color: #22c55e; background: rgba(34,197,94,.04); color: #86efac; }
   #cu-file-input { display: none; }
 
-  #cu-queue { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto; }
+  #cu-queue { display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow-y: auto; }
   .cu-item {
-    display: grid; grid-template-columns: 1fr auto auto; align-items: center;
-    gap: 8px; padding: 5px 8px; background: #1e293b; border-radius: 6px;
+    display: flex; flex-direction: column; gap: 3px;
+    padding: 6px 8px; background: #1e293b; border-radius: 6px;
     border: 1px solid #334155;
   }
+  .cu-item-row {
+    display: grid; grid-template-columns: 14px 1fr auto auto; align-items: center; gap: 8px;
+  }
+  .cu-item-icon { font-size: 13px; line-height: 1; text-align: center; }
+  .cu-item-icon.t-image { color: #60a5fa; }
+  .cu-item-icon.t-video { color: #c084fc; }
   .cu-item-name { font-size: 11px; color: #cbd5e1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .cu-item-hash { font-size: 10px; color: #475569; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .cu-item-status { font-size: 11px; min-width: 54px; text-align: right; }
-  .s-pending   { color: #475569; }
-  .s-uploading { color: #60a5fa; }
-  .s-done      { color: #4ade80; }
-  .s-error     { color: #f87171; }
+  .cu-item-meta { font-size: 10px; color: #475569; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cu-item-status { font-size: 11px; min-width: 64px; text-align: right; }
+  .s-pending    { color: #475569; }
+  .s-uploading  { color: #60a5fa; }
+  .s-processing { color: #fbbf24; }
+  .s-done       { color: #4ade80; }
+  .s-error      { color: #f87171; }
+
+  /* Progress bar */
+  .cu-bar {
+    height: 3px; background: #0f172a; border-radius: 2px; overflow: hidden;
+    margin-top: 2px;
+  }
+  .cu-bar-fill {
+    height: 100%; width: 0%; background: #3b82f6;
+    transition: width .15s linear;
+  }
+  .cu-bar-fill.processing {
+    background: linear-gradient(90deg, #fbbf24 0%, #f59e0b 50%, #fbbf24 100%);
+    background-size: 200% 100%;
+    animation: cu-pulse 1.5s linear infinite;
+    width: 100% !important;
+  }
+  .cu-bar-fill.done  { background: #22c55e; width: 100% !important; }
+  .cu-bar-fill.error { background: #ef4444; width: 100% !important; }
+  @keyframes cu-pulse { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
   #cu-actions { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; }
   .cu-btn {
@@ -222,10 +297,10 @@ function buildUI() {
 
       <div id="cu-drop">
         <div style="font-size:22px;margin-bottom:6px">📁</div>
-        Drop images here<br>
-        <span style="font-size:11px;color:#334155">PNG / JPG — or click to browse</span>
+        Drop images or videos here<br>
+        <span style="font-size:11px;color:#334155">PNG / JPG / GIF / MP4 / MOV — or click to browse</span>
       </div>
-      <input type="file" id="cu-file-input" multiple accept="image/png,image/jpeg,image/gif" />
+      <input type="file" id="cu-file-input" multiple accept="image/png,image/jpeg,image/gif,image/webp,video/mp4,video/quicktime,video/webm,video/x-m4v" />
 
       <div id="cu-queue"></div>
       <div id="cu-results"></div>
@@ -294,7 +369,6 @@ async function checkAuth() {
     setAuth('err', `❌ Token invalid`, e.message);
   }
 
-  // Detect account ID
   const accId = getAccountId();
   if (accId) state.accountId = accId;
   updateAuthPanel();
@@ -323,29 +397,48 @@ function updateUploadBtn() {
 }
 
 // ── Files ─────────────────────────────────────────────────
-const ALLOWED = new Set(['image/png','image/jpeg','image/gif']);
-
 function addFiles(files) {
-  const valid = files.filter(f => ALLOWED.has(f.type));
-  if (valid.length < files.length) setStatus(`Skipped ${files.length - valid.length} non-image file(s)`);
+  const tagged = files.map(f => ({ file: f, type: classify(f.type) })).filter(x => x.type);
+  const skipped = files.length - tagged.length;
+  if (skipped) setStatus(`Skipped ${skipped} unsupported file(s)`);
+
   const existing = new Set(state.files.map(f => f.name));
-  valid.forEach(f => {
-    if (!existing.has(f.name)) state.files.push({ file: f, name: f.name, status: 'pending', hash: '', error: '' });
+  tagged.forEach(({ file, type }) => {
+    if (existing.has(file.name)) return;
+    state.files.push({
+      file, name: file.name, type,
+      status: 'pending',
+      progress: 0,
+      hash: '', videoId: '',
+      processingStatus: '',
+      error: '',
+    });
   });
   renderQueue();
   updateUploadBtn();
 }
 
 // ── Render queue ──────────────────────────────────────────
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + 'B';
+  if (bytes < 1024*1024) return (bytes/1024).toFixed(0) + 'KB';
+  return (bytes/1024/1024).toFixed(1) + 'MB';
+}
+
 function renderQueue() {
   const drop = wrap?.querySelector('#cu-drop');
   if (drop) {
     if (state.files.length) {
+      const imgs = state.files.filter(f => f.type === 'image').length;
+      const vids = state.files.filter(f => f.type === 'video').length;
+      const parts = [];
+      if (imgs) parts.push(`${imgs} image${imgs>1?'s':''}`);
+      if (vids) parts.push(`${vids} video${vids>1?'s':''}`);
       drop.className = 'has-files';
-      drop.innerHTML = `<strong style="font-size:13px;color:#4ade80">${state.files.length} file${state.files.length>1?'s':''} selected</strong><br><span style="font-size:11px">drop more to add</span>`;
+      drop.innerHTML = `<strong style="font-size:13px;color:#4ade80">${parts.join(' + ')} selected</strong><br><span style="font-size:11px">drop more to add</span>`;
     } else {
       drop.className = '';
-      drop.innerHTML = `<div style="font-size:22px;margin-bottom:6px">📁</div>Drop images here<br><span style="font-size:11px;color:#334155">PNG / JPG — or click to browse</span>`;
+      drop.innerHTML = `<div style="font-size:22px;margin-bottom:6px">📁</div>Drop images or videos here<br><span style="font-size:11px;color:#334155">PNG / JPG / GIF / MP4 / MOV — or click to browse</span>`;
     }
   }
 
@@ -355,12 +448,44 @@ function renderQueue() {
     state.files.forEach(f => {
       const item = document.createElement('div');
       item.className = 'cu-item';
-      const statusText = { pending:'—', uploading:'⟳', done:'✓ done', error:'✗ error' }[f.status];
-      const hashText = f.hash ? f.hash.slice(0,14)+'…' : (f.error ? f.error.slice(0,22) : '');
+
+      const icon = f.type === 'video' ? '🎬' : '🖼';
+      let statusText, statusClass, barClass, barPct;
+      switch (f.status) {
+        case 'pending':
+          statusText = '—'; statusClass = 's-pending'; barClass = ''; barPct = 0; break;
+        case 'uploading':
+          statusText = `↑ ${Math.round((f.progress||0)*100)}%`; statusClass = 's-uploading';
+          barClass = ''; barPct = (f.progress||0)*100; break;
+        case 'processing':
+          statusText = `⟳ ${f.processingStatus || 'processing'}`; statusClass = 's-processing';
+          barClass = 'processing'; barPct = 100; break;
+        case 'done':
+          statusText = '✓ done'; statusClass = 's-done'; barClass = 'done'; barPct = 100; break;
+        case 'error':
+          statusText = '✗ error'; statusClass = 's-error'; barClass = 'error'; barPct = 100; break;
+      }
+
+      let metaText = '';
+      if (f.status === 'done') {
+        metaText = f.type === 'video'
+          ? `id:${f.videoId.slice(0,10)}…`
+          : `${f.hash.slice(0,10)}…`;
+      } else if (f.error) {
+        metaText = f.error.slice(0,22);
+      } else {
+        metaText = fmtSize(f.file.size);
+      }
+
+      const showBar = (f.status !== 'pending');
       item.innerHTML = `
-        <div class="cu-item-name" title="${esc(f.name)}">${esc(f.name)}</div>
-        <div class="cu-item-hash" title="${esc(f.hash||f.error||'')}">${esc(hashText)}</div>
-        <div class="cu-item-status s-${f.status}">${statusText}</div>
+        <div class="cu-item-row">
+          <div class="cu-item-icon t-${f.type}">${icon}</div>
+          <div class="cu-item-name" title="${esc(f.name)}">${esc(f.name)}</div>
+          <div class="cu-item-meta" title="${esc(f.hash||f.videoId||f.error||'')}">${esc(metaText)}</div>
+          <div class="cu-item-status ${statusClass}">${statusText}</div>
+        </div>
+        ${showBar ? `<div class="cu-bar"><div class="cu-bar-fill ${barClass}" style="width:${barPct}%"></div></div>` : ''}
       `;
       queue.appendChild(item);
     });
@@ -372,22 +497,25 @@ function renderQueue() {
   if (results) {
     if (done.length) {
       results.style.display = 'block';
-      results.textContent = done.map(f => `${f.name.replace(/\.[^.]+$/,'')}\n  hash: ${f.hash}`).join('\n\n');
+      results.textContent = done.map(f => {
+        const id = f.type === 'video' ? `videoId: ${f.videoId}` : `hash: ${f.hash}`;
+        return `${f.name.replace(/\.[^.]+$/,'')}\n  ${id}`;
+      }).join('\n\n');
     } else {
       results.style.display = 'none';
     }
   }
 
   const btnCopy = wrap?.querySelector('#cu-btn-copy');
-  if (btnCopy) btnCopy.disabled = done.length === 0;
+  if (btnCopy) btnCopy.disabled = done.length === 0 || state.uploading;
 
   const total = state.files.length;
   const ok    = done.length;
   const err   = state.files.filter(f => f.status === 'error').length;
   if (total) {
     setStatus(state.uploading
-      ? `Uploading… ${ok+err}/${total}`
-      : `${ok} uploaded${err ? ' · '+err+' failed' : ''}${total-ok-err ? ' · '+(total-ok-err)+' pending' : ''}`
+      ? `Working… ${ok+err}/${total}`
+      : `${ok} done${err ? ' · '+err+' failed' : ''}${total-ok-err ? ' · '+(total-ok-err)+' pending' : ''}`
     );
   }
 }
@@ -404,28 +532,49 @@ async function startUpload() {
 
   for (const item of pending) {
     item.status = 'uploading';
+    item.progress = 0;
     item.error = '';
     renderQueue();
     try {
-      item.hash = await uploadImage(state.accountId, item.file);
-      item.status = 'done';
+      const onProgress = p => { item.progress = p; renderQueue(); };
+      if (item.type === 'video') {
+        const vidId = await uploadVideo(state.accountId, item.file, onProgress);
+        item.videoId = vidId;
+        item.status = 'processing';
+        item.processingStatus = 'processing';
+        renderQueue();
+        await waitForVideoReady(vidId, vs => {
+          item.processingStatus = vs;
+          renderQueue();
+        });
+        item.status = 'done';
+      } else {
+        item.hash = await uploadImage(state.accountId, item.file, onProgress);
+        item.status = 'done';
+      }
     } catch(e) {
       item.status = 'error';
       item.error = e.message;
     }
     renderQueue();
-    await sleep(300);
+    await sleep(200);
   }
 
   state.uploading = false;
   updateUploadBtn();
+  renderQueue();
 }
 
 // ── Copy hashes ───────────────────────────────────────────
 function copyHashes() {
   const done = state.files.filter(f => f.status === 'done');
   if (!done.length) return;
-  const data = done.map(f => ({ name: f.name.replace(/\.[^.]+$/, ''), hash: f.hash }));
+  const data = done.map(f => {
+    const base = { name: f.name.replace(/\.[^.]+$/, '') };
+    return f.type === 'video'
+      ? { ...base, videoId: f.videoId }
+      : { ...base, imageHash: f.hash };
+  });
   navigator.clipboard.writeText(JSON.stringify(data, null, 2)).then(() => {
     const btn = wrap?.querySelector('#cu-btn-copy');
     if (btn) { btn.textContent = '✅ Copied!'; setTimeout(() => { btn.textContent = '📋 Copy hashes'; }, 2000); }
