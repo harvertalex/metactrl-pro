@@ -1,21 +1,23 @@
 (() => {
 /* =========================================================
-   Creative Uploader — FB Ads image + video uploader via Marketing API
-   v0.4 — unified drop zone (images + videos), per-file progress bar,
+   Creative Uploader -- FB Ads image + video uploader via Marketing API
+   v0.4 -- unified drop zone (images + videos), per-file progress bar,
           auto-polling video processing status
+   ASCII-only source: index.html decodes B64 via atob() (Latin-1),
+   so any multi-byte UTF-8 char (emoji/arrow/em-dash) would break.
    ========================================================= */
 
 const VERSION = 'v0.4';
 
-// ── Same config as MetaCtrl PRO ───────────────────────────
+// --Same config as MetaCtrl PRO ---------------------------
 const HOST    = 'https://adsmanager-graph.facebook.com';
 const API_VER = 'v23.0';
 const BASE    = `${HOST}/${API_VER}`;
 
-// Global token injected by FB on business.facebook.com — identical to MetaCtrl PRO
+// Global token injected by FB on business.facebook.com -- identical to MetaCtrl PRO
 const TOKEN = typeof __accessToken !== 'undefined' ? __accessToken : null;
 
-// ── API layer ─────────────────────────────────────────────
+// --API layer -----------------------------------------
 const BASE_OPTS = {
   mode: 'cors',
   credentials: 'include',
@@ -37,7 +39,7 @@ async function apiGet(path, qsObj = {}) {
   return json;
 }
 
-// XHR-based POST — gives us upload.progress events (fetch can't)
+// XHR-based POST -- gives us upload.progress events (fetch can't)
 function apiPostForm(path, formData, onProgress) {
   return new Promise((resolve, reject) => {
     formData.append('access_token', TOKEN);
@@ -62,7 +64,7 @@ function apiPostForm(path, formData, onProgress) {
   });
 }
 
-// ── Account detection — same as MetaCtrl PRO ─────────────
+// --Account detection -- same as MetaCtrl PRO -------------
 function getAccountId() {
   try {
     const id = require('BusinessUnifiedNavigationContext').adAccountID;
@@ -72,7 +74,7 @@ function getAccountId() {
   return m ? m[1] : '';
 }
 
-// ── Upload single image ───────────────────────────────────
+// --Upload single image -----------------------------------
 async function uploadImage(accountId, file, onProgress) {
   const fd = new FormData();
   fd.append('filename', file, file.name);
@@ -83,7 +85,7 @@ async function uploadImage(accountId, file, onProgress) {
   return img.hash;
 }
 
-// ── Upload single video (non-resumable, simple POST) ──────
+// --Upload single video (non-resumable, simple POST) ------
 async function uploadVideo(accountId, file, onProgress) {
   const fd = new FormData();
   fd.append('source', file, file.name);
@@ -92,7 +94,7 @@ async function uploadVideo(accountId, file, onProgress) {
   return result.id;
 }
 
-// ── Poll video processing status until ready ──────────────
+// --Poll video processing status until ready --------------
 // Returns when status.video_status === 'ready', throws on error/timeout.
 async function waitForVideoReady(videoId, onTick) {
   const MAX_ATTEMPTS = 80;   // ~6.5 min @ 5s
@@ -108,14 +110,14 @@ async function waitForVideoReady(videoId, onTick) {
   throw new Error('Video processing timeout (>6 min)');
 }
 
-// ── Verify token works ────────────────────────────────────
+// --Verify token works ------------------------------------
 async function verifyToken() {
-  if (!TOKEN) throw new Error('TOKEN not found — open Ads Manager inside Business Manager (business.facebook.com)');
+  if (!TOKEN) throw new Error('TOKEN not found -- open Ads Manager inside Business Manager (business.facebook.com)');
   const data = await apiGet('me', { fields: 'id,name' });
   return data; // { id, name }
 }
 
-// ── State ─────────────────────────────────────────────────
+// --State ---------------------------------------------
 const state = {
   accountId: '',
   tokenOk: false,
@@ -124,7 +126,7 @@ const state = {
   uploading: false,
 };
 
-// ── MIME → type mapping ───────────────────────────────────
+// --MIME -> type mapping -----------------------------------
 const IMAGE_TYPES = new Set(['image/png','image/jpeg','image/gif','image/webp']);
 const VIDEO_TYPES = new Set(['video/mp4','video/quicktime','video/webm','video/x-m4v']);
 function classify(mime) {
@@ -133,7 +135,7 @@ function classify(mime) {
   return null;
 }
 
-// ── Styles ────────────────────────────────────────────────
+// --Styles --------------------------------------------
 const STYLES = `
   #cu-wrap * { box-sizing: border-box; margin: 0; padding: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   #cu-wrap {
@@ -200,9 +202,13 @@ const STYLES = `
     border: 1px solid #334155;
   }
   .cu-item-row {
-    display: grid; grid-template-columns: 14px 1fr auto auto; align-items: center; gap: 8px;
+    display: grid; grid-template-columns: 28px 1fr auto auto; align-items: center; gap: 8px;
   }
-  .cu-item-icon { font-size: 13px; line-height: 1; text-align: center; }
+  .cu-item-icon {
+    font-size: 9px; font-weight: 700; letter-spacing: .5px;
+    text-align: center; padding: 1px 3px; border-radius: 3px;
+    border: 1px solid currentColor;
+  }
   .cu-item-icon.t-image { color: #60a5fa; }
   .cu-item-icon.t-video { color: #c084fc; }
   .cu-item-name { font-size: 11px; color: #cbd5e1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -264,7 +270,7 @@ function injectStyles() {
   document.head.appendChild(s);
 }
 
-// ── Build UI ──────────────────────────────────────────────
+// --Build UI ------------------------------------------
 let wrap = null;
 
 function buildUI() {
@@ -275,19 +281,19 @@ function buildUI() {
   wrap.id = 'cu-wrap';
   wrap.innerHTML = `
     <div id="cu-header">
-      <span id="cu-title">📤 Creative Uploader</span>
+      <span id="cu-title">Creative Uploader</span>
       <span id="cu-version">${VERSION}</span>
-      <button id="cu-close">✕</button>
+      <button id="cu-close">X</button>
     </div>
     <div id="cu-body">
 
       <div id="cu-auth" class="checking">
         <div id="cu-auth-row">
-          <span id="cu-auth-status">⟳ Checking token…</span>
-          <button id="cu-btn-recheck">↺ Recheck</button>
+          <span id="cu-auth-status">Checking token...</span>
+          <button id="cu-btn-recheck">Recheck</button>
         </div>
         <div id="cu-auth-user"></div>
-        <div id="cu-auth-acc">Account: <span id="cu-auth-acc-val">detecting…</span></div>
+        <div id="cu-auth-acc">Account: <span id="cu-auth-acc-val">detecting...</span></div>
       </div>
 
       <div id="cu-acc-override">
@@ -296,9 +302,9 @@ function buildUI() {
       </div>
 
       <div id="cu-drop">
-        <div style="font-size:22px;margin-bottom:6px">📁</div>
+        <div style="font-size:14px;font-weight:600;letter-spacing:2px;margin-bottom:6px;color:#475569">[ DROP ZONE ]</div>
         Drop images or videos here<br>
-        <span style="font-size:11px;color:#334155">PNG / JPG / GIF / MP4 / MOV — or click to browse</span>
+        <span style="font-size:11px;color:#334155">PNG / JPG / GIF / MP4 / MOV -- or click to browse</span>
       </div>
       <input type="file" id="cu-file-input" multiple accept="image/png,image/jpeg,image/gif,image/webp,video/mp4,video/quicktime,video/webm,video/x-m4v" />
 
@@ -306,9 +312,9 @@ function buildUI() {
       <div id="cu-results"></div>
 
       <div id="cu-actions">
-        <button class="cu-btn cu-btn-primary" id="cu-btn-upload">⬆ Upload</button>
-        <button class="cu-btn cu-btn-secondary" id="cu-btn-copy" disabled>📋 Copy hashes</button>
-        <button class="cu-btn cu-btn-secondary cu-btn-danger" id="cu-btn-clear">🗑 Clear</button>
+        <button class="cu-btn cu-btn-primary" id="cu-btn-upload">Upload</button>
+        <button class="cu-btn cu-btn-secondary" id="cu-btn-copy" disabled>Copy hashes</button>
+        <button class="cu-btn cu-btn-secondary cu-btn-danger" id="cu-btn-clear">Clear</button>
       </div>
     </div>
     <div id="cu-footer">
@@ -319,7 +325,7 @@ function buildUI() {
   bindEvents();
 }
 
-// ── Events ────────────────────────────────────────────────
+// --Events --------------------------------------------
 function bindEvents() {
   wrap.querySelector('#cu-close').addEventListener('click', () => wrap.remove());
 
@@ -343,7 +349,7 @@ function bindEvents() {
   wrap.querySelector('#cu-btn-clear').addEventListener('click', () => { state.files = []; renderQueue(); });
 }
 
-// ── Auth check ────────────────────────────────────────────
+// --Auth check --------------------------------------------
 async function checkAuth() {
   const authEl  = wrap?.querySelector('#cu-auth');
   const statusEl = wrap?.querySelector('#cu-auth-status');
@@ -351,11 +357,11 @@ async function checkAuth() {
 
   if (!authEl) return;
   authEl.className = 'checking';
-  if (statusEl) statusEl.textContent = '⟳ Checking token…';
+  if (statusEl) statusEl.textContent = 'Checking token...';
   if (userEl)   userEl.textContent = '';
 
   if (!TOKEN) {
-    setAuth('err', '❌ Token not found', 'Open Ads Manager inside Business Manager (business.facebook.com)');
+    setAuth('err', '[ERR] Token not found', 'Open Ads Manager inside Business Manager (business.facebook.com)');
     return;
   }
 
@@ -363,10 +369,10 @@ async function checkAuth() {
     const me = await verifyToken();
     state.tokenOk = true;
     state.tokenUser = me.name;
-    setAuth('ok', `✅ Token OK`, `Logged in as: ${me.name} (${me.id})`);
+    setAuth('ok', `[OK] Token OK`, `Logged in as: ${me.name} (${me.id})`);
   } catch(e) {
     state.tokenOk = false;
-    setAuth('err', `❌ Token invalid`, e.message);
+    setAuth('err', `[ERR] Token invalid`, e.message);
   }
 
   const accId = getAccountId();
@@ -387,6 +393,7 @@ function updateAuthPanel() {
   const accEl    = wrap?.querySelector('#cu-auth-acc-val');
   const accInput = wrap?.querySelector('#cu-acc-input');
   if (accEl) accEl.textContent = state.accountId ? `act_${state.accountId}` : 'not detected';
+  // (no non-ASCII chars below this line)
   if (accInput && !accInput.value) accInput.placeholder = state.accountId || 'e.g. 756788239711136';
   updateUploadBtn();
 }
@@ -396,7 +403,7 @@ function updateUploadBtn() {
   if (btn) btn.disabled = state.uploading || !state.files.length || !state.tokenOk || !state.accountId;
 }
 
-// ── Files ─────────────────────────────────────────────────
+// --Files ---------------------------------------------
 function addFiles(files) {
   const tagged = files.map(f => ({ file: f, type: classify(f.type) })).filter(x => x.type);
   const skipped = files.length - tagged.length;
@@ -418,7 +425,7 @@ function addFiles(files) {
   updateUploadBtn();
 }
 
-// ── Render queue ──────────────────────────────────────────
+// --Render queue ------------------------------------------
 function fmtSize(bytes) {
   if (bytes < 1024) return bytes + 'B';
   if (bytes < 1024*1024) return (bytes/1024).toFixed(0) + 'KB';
@@ -438,7 +445,7 @@ function renderQueue() {
       drop.innerHTML = `<strong style="font-size:13px;color:#4ade80">${parts.join(' + ')} selected</strong><br><span style="font-size:11px">drop more to add</span>`;
     } else {
       drop.className = '';
-      drop.innerHTML = `<div style="font-size:22px;margin-bottom:6px">📁</div>Drop images or videos here<br><span style="font-size:11px;color:#334155">PNG / JPG / GIF / MP4 / MOV — or click to browse</span>`;
+      drop.innerHTML = `<div style="font-size:14px;font-weight:600;letter-spacing:2px;margin-bottom:6px;color:#475569">[ DROP ZONE ]</div>Drop images or videos here<br><span style="font-size:11px;color:#334155">PNG / JPG / GIF / MP4 / MOV -- or click to browse</span>`;
     }
   }
 
@@ -449,28 +456,28 @@ function renderQueue() {
       const item = document.createElement('div');
       item.className = 'cu-item';
 
-      const icon = f.type === 'video' ? '🎬' : '🖼';
+      const icon = f.type === 'video' ? 'VID' : 'IMG';
       let statusText, statusClass, barClass, barPct;
       switch (f.status) {
         case 'pending':
-          statusText = '—'; statusClass = 's-pending'; barClass = ''; barPct = 0; break;
+          statusText = '-'; statusClass = 's-pending'; barClass = ''; barPct = 0; break;
         case 'uploading':
-          statusText = `↑ ${Math.round((f.progress||0)*100)}%`; statusClass = 's-uploading';
+          statusText = `${Math.round((f.progress||0)*100)}%`; statusClass = 's-uploading';
           barClass = ''; barPct = (f.progress||0)*100; break;
         case 'processing':
-          statusText = `⟳ ${f.processingStatus || 'processing'}`; statusClass = 's-processing';
+          statusText = f.processingStatus || 'processing'; statusClass = 's-processing';
           barClass = 'processing'; barPct = 100; break;
         case 'done':
-          statusText = '✓ done'; statusClass = 's-done'; barClass = 'done'; barPct = 100; break;
+          statusText = 'done'; statusClass = 's-done'; barClass = 'done'; barPct = 100; break;
         case 'error':
-          statusText = '✗ error'; statusClass = 's-error'; barClass = 'error'; barPct = 100; break;
+          statusText = 'error'; statusClass = 's-error'; barClass = 'error'; barPct = 100; break;
       }
 
       let metaText = '';
       if (f.status === 'done') {
         metaText = f.type === 'video'
-          ? `id:${f.videoId.slice(0,10)}…`
-          : `${f.hash.slice(0,10)}…`;
+          ? `id:${f.videoId.slice(0,10)}...`
+          : `${f.hash.slice(0,10)}...`;
       } else if (f.error) {
         metaText = f.error.slice(0,22);
       } else {
@@ -514,13 +521,13 @@ function renderQueue() {
   const err   = state.files.filter(f => f.status === 'error').length;
   if (total) {
     setStatus(state.uploading
-      ? `Working… ${ok+err}/${total}`
-      : `${ok} done${err ? ' · '+err+' failed' : ''}${total-ok-err ? ' · '+(total-ok-err)+' pending' : ''}`
+      ? `Working... ${ok+err}/${total}`
+      : `${ok} done${err ? ' | '+err+' failed' : ''}${total-ok-err ? ' | '+(total-ok-err)+' pending' : ''}`
     );
   }
 }
 
-// ── Upload ────────────────────────────────────────────────
+// --Upload --------------------------------------------
 async function startUpload() {
   if (state.uploading || !state.tokenOk || !state.accountId) return;
 
@@ -565,7 +572,7 @@ async function startUpload() {
   renderQueue();
 }
 
-// ── Copy hashes ───────────────────────────────────────────
+// --Copy hashes -------------------------------------------
 function copyHashes() {
   const done = state.files.filter(f => f.status === 'done');
   if (!done.length) return;
@@ -577,16 +584,16 @@ function copyHashes() {
   });
   navigator.clipboard.writeText(JSON.stringify(data, null, 2)).then(() => {
     const btn = wrap?.querySelector('#cu-btn-copy');
-    if (btn) { btn.textContent = '✅ Copied!'; setTimeout(() => { btn.textContent = '📋 Copy hashes'; }, 2000); }
+    if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy hashes'; }, 2000); }
   });
 }
 
-// ── Helpers ───────────────────────────────────────────────
+// --Helpers -------------------------------------------
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function setStatus(msg) { const el = wrap?.querySelector('#cu-status-line'); if (el) el.textContent = msg; }
 function esc(v) { return String(v??'').replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
-// ── Init ──────────────────────────────────────────────────
+// --Init ----------------------------------------------
 buildUI();
 checkAuth();
 
