@@ -1,13 +1,27 @@
 (() => {
 /* =========================================================
    Creative Uploader -- FB Ads image + video uploader via Marketing API
-   v0.4.1 -- unified drop zone (images + videos), per-file progress bar,
-            auto-polling video processing status
+   v0.4.3 -- back to fetch+credentials (XHR upload.progress forced CORS
+            preflight which broke FB auth); indeterminate pulse bar
+            during upload; verbose [CU] console logs; clickable error
+            details panel under each failed file.
    ASCII-only source: index.html decodes B64 via atob() (Latin-1),
    so any multi-byte UTF-8 char (emoji/arrow/em-dash) would break.
    ========================================================= */
 
-const VERSION = 'v0.4.1';
+const VERSION = 'v0.4.3';
+const LOG = (...args) => console.log('[CU]', ...args);
+const WARN = (...args) => console.warn('[CU]', ...args);
+const ERR  = (...args) => console.error('[CU]', ...args);
+
+// Custom error that carries rich context (FB error fields, http status, response body)
+class CUError extends Error {
+  constructor(message, details) {
+    super(message);
+    this.name = 'CUError';
+    this.details = details || {};
+  }
+}
 
 // --Same config as MetaCtrl PRO ---------------------------
 const HOST    = 'https://adsmanager-graph.facebook.com';
@@ -31,41 +45,83 @@ function buildUrl(path, qsObj = {}) {
 }
 
 async function apiGet(path, qsObj = {}) {
-  const res = await fetch(buildUrl(path, qsObj), {
-    ...BASE_OPTS, method: 'GET', headers: { Accept: 'application/json' },
-  });
-  const json = await res.json();
-  if (json.error) throw new Error(`[${json.error.code}] ${json.error.message}`);
+  const url = buildUrl(path, qsObj);
+  const safePath = path + (Object.keys(qsObj).length ? '?' + new URLSearchParams(qsObj).toString() : '');
+  LOG('GET', safePath);
+  const t0 = performance.now();
+  let res, raw, json;
+  try {
+    res = await fetch(url, { ...BASE_OPTS, method: 'GET', headers: { Accept: 'application/json' } });
+    raw = await res.text();
+  } catch (netErr) {
+    ERR('GET network failure', safePath, netErr);
+    throw new CUError('Network failure: ' + netErr.message, { stage: 'get', url: safePath, netError: netErr.message });
+  }
+  try { json = JSON.parse(raw); } catch {
+    ERR('GET non-JSON response', safePath, 'status', res.status, 'body:', raw.slice(0,500));
+    throw new CUError(`HTTP ${res.status}: invalid JSON`, { stage: 'get', url: safePath, httpStatus: res.status, rawResponse: raw.slice(0,2000) });
+  }
+  const dt = (performance.now()-t0).toFixed(0);
+  if (json.error) {
+    const e = json.error;
+    ERR('GET FB error', safePath, 'in', dt+'ms', e);
+    throw new CUError(`[${e.code}${e.error_subcode?'/'+e.error_subcode:''}] ${e.message}`, {
+      stage: 'get', url: safePath, httpStatus: res.status, durationMs: +dt,
+      fbError: { code:e.code, subcode:e.error_subcode, type:e.type, message:e.message, fbtrace_id:e.fbtrace_id, user_title:e.error_user_title, user_msg:e.error_user_msg },
+      rawResponse: raw.slice(0,2000),
+    });
+  }
+  LOG('GET ok', safePath, 'in', dt+'ms');
   return json;
 }
 
-// XHR-based POST -- gives us upload.progress events (fetch can't)
-// Note: do NOT set withCredentials=true. Marketing API auth comes from
-// access_token in FormData; cookies aren't needed. Attaching an
-// upload.progress listener forces a CORS preflight, and FB's preflight
-// response returns Access-Control-Allow-Origin: * without Allow-Credentials,
-// which the browser rejects for credentialed requests -> "Network error".
-function apiPostForm(path, formData, onProgress) {
-  return new Promise((resolve, reject) => {
-    formData.append('access_token', TOKEN);
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', `${BASE}/${path}`, true);
-    if (onProgress) {
-      xhr.upload.addEventListener('progress', e => {
-        if (e.lengthComputable) onProgress(e.loaded / e.total);
-      });
-    }
-    xhr.addEventListener('load', () => {
-      let json;
-      try { json = JSON.parse(xhr.responseText); }
-      catch { return reject(new Error(`HTTP ${xhr.status}: invalid JSON`)); }
-      if (json.error) return reject(new Error(`[${json.error.code}] ${json.error.message}`));
-      resolve(json);
+// fetch-based POST (credentialed). We CANNOT use XHR upload.progress here:
+//   - Attaching xhr.upload.progress listener forces CORS preflight.
+//   - FB preflight responds with Access-Control-Allow-Origin: * (no
+//     Allow-Credentials). Browser then either:
+//     (a) blocks if withCredentials=true (preflight policy violation), or
+//     (b) sends POST without cookies if withCredentials=false, which FB
+//         rejects with OAuthException code 1 "Invalid request".
+//   So we trade real progress bar for working uploads. Caller can show
+//   an indeterminate "pulse" bar during upload.
+async function apiPostForm(path, formData) {
+  formData.append('access_token', TOKEN);
+  const url = `${BASE}/${path}`;
+  LOG('POST', path, 'bytes:', estimateFormDataBytes(formData));
+  const t0 = performance.now();
+  let res, raw, json;
+  try {
+    res = await fetch(url, { ...BASE_OPTS, method: 'POST', body: formData });
+    raw = await res.text();
+  } catch (netErr) {
+    ERR('POST network failure', path, netErr);
+    throw new CUError('Network failure: ' + netErr.message, { stage: 'post', url: path, netError: netErr.message });
+  }
+  try { json = JSON.parse(raw); } catch {
+    ERR('POST non-JSON response', path, 'status', res.status, 'body:', raw.slice(0,500));
+    throw new CUError(`HTTP ${res.status}: invalid JSON`, { stage: 'post', url: path, httpStatus: res.status, rawResponse: raw.slice(0,2000) });
+  }
+  const dt = (performance.now()-t0).toFixed(0);
+  if (json.error) {
+    const e = json.error;
+    ERR('POST FB error', path, 'in', dt+'ms', e);
+    throw new CUError(`[${e.code}${e.error_subcode?'/'+e.error_subcode:''}] ${e.message}`, {
+      stage: 'post', url: path, httpStatus: res.status, durationMs: +dt,
+      fbError: { code:e.code, subcode:e.error_subcode, type:e.type, message:e.message, fbtrace_id:e.fbtrace_id, user_title:e.error_user_title, user_msg:e.error_user_msg },
+      rawResponse: raw.slice(0,2000),
     });
-    xhr.addEventListener('error', () => reject(new Error('Network error')));
-    xhr.addEventListener('abort', () => reject(new Error('Upload aborted')));
-    xhr.send(formData);
-  });
+  }
+  LOG('POST ok', path, 'in', dt+'ms');
+  return json;
+}
+
+function estimateFormDataBytes(fd) {
+  let total = 0;
+  for (const [, v] of fd.entries()) {
+    if (v instanceof File || v instanceof Blob) total += v.size;
+    else total += String(v).length;
+  }
+  return total;
 }
 
 // --Account detection -- same as MetaCtrl PRO -------------
@@ -79,22 +135,26 @@ function getAccountId() {
 }
 
 // --Upload single image -----------------------------------
-async function uploadImage(accountId, file, onProgress) {
+async function uploadImage(accountId, file) {
+  LOG('uploadImage', file.name, file.size+'B', file.type);
   const fd = new FormData();
   fd.append('filename', file, file.name);
-  const result = await apiPostForm(`act_${accountId}/adimages`, fd, onProgress);
+  const result = await apiPostForm(`act_${accountId}/adimages`, fd);
   const key = Object.keys(result.images || {})[0];
   const img = result.images?.[key];
-  if (!img?.hash) throw new Error('No hash in response');
+  if (!img?.hash) throw new CUError('No hash in response', { stage: 'post', rawResponse: JSON.stringify(result).slice(0,2000) });
+  LOG('uploadImage ok', file.name, 'hash:', img.hash);
   return img.hash;
 }
 
 // --Upload single video (non-resumable, simple POST) ------
-async function uploadVideo(accountId, file, onProgress) {
+async function uploadVideo(accountId, file) {
+  LOG('uploadVideo', file.name, file.size+'B', file.type);
   const fd = new FormData();
   fd.append('source', file, file.name);
-  const result = await apiPostForm(`act_${accountId}/advideos`, fd, onProgress);
-  if (!result?.id) throw new Error('No video id in response');
+  const result = await apiPostForm(`act_${accountId}/advideos`, fd);
+  if (!result?.id) throw new CUError('No video id in response', { stage: 'post', rawResponse: JSON.stringify(result).slice(0,2000) });
+  LOG('uploadVideo ok', file.name, 'id:', result.id);
   return result.id;
 }
 
@@ -103,20 +163,22 @@ async function uploadVideo(accountId, file, onProgress) {
 async function waitForVideoReady(videoId, onTick) {
   const MAX_ATTEMPTS = 80;   // ~6.5 min @ 5s
   const INTERVAL_MS  = 5000;
+  LOG('waitForVideoReady', videoId);
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
     const data = await apiGet(videoId, { fields: 'status' });
     const vs = data?.status?.video_status || 'unknown';
+    LOG('poll', videoId, 'attempt', i+1, 'status:', vs);
     if (onTick) onTick(vs, i);
     if (vs === 'ready')  return;
-    if (vs === 'error')  throw new Error('FB rejected video (processing error)');
+    if (vs === 'error')  throw new CUError('FB rejected video (processing error)', { stage: 'process', videoId, rawResponse: JSON.stringify(data).slice(0,2000) });
     await sleep(INTERVAL_MS);
   }
-  throw new Error('Video processing timeout (>6 min)');
+  throw new CUError('Video processing timeout (>6 min)', { stage: 'process', videoId });
 }
 
 // --Verify token works ------------------------------------
 async function verifyToken() {
-  if (!TOKEN) throw new Error('TOKEN not found -- open Ads Manager inside Business Manager (business.facebook.com)');
+  if (!TOKEN) throw new CUError('TOKEN not found -- open Ads Manager inside Business Manager (business.facebook.com)', { stage: 'auth' });
   const data = await apiGet('me', { fields: 'id,name' });
   return data; // { id, name }
 }
@@ -126,7 +188,9 @@ const state = {
   accountId: '',
   tokenOk: false,
   tokenUser: '',
-  files: [],    // { file, name, type:'image'|'video', status, progress, hash, videoId, processingStatus, error }
+  // file shape: { file, name, type, status, hash, videoId, processingStatus,
+  //               error: string, errorDetails: object, expanded: bool }
+  files: [],
   uploading: false,
 };
 
@@ -233,15 +297,41 @@ const STYLES = `
     height: 100%; width: 0%; background: #3b82f6;
     transition: width .15s linear;
   }
+  .cu-bar-fill.uploading,
   .cu-bar-fill.processing {
-    background: linear-gradient(90deg, #fbbf24 0%, #f59e0b 50%, #fbbf24 100%);
+    width: 100% !important;
     background-size: 200% 100%;
     animation: cu-pulse 1.5s linear infinite;
-    width: 100% !important;
+  }
+  .cu-bar-fill.uploading {
+    background: linear-gradient(90deg, #3b82f6 0%, #60a5fa 50%, #3b82f6 100%);
+  }
+  .cu-bar-fill.processing {
+    background: linear-gradient(90deg, #fbbf24 0%, #f59e0b 50%, #fbbf24 100%);
   }
   .cu-bar-fill.done  { background: #22c55e; width: 100% !important; }
   .cu-bar-fill.error { background: #ef4444; width: 100% !important; }
   @keyframes cu-pulse { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+  /* Error details panel */
+  .cu-item.has-error { border-color: #7f1d1d; }
+  .cu-item-toggle {
+    font-size: 10px; color: #94a3b8; cursor: pointer; margin-top: 4px;
+    user-select: none; display: inline-block;
+    background: #0f172a; padding: 2px 6px; border-radius: 3px;
+    border: 1px solid #334155;
+  }
+  .cu-item-toggle:hover { background: #1e293b; color: #e2e8f0; }
+  .cu-err-panel {
+    margin-top: 6px; padding: 8px; background: #020617;
+    border: 1px solid #7f1d1d; border-radius: 4px;
+    font-size: 10.5px; line-height: 1.5; color: #cbd5e1;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  .cu-err-panel b { color: #fbbf24; font-weight: 600; }
+  .cu-err-panel .k { color: #94a3b8; }
+  .cu-err-panel .v { color: #e2e8f0; }
+  .cu-err-panel .raw { color: #64748b; font-size: 10px; margin-top: 6px; padding-top: 6px; border-top: 1px solid #1e293b; }
 
   #cu-actions { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; }
   .cu-btn {
@@ -419,12 +509,14 @@ function addFiles(files) {
     state.files.push({
       file, name: file.name, type,
       status: 'pending',
-      progress: 0,
       hash: '', videoId: '',
       processingStatus: '',
       error: '',
+      errorDetails: null,
+      expanded: false,
     });
   });
+  LOG('addFiles +', tagged.length, 'total:', state.files.length);
   renderQueue();
   updateUploadBtn();
 }
@@ -434,6 +526,26 @@ function fmtSize(bytes) {
   if (bytes < 1024) return bytes + 'B';
   if (bytes < 1024*1024) return (bytes/1024).toFixed(0) + 'KB';
   return (bytes/1024/1024).toFixed(1) + 'MB';
+}
+
+function renderErrorDetails(f) {
+  const d = f.errorDetails || {};
+  const fb = d.fbError || {};
+  const lines = [];
+  lines.push(`<b>${esc(f.error || 'Error')}</b>`);
+  if (d.stage)       lines.push(`<span class="k">stage:</span> <span class="v">${esc(d.stage)}</span>`);
+  if (d.url)         lines.push(`<span class="k">url:</span> <span class="v">${esc(d.url)}</span>`);
+  if (d.httpStatus)  lines.push(`<span class="k">http:</span> <span class="v">${d.httpStatus}</span>`);
+  if (d.durationMs)  lines.push(`<span class="k">took:</span> <span class="v">${d.durationMs}ms</span>`);
+  if (fb.code != null)       lines.push(`<span class="k">fb code:</span> <span class="v">${fb.code}${fb.subcode?'/'+fb.subcode:''}</span>`);
+  if (fb.type)               lines.push(`<span class="k">fb type:</span> <span class="v">${esc(fb.type)}</span>`);
+  if (fb.message)            lines.push(`<span class="k">fb msg:</span> <span class="v">${esc(fb.message)}</span>`);
+  if (fb.user_title)         lines.push(`<span class="k">user title:</span> <span class="v">${esc(fb.user_title)}</span>`);
+  if (fb.user_msg)           lines.push(`<span class="k">user msg:</span> <span class="v">${esc(fb.user_msg)}</span>`);
+  if (fb.fbtrace_id)         lines.push(`<span class="k">fbtrace_id:</span> <span class="v">${esc(fb.fbtrace_id)}</span>`);
+  if (d.netError)            lines.push(`<span class="k">net err:</span> <span class="v">${esc(d.netError)}</span>`);
+  if (d.rawResponse) lines.push(`<div class="raw">raw response:\n${esc(d.rawResponse)}</div>`);
+  return lines.join('\n');
 }
 
 function renderQueue() {
@@ -461,20 +573,18 @@ function renderQueue() {
       item.className = 'cu-item';
 
       const icon = f.type === 'video' ? 'VID' : 'IMG';
-      let statusText, statusClass, barClass, barPct;
+      let statusText, statusClass, barClass;
       switch (f.status) {
         case 'pending':
-          statusText = '-'; statusClass = 's-pending'; barClass = ''; barPct = 0; break;
+          statusText = '-'; statusClass = 's-pending'; barClass = ''; break;
         case 'uploading':
-          statusText = `${Math.round((f.progress||0)*100)}%`; statusClass = 's-uploading';
-          barClass = ''; barPct = (f.progress||0)*100; break;
+          statusText = 'uploading'; statusClass = 's-uploading'; barClass = 'uploading'; break;
         case 'processing':
-          statusText = f.processingStatus || 'processing'; statusClass = 's-processing';
-          barClass = 'processing'; barPct = 100; break;
+          statusText = f.processingStatus || 'processing'; statusClass = 's-processing'; barClass = 'processing'; break;
         case 'done':
-          statusText = 'done'; statusClass = 's-done'; barClass = 'done'; barPct = 100; break;
+          statusText = 'done'; statusClass = 's-done'; barClass = 'done'; break;
         case 'error':
-          statusText = 'error'; statusClass = 's-error'; barClass = 'error'; barPct = 100; break;
+          statusText = 'error'; statusClass = 's-error'; barClass = 'error'; break;
       }
 
       let metaText = '';
@@ -488,7 +598,9 @@ function renderQueue() {
         metaText = fmtSize(f.file.size);
       }
 
+      if (f.status === 'error') item.classList.add('has-error');
       const showBar = (f.status !== 'pending');
+      const showErrToggle = (f.status === 'error');
       item.innerHTML = `
         <div class="cu-item-row">
           <div class="cu-item-icon t-${f.type}">${icon}</div>
@@ -496,8 +608,16 @@ function renderQueue() {
           <div class="cu-item-meta" title="${esc(f.hash||f.videoId||f.error||'')}">${esc(metaText)}</div>
           <div class="cu-item-status ${statusClass}">${statusText}</div>
         </div>
-        ${showBar ? `<div class="cu-bar"><div class="cu-bar-fill ${barClass}" style="width:${barPct}%"></div></div>` : ''}
+        ${showBar ? `<div class="cu-bar"><div class="cu-bar-fill ${barClass}"></div></div>` : ''}
+        ${showErrToggle ? `<div class="cu-item-toggle" data-name="${esc(f.name)}">${f.expanded ? '[-] hide details' : '[+] show details'}</div>` : ''}
+        ${showErrToggle && f.expanded ? `<div class="cu-err-panel">${renderErrorDetails(f)}</div>` : ''}
       `;
+      if (showErrToggle) {
+        item.querySelector('.cu-item-toggle')?.addEventListener('click', () => {
+          f.expanded = !f.expanded;
+          renderQueue();
+        });
+      }
       queue.appendChild(item);
     });
   }
@@ -543,13 +663,12 @@ async function startUpload() {
 
   for (const item of pending) {
     item.status = 'uploading';
-    item.progress = 0;
     item.error = '';
+    item.errorDetails = null;
     renderQueue();
     try {
-      const onProgress = p => { item.progress = p; renderQueue(); };
       if (item.type === 'video') {
-        const vidId = await uploadVideo(state.accountId, item.file, onProgress);
+        const vidId = await uploadVideo(state.accountId, item.file);
         item.videoId = vidId;
         item.status = 'processing';
         item.processingStatus = 'processing';
@@ -560,12 +679,14 @@ async function startUpload() {
         });
         item.status = 'done';
       } else {
-        item.hash = await uploadImage(state.accountId, item.file, onProgress);
+        item.hash = await uploadImage(state.accountId, item.file);
         item.status = 'done';
       }
     } catch(e) {
       item.status = 'error';
       item.error = e.message;
+      item.errorDetails = (e instanceof CUError) ? e.details : { message: e.message, stack: e.stack };
+      ERR('upload failed', item.name, item.error, item.errorDetails);
     }
     renderQueue();
     await sleep(200);
