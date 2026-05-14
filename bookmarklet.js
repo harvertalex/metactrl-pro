@@ -16,7 +16,8 @@
 
 /* -------------------- CONFIG -------------------- */
 const CONFIG = {
-  VERSION: 'v23.1',
+  VERSION: 'v23.0',
+  APP_VERSION: 'v23.1',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -548,7 +549,7 @@ function makeModal() {
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
       <div style="display:flex;align-items:center;gap:10px">
         <h2 style="margin:0;font-size:17px;font-weight:700;color:var(--txt)">MetaCtrl PRO</h2>
-        <span class="ar-badge" style="font-size:10px">${CONFIG.VERSION}</span>
+        <span class="ar-badge" style="font-size:10px">${CONFIG.APP_VERSION}</span>
         <span class="ar-badge" style="font-size:10px;opacity:.6">${CONFIG.HOST.replace('https://','')}</span>
       </div>
       <button id="ar-close" class="ar-btn ar-btn-danger ar-btn-sm">✕ Close</button>
