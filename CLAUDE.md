@@ -6,7 +6,7 @@ JS bookmarklet для Facebook Ads Manager — автоматизация пра
 
 **Статус:** Production  
 **Live (primary):** https://harvertalex.github.io/metactrl-pro/  
-**Live (backup):** http://192.248.190.182/
+**Live (backup):** http://94.130.220.232/metactrl/
 
 ---
 
@@ -16,8 +16,8 @@ JS bookmarklet для Facebook Ads Manager — автоматизация пра
 |-------|-------|-----------|
 | **GitHub** | https://github.com/harvertalex/metactrl-pro | Source of truth, git history |
 | **GitHub Pages** | https://harvertalex.github.io/metactrl-pro/ | Primary хостинг (HTTPS, CDN) |
-| **Локально** | `c:/Users/harve/claude-workspace/code/metactrl-pro/` | Разработка |
-| **Сервер backup** | `http://192.248.190.182/` | Fallback, tessa-bot |
+| **Локально** | `c:/Users/vert/claude-workspace/code/metactrl-pro/` | Разработка |
+| **Сервер backup** | `http://94.130.220.232/metactrl/` | Fallback, CAPI Server 1 |
 
 **Remote:** `https://github.com/harvertalex/metactrl-pro.git`  
 **Branch:** `main` — GitHub Pages деплоит автоматически при каждом пуше
@@ -28,16 +28,19 @@ JS bookmarklet для Facebook Ads Manager — автоматизация пра
 
 | Параметр | Значение |
 |----------|----------|
-| **IP** | `192.248.190.182` (tessa-bot) |
-| **SSH ключ** | `~/.ssh/tessa-bot` |
-| **Web root** | `/var/www/metactrl-pro` |
-| **Web server** | Apache2 |
+| **IP** | `94.130.220.232` (CAPI Server 1) |
+| **SSH ключ** | `~/.ssh/capi-server1` |
+| **Web root** | `/var/www/html/metactrl/` |
+| **URL mapping** | Apache default DocumentRoot `/var/www/html/` → URL `/metactrl/` |
+| **Web server** | Apache2 (общий с CAPI Panel — НЕ трогать VirtualHost) |
 
 ```bash
-ssh -i ~/.ssh/tessa-bot root@192.248.190.182
-ssh -i ~/.ssh/tessa-bot root@192.248.190.182 "systemctl restart apache2"
-ssh -i ~/.ssh/tessa-bot root@192.248.190.182 "tail -f /var/log/apache2/metactrl-pro-error.log"
+ssh -i ~/.ssh/capi-server1 root@94.130.220.232
+ssh -i ~/.ssh/capi-server1 root@94.130.220.232 "ls -lah /var/www/html/metactrl/"
+ssh -i ~/.ssh/capi-server1 root@94.130.220.232 "tail -f /var/log/apache2/error.log"
 ```
+
+⚠️ **На сервере живёт CAPI Panel** — `deploy.ts` НЕ должен трогать Apache config/VirtualHost/PHP install, только заливать `install-page.html` + `index.html` в `/var/www/html/metactrl/`.
 
 ---
 
@@ -101,7 +104,7 @@ code/metactrl-pro/
 ├── CLAUDE.md                  ← этот файл (контекст проекта)
 ├── bookmarklet.js             ← основной код (3100+ строк)
 ├── install-page.html          ← страница установки (содержит B64)
-├── deploy.ts                  ← Depo скрипт (установка Apache + загрузка файлов)
+├── deploy.ts                  ← Деплой скрипт (scp install-page.html + index.html на CAPI Server 1)
 ├── deploy-check.ts            ← Проверка SSH доступа и структуры сервера
 └── README.md                  ← документация для пользователей
 ```
@@ -203,8 +206,8 @@ CONFIG.MAX_RETRIES = 5;             // макс 5 попыток перед сд
 - [ ] Регенерирован B64 в install-page.html (`node -e "..."`)
 - [ ] Локально тестирована новая версия
 - [ ] Запущен `bun deploy.ts`
-- [ ] Проверена доступность http://192.248.190.182/install-page.html
-- [ ] Логи Apache чистые (нет 5xx ошибок)
+- [ ] Проверена доступность http://94.130.220.232/metactrl/install-page.html
+- [ ] Проверена доступность https://harvertalex.github.io/metactrl-pro/
 
 ---
 
@@ -220,7 +223,7 @@ cd code/metactrl-pro && \
   bun deploy.ts
 
 # Проверка что файлы на сервере
-ssh -i ~/.ssh/tessa-bot root@192.248.190.182 "ls -lah /var/www/metactrl-pro/"
+ssh -i ~/.ssh/capi-server1 root@94.130.220.232 "ls -lah /var/www/html/metactrl/"
 
 # Размер B64 в текущей версии
 grep -o "var B64 = '[^']*'" code/metactrl-pro/install-page.html | wc -c
