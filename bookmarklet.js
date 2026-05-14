@@ -16,7 +16,7 @@
 
 /* -------------------- CONFIG -------------------- */
 const CONFIG = {
-  VERSION: 'v23.0',
+  VERSION: 'v23.1',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -6378,11 +6378,32 @@ function mountQuickLinks(container) {
       title: '🏢 Business Manager',
       links: [
         { label: 'BM Settings → People', url: 'https://business.facebook.com/settings/people' },
+        { label: 'BM Settings → System Users', url: 'https://business.facebook.com/settings/system-users' },
+        { label: 'BM Settings → Partners', url: 'https://business.facebook.com/settings/partners' },
         { label: 'BM Settings → Ad Accounts', url: 'https://business.facebook.com/settings/ad-accounts' },
         { label: 'BM Settings → Pages', url: 'https://business.facebook.com/settings/pages' },
+        { label: 'BM Settings → Instagram Accounts', url: 'https://business.facebook.com/latest/settings/instagram_accounts' },
+        { label: 'BM Settings → WhatsApp Accounts', url: 'https://business.facebook.com/latest/settings/whatsapp_accounts' },
         { label: 'BM Settings → Pixels', url: 'https://business.facebook.com/settings/events-manager' },
+        { label: 'BM Settings → Owned Domains', url: 'https://business.facebook.com/settings/owned-domains' },
+        { label: 'BM Settings → Requests', url: 'https://business.facebook.com/settings/requests' },
+        { label: 'BM Settings → Notifications', url: 'https://business.facebook.com/settings/notifications' },
         { label: 'BM Security Center', url: 'https://business.facebook.com/settings/security' },
         { label: 'BM Billing', url: 'https://business.facebook.com/settings/billing-and-payments' },
+      ]
+    },
+    {
+      title: '📄 Page Management',
+      links: [
+        { label: 'My Pages (personal)', url: 'https://www.facebook.com/pages/?category=your_pages' },
+        { label: 'Pages in Business', url: 'https://business.facebook.com/latest/settings/pages' },
+        { label: 'Page Inbox', url: 'https://business.facebook.com/latest/inbox' },
+        { label: 'Posts & Reels', url: 'https://business.facebook.com/latest/posts/published_posts' },
+        { label: 'Scheduled Posts', url: 'https://business.facebook.com/latest/posts/scheduled_posts' },
+        { label: 'Page Insights', url: 'https://business.facebook.com/latest/insights' },
+        { label: 'Creator Studio', url: 'https://business.facebook.com/creatorstudio/home' },
+        { label: 'Branded Content', url: 'https://www.facebook.com/business/help/branded-content' },
+        { label: 'Page Verification Request', url: 'https://www.facebook.com/help/contact/342509036134712' },
       ]
     },
     {
