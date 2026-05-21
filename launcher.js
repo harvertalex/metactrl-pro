@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.3.1.0 — Bookmarklet
+ * FB Launcher v0.3.2.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -80,6 +80,26 @@
   function addLog(type, msg) {
     state.log.push({ type, msg, ts: new Date().toLocaleTimeString() });
     render();
+  }
+
+  // Render expandable error details for failed upload items
+  function renderErrorPanel(u) {
+    const d = u.errorDetails || {};
+    const fb = d.fbError || {};
+    const lines = [];
+    lines.push(`<b style="color:#fbbf24">${esc(u.error || 'Error')}</b>`);
+    if (d.stage)        lines.push(`<span style="color:#94a3b8">stage:</span> ${esc(d.stage)}`);
+    if (d.url)          lines.push(`<span style="color:#94a3b8">url:</span> ${esc(d.url)}`);
+    if (d.httpStatus)   lines.push(`<span style="color:#94a3b8">http:</span> ${d.httpStatus}`);
+    if (fb.code != null) lines.push(`<span style="color:#94a3b8">fb code:</span> ${fb.code}${fb.subcode ? '/' + fb.subcode : ''}`);
+    if (fb.type)        lines.push(`<span style="color:#94a3b8">fb type:</span> ${esc(fb.type)}`);
+    if (fb.message)     lines.push(`<span style="color:#94a3b8">fb msg:</span> ${esc(fb.message)}`);
+    if (fb.user_title)  lines.push(`<span style="color:#94a3b8">user title:</span> ${esc(fb.user_title)}`);
+    if (fb.user_msg)    lines.push(`<span style="color:#94a3b8">user msg:</span> ${esc(fb.user_msg)}`);
+    if (fb.fbtrace_id)  lines.push(`<span style="color:#94a3b8">fbtrace_id:</span> ${esc(fb.fbtrace_id)}`);
+    if (d.netError)     lines.push(`<span style="color:#94a3b8">net err:</span> ${esc(d.netError)}`);
+    if (d.rawResponse)  lines.push(`<div style="color:#64748b;font-size:10px;margin-top:6px;padding-top:6px;border-top:1px solid #1e293b">raw response:\n${esc(d.rawResponse)}</div>`);
+    return lines.join('\n');
   }
 
   // ─── FB API CLIENT ──────────────────────────────────────────────────────
@@ -318,41 +338,89 @@
     }
   }
 
-  // ─── CREATIVE UPLOADER (image to /adimages, video to /advideos) ─────────
-  async function uploadOneCreative(file, accId) {
-    const isVideo = file.type.startsWith('video/') || /\.(mp4|mov|avi|webm|mkv|m4v)$/i.test(file.name);
-    const endpoint = isVideo
-      ? `${HOST_GRAPH}/act_${accId}/advideos`
-      : `${HOST_GRAPH}/act_${accId}/adimages`;
-    const fieldName = isVideo ? 'source' : 'filename';
+  // ─── CREATIVE UPLOADER (two-phase: upload → poll until ready) ───────────
+  class CUError extends Error {
+    constructor(message, details) {
+      super(message);
+      this.name = 'CUError';
+      this.details = details || {};
+    }
+  }
+
+  async function postForm(path, formData) {
+    formData.append('access_token', TOKEN);
+    const url = `${HOST_GRAPH}/${path}`;
+    let res, raw, json;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+        mode: 'cors',
+        referrer: 'https://business.facebook.com/',
+        referrerPolicy: 'origin-when-cross-origin',
+      });
+      raw = await res.text();
+    } catch (netErr) {
+      throw new CUError('Network failure: ' + netErr.message, { stage: 'post', url: path, netError: netErr.message });
+    }
+    try { json = JSON.parse(raw); } catch {
+      throw new CUError(`HTTP ${res.status}: invalid JSON`, { stage: 'post', url: path, httpStatus: res.status, rawResponse: raw.slice(0, 2000) });
+    }
+    if (json?.error) {
+      const e = json.error;
+      throw new CUError(`[${e.code}${e.error_subcode ? '/' + e.error_subcode : ''}] ${e.message}`, {
+        stage: 'post', url: path, httpStatus: res.status,
+        fbError: { code: e.code, subcode: e.error_subcode, type: e.type, message: e.message, fbtrace_id: e.fbtrace_id, user_title: e.error_user_title, user_msg: e.error_user_msg },
+        rawResponse: raw.slice(0, 2000),
+      });
+    }
+    return json;
+  }
+
+  async function uploadImage(accId, file) {
     const fd = new FormData();
-    fd.append(fieldName, file, file.name);
-    fd.append('access_token', TOKEN);
+    fd.append('filename', file, file.name);
+    const result = await postForm(`act_${accId}/adimages`, fd);
+    const key = Object.keys(result.images || {})[0];
+    const hash = result.images?.[key]?.hash;
+    if (!hash) throw new CUError('No hash in response', { stage: 'post', rawResponse: JSON.stringify(result).slice(0, 2000) });
+    return hash;
+  }
 
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      body: fd,
-      credentials: 'include',
-      mode: 'cors',
-      referrer: 'https://business.facebook.com/',
-      referrerPolicy: 'origin-when-cross-origin',
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok || json?.error) {
-      throw new Error(json?.error?.error_user_msg || json?.error?.message || `HTTP ${res.status}`);
-    }
+  async function uploadVideo(accId, file) {
+    const fd = new FormData();
+    fd.append('source', file, file.name);
+    const result = await postForm(`act_${accId}/advideos`, fd);
+    if (!result?.id) throw new CUError('No video id in response', { stage: 'post', rawResponse: JSON.stringify(result).slice(0, 2000) });
+    return String(result.id);
+  }
 
-    const baseName = file.name.replace(/\.[^.]+$/, '');
-    if (isVideo) {
-      if (!json.id) throw new Error('No video id in response');
-      return { type: 'video', videoId: String(json.id), name: baseName };
+  // Poll /videoId until video_status === 'ready'. FB needs ~10-60s to process.
+  async function waitForVideoReady(videoId, onTick) {
+    const MAX_ATTEMPTS = 80;   // ~6.5 min @ 5s
+    const INTERVAL_MS = 5000;
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      let data;
+      try {
+        data = await apiFetch(videoId, { params: { fields: 'status' } });
+      } catch (e) {
+        // Transient API error during polling — retry next tick
+        if (onTick) onTick('polling-error', i);
+        await sleep(INTERVAL_MS);
+        continue;
+      }
+      const vs = data?.status?.video_status || 'unknown';
+      if (onTick) onTick(vs, i);
+      if (vs === 'ready') return;
+      if (vs === 'error') {
+        throw new CUError('FB rejected video (processing error)', {
+          stage: 'process', videoId, rawResponse: JSON.stringify(data).slice(0, 2000),
+        });
+      }
+      await sleep(INTERVAL_MS);
     }
-    // Image response: {images: {filename_no_ext: {hash, url}}}
-    const images = json.images || {};
-    const firstKey = Object.keys(images)[0];
-    const hash = images[firstKey]?.hash;
-    if (!hash) throw new Error('No image hash in response');
-    return { type: 'image', imageHash: hash, name: baseName };
+    throw new CUError('Video processing timeout (>6 min)', { stage: 'process', videoId });
   }
 
   async function runUploads(files) {
@@ -361,32 +429,53 @@
     state.uploading = true;
     state.uploads = Array.from(files).map(f => ({
       name: f.name,
+      size: f.size,
       type: (f.type.startsWith('video/') || /\.(mp4|mov|avi|webm|mkv|m4v)$/i.test(f.name)) ? 'video' : 'image',
       status: 'pending',
+      processingStatus: '',
+      error: '',
+      errorDetails: null,
+      expanded: false,
     }));
     render();
 
     const results = [];
     for (let i = 0; i < files.length; i++) {
-      state.uploads[i].status = 'uploading';
+      const u = state.uploads[i];
+      u.status = 'uploading';
+      u.error = '';
+      u.errorDetails = null;
       render();
       try {
-        const r = await uploadOneCreative(files[i], state.targetAccId);
-        state.uploads[i].status = 'done';
-        state.uploads[i].imageHash = r.imageHash;
-        state.uploads[i].videoId = r.videoId;
-        results.push({
-          name: r.name,
-          ...(r.imageHash ? { imageHash: r.imageHash } : { videoId: r.videoId }),
-        });
-        addLog('success', `↑ ${r.type} "${r.name}" → ${r.imageHash || r.videoId}`);
+        const baseName = files[i].name.replace(/\.[^.]+$/, '');
+        if (u.type === 'video') {
+          const vidId = await uploadVideo(state.targetAccId, files[i]);
+          u.videoId = vidId;
+          u.status = 'processing';
+          u.processingStatus = 'processing';
+          render();
+          await waitForVideoReady(vidId, (vs) => {
+            u.processingStatus = vs;
+            render();
+          });
+          u.status = 'done';
+          results.push({ name: baseName, videoId: vidId });
+          addLog('success', `↑ video "${baseName}" → ${vidId}`);
+        } else {
+          const hash = await uploadImage(state.targetAccId, files[i]);
+          u.imageHash = hash;
+          u.status = 'done';
+          results.push({ name: baseName, imageHash: hash });
+          addLog('success', `↑ image "${baseName}" → ${hash.slice(0, 16)}…`);
+        }
       } catch (e) {
-        state.uploads[i].status = 'error';
-        state.uploads[i].error = e.message;
+        u.status = 'error';
+        u.error = e.message;
+        u.errorDetails = (e instanceof CUError) ? e.details : { message: e.message };
         addLog('error', `↑ FAIL "${files[i].name}": ${e.message}`);
       }
       render();
-      await sleep(300);
+      await sleep(200);
     }
 
     // Auto-pair: videos + images with same base name → image becomes thumbnail, image removed as standalone ad
@@ -1247,6 +1336,27 @@
       #${PANEL_ID} .row { display:flex; gap:6px; }
       #${PANEL_ID} .row > * { flex:1; }
       #${PANEL_ID} hr { border:none; border-top:1px solid #334155; margin:14px 0; }
+      #${PANEL_ID} .s-pending { color:#475569; }
+      #${PANEL_ID} .s-uploading { color:#60a5fa; }
+      #${PANEL_ID} .s-processing { color:#fbbf24; }
+      #${PANEL_ID} .s-done { color:#4ade80; }
+      #${PANEL_ID} .s-error { color:#f87171; }
+      #${PANEL_ID} .fbl-bar { height:100%; width:0%; background:#3b82f6; transition:width .15s linear; }
+      #${PANEL_ID} .fbl-bar.uploading,
+      #${PANEL_ID} .fbl-bar.processing {
+        width:100% !important; background-size:200% 100%; animation:fbl-pulse 1.5s linear infinite;
+      }
+      #${PANEL_ID} .fbl-bar.uploading {
+        background:linear-gradient(90deg, #3b82f6 0%, #60a5fa 50%, #3b82f6 100%);
+      }
+      #${PANEL_ID} .fbl-bar.processing {
+        background:linear-gradient(90deg, #fbbf24 0%, #f59e0b 50%, #fbbf24 100%);
+      }
+      #${PANEL_ID} .fbl-bar.done  { background:#22c55e; width:100% !important; }
+      #${PANEL_ID} .fbl-bar.error { background:#ef4444; width:100% !important; }
+      @keyframes fbl-pulse { 0% { background-position:200% 0; } 100% { background-position:-200% 0; } }
+      #${PANEL_ID} #fbl-drop.over { border-color:#3b82f6 !important; background:rgba(59,130,246,.06); color:#93c5fd; }
+      #${PANEL_ID} #fbl-drop.has-files { border-color:#22c55e; background:rgba(34,197,94,.04); color:#86efac; }
     `;
     document.head.appendChild(style);
   }
@@ -1311,7 +1421,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.3.1
+      <h2>🚀 FB Launcher v0.3.2
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -1381,22 +1491,47 @@
 
       <div class="field">
         <label>6. Creatives — upload files OR paste hashes/JSON <span style="color:#6e7681">— overrides CSV Image Hash &amp; Video ID</span></label>
-        <div style="margin-bottom:8px;padding:8px 10px;background:rgba(59,130,246,.06);border:1px solid rgba(59,130,246,.2);border-radius:5px">
-          <div style="font-size:11px;color:#94a3b8;margin-bottom:3px">↑ Upload creatives directly (images → /adimages, videos → /advideos)</div>
-          <div style="font-size:10px;color:#6e7681;margin-bottom:5px">💡 Tip: upload <code>video1.mp4</code> + <code>video1.jpg</code> (same base name) → auto-pairs as video + thumbnail</div>
-          <input type="file" id="fbl-upload-files" multiple accept="image/*,video/*" ${!state.targetAccId || state.uploading ? 'disabled' : ''} style="width:100%">
-          ${state.uploads.length ? `<div style="margin-top:6px;font-size:11px">${state.uploads.map(u => {
-            const icon = u.status === 'done' ? '✓' : u.status === 'error' ? '✗' : u.status === 'uploading' ? '⏳' : '○';
-            const color = u.status === 'done' ? '#22c55e' : u.status === 'error' ? '#ef4444' : u.status === 'uploading' ? '#fbbf24' : '#6e7681';
-            // Check if this image was paired as thumbnail (its base name matches a video and we have ads-mode JSON)
+        <div style="margin-bottom:8px">
+          <div style="font-size:10px;color:#6e7681;margin-bottom:5px">💡 Upload <code>video1.mp4</code> + <code>video1.jpg</code> (same base name) → auto-pairs as video + thumbnail</div>
+          ${!state.targetAccId ? '<div style="font-size:11px;color:#fbbf24;padding:6px 8px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:5px;margin-bottom:5px">⚠ Select target account (step 3) before uploading</div>' : ''}
+          <div id="fbl-drop" style="border:2px dashed #334155;border-radius:8px;padding:20px 12px;text-align:center;cursor:${state.targetAccId && !state.uploading ? 'pointer' : 'not-allowed'};color:#475569;font-size:12px;user-select:none;transition:border-color .15s,background .15s;${state.targetAccId && !state.uploading ? '' : 'opacity:.5'}">
+            <div style="font-size:13px;font-weight:600;letter-spacing:2px;margin-bottom:4px;color:#475569">[ DROP ZONE ]</div>
+            Drop images or videos here<br>
+            <span style="font-size:10px;color:#334155">PNG / JPG / MP4 / MOV — or click to browse</span>
+          </div>
+          <input type="file" id="fbl-upload-files" multiple accept="image/*,video/*" ${!state.targetAccId || state.uploading ? 'disabled' : ''} style="display:none">
+          ${state.uploads.length ? `<div style="margin-top:8px;display:flex;flex-direction:column;gap:4px">${state.uploads.map((u, idx) => {
+            const fmtSize = (b) => b < 1024 ? b + 'B' : b < 1048576 ? (b/1024).toFixed(0)+'KB' : (b/1048576).toFixed(1)+'MB';
+            const iconBg = u.type === 'video' ? '#c084fc' : '#60a5fa';
+            const statusMap = {
+              pending: { text: 'pending', cls: 's-pending', barCls: '' },
+              uploading: { text: 'uploading', cls: 's-uploading', barCls: 'uploading' },
+              processing: { text: u.processingStatus || 'processing', cls: 's-processing', barCls: 'processing' },
+              done: { text: 'done', cls: 's-done', barCls: 'done' },
+              error: { text: 'error', cls: 's-error', barCls: 'error' },
+            };
+            const s = statusMap[u.status] || statusMap.pending;
             const wasPairedThumb = u.type === 'image' && u.status === 'done' && state.creativesParsed?.mode === 'ads'
               && state.creativesParsed.items.some(it => it.videoId && it.thumbnailHash === u.imageHash);
-            const detail = u.status === 'done'
-              ? wasPairedThumb ? ` <span style="color:#a78bfa">🔗 paired as thumbnail</span>` : ` → <code>${esc((u.imageHash || u.videoId || '').slice(0, 16))}…</code>`
-              : u.status === 'error' ? ` <span style="color:#ef4444">${esc(u.error || '')}</span>` : '';
-            return `<div style="color:${color}">${icon} ${esc(u.name)} (${u.type})${detail}</div>`;
+            const meta = u.status === 'done'
+              ? wasPairedThumb ? '<span style="color:#a78bfa">🔗 thumb</span>' : `<code style="font-size:10px;color:#64748b">${esc((u.imageHash || u.videoId || '').slice(0, 12))}…</code>`
+              : u.status === 'error' ? `<span style="color:#f87171;font-size:10px">${esc((u.error || '').slice(0, 22))}</span>`
+              : `<span style="color:#475569;font-size:10px">${fmtSize(u.size || 0)}</span>`;
+            const showBar = u.status !== 'pending';
+            const showErrToggle = u.status === 'error';
+            return `
+            <div class="fbl-uitem ${u.status === 'error' ? 'has-error' : ''}" style="padding:5px 8px;background:#1e293b;border-radius:5px;border:1px solid ${u.status === 'error' ? '#7f1d1d' : '#334155'}">
+              <div style="display:grid;grid-template-columns:24px 1fr auto auto;align-items:center;gap:6px">
+                <div style="font-size:9px;font-weight:700;text-align:center;padding:1px 3px;border-radius:3px;border:1px solid ${iconBg};color:${iconBg}">${u.type === 'video' ? 'VID' : 'IMG'}</div>
+                <div style="font-size:11px;color:#cbd5e1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(u.name)}">${esc(u.name)}</div>
+                <div style="font-size:10px;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${meta}</div>
+                <div class="${s.cls}" style="font-size:11px;min-width:60px;text-align:right">${esc(s.text)}</div>
+              </div>
+              ${showBar ? `<div style="height:3px;background:#0f172a;border-radius:2px;overflow:hidden;margin-top:3px"><div class="fbl-bar ${s.barCls}"></div></div>` : ''}
+              ${showErrToggle ? `<div class="fbl-err-toggle" data-idx="${idx}" style="font-size:10px;color:#94a3b8;cursor:pointer;margin-top:4px;background:#0f172a;padding:2px 6px;border-radius:3px;border:1px solid #334155;display:inline-block">${u.expanded ? '[−] hide details' : '[+] show details'}</div>` : ''}
+              ${showErrToggle && u.expanded ? `<div style="margin-top:6px;padding:8px;background:#020617;border:1px solid #7f1d1d;border-radius:4px;font-size:10.5px;line-height:1.5;color:#cbd5e1;white-space:pre-wrap;word-break:break-all;font-family:ui-monospace,monospace">${renderErrorPanel(u)}</div>` : ''}
+            </div>`;
           }).join('')}</div>` : ''}
-          ${!state.targetAccId ? '<div style="font-size:10px;color:#fbbf24;margin-top:4px">⚠ Select target account (step 3) before uploading</div>' : ''}
         </div>
         <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Or paste manually:</div>
         <textarea id="fbl-creatives" placeholder='Paste any of:
@@ -1500,10 +1635,39 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       state.campNamePrefix = e.target.value;
       render();  // re-render to update preview
     });
-    document.getElementById('fbl-upload-files')?.addEventListener('change', e => {
+    const uploadInput = document.getElementById('fbl-upload-files');
+    const dropZone = document.getElementById('fbl-drop');
+    uploadInput?.addEventListener('change', e => {
       const files = Array.from(e.target.files || []);
       if (files.length) runUploads(files);
-      e.target.value = '';  // reset so same file can be re-selected
+      e.target.value = '';
+    });
+    if (dropZone) {
+      dropZone.addEventListener('click', () => {
+        if (state.targetAccId && !state.uploading) uploadInput?.click();
+      });
+      dropZone.addEventListener('dragover', e => {
+        e.preventDefault();
+        if (state.targetAccId && !state.uploading) dropZone.classList.add('over');
+      });
+      dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
+      dropZone.addEventListener('drop', e => {
+        e.preventDefault();
+        dropZone.classList.remove('over');
+        if (!state.targetAccId || state.uploading) return;
+        const files = Array.from(e.dataTransfer?.files || []);
+        if (files.length) runUploads(files);
+      });
+    }
+    // Per-file error details toggle
+    panel.querySelectorAll('.fbl-err-toggle').forEach(el => {
+      el.addEventListener('click', () => {
+        const idx = +el.dataset.idx;
+        if (state.uploads[idx]) {
+          state.uploads[idx].expanded = !state.uploads[idx].expanded;
+          render();
+        }
+      });
     });
     document.getElementById('fbl-reload-acc')?.addEventListener('click', () => loadAccounts());
     document.getElementById('fbl-acc-filter')?.addEventListener('input', e => {
