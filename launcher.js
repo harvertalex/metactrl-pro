@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.2.3.0 — Bookmarklet
+ * FB Launcher v0.2.4.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -1095,21 +1095,31 @@
         ${plan.sacList.length ? `<div style="color:#fbbf24">SAC: <b>${esc(plan.sacList[0])}</b> (region-targeting disabled)</div>` : ''}
       </div>` : '';
 
-    const runDisabled = state.running || !state.rows.length || !state.targetAccId;
+    // Determine launch button state + label (tells user what's missing)
+    let blockReason = '';
+    if (state.running) blockReason = `Running ${state.progress.done}/${state.progress.total}...`;
+    else if (!state.rows.length) blockReason = '⬆ Load CSV first (step 1)';
+    else if (!state.targetAccId) blockReason = '⬆ Select target account (step 2)';
+    else if (!state.pageIdOverride && !state.rows.some(r => r['Link Object ID'])) blockReason = '⬆ Set Page ID (step 3)';
+    else if (!effPixel) blockReason = '⬆ Set Pixel (step 4)';
+    else if (!pixelValid) blockReason = `⚠ Pixel "${effPixel}" invalid format (8-20 digits)`;
+    else if (state.pixelsList.length && !pixelInAccount) blockReason = `⚠ Pixel ${effPixel} not in this account`;
+    const runDisabled = !!blockReason;
+    const buttonLabel = blockReason || `🚀 Launch ${plan?.adCount || 0} ads to ${esc(ACCOUNTS.find(a => a.id === state.targetAccId)?.name || 'account')}`;
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.2.3
+      <h2>🚀 FB Launcher v0.2.4
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
 
       <div class="status ${state.status.type}">${esc(state.status.text)}</div>
 
-      <div class="field">
-        <label>1. CSV file</label>
+      <div class="field" ${!state.rows.length ? 'style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.25);border-radius:6px;padding:8px 10px"' : ''}>
+        <label>1. CSV file ${!state.rows.length ? '<span style="color:#ef4444">⚠ required — defines campaign, adsets, geo, budget</span>' : ''}</label>
         <input type="file" id="fbl-csv" accept=".csv,.tsv,.txt">
-        ${state.fileName ? `<div style="font-size:11px;color:#22c55e;margin-top:4px">📄 ${esc(state.fileName)}</div>` : ''}
+        ${state.fileName ? `<div style="font-size:11px;color:#22c55e;margin-top:4px">📄 ${esc(state.fileName)} · ${state.rows.length} rows parsed</div>` : ''}
       </div>
 
       ${previewHtml}
@@ -1230,7 +1240,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       <hr>
 
       <button class="primary" id="fbl-run" ${runDisabled ? 'disabled' : ''} style="width:100%">
-        ${state.running ? `Running ${state.progress.done}/${state.progress.total}...` : '🚀 Launch to selected account'}
+        ${buttonLabel}
       </button>
 
       ${state.progress.total ? `<div class="progress"><div style="width:${progressPct}%"></div></div>` : ''}
