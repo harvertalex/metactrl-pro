@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.2.2.0 — Bookmarklet
+ * FB Launcher v0.2.3.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -42,6 +42,10 @@
     titleOverride: '',        // v0.2.2: replaces CSV Title (headline) for all ads
     bodyOverride: '',         // v0.2.2: replaces CSV Body (primary text) for all ads
     ctaOverride: '',          // v0.2.2: replaces CSV Call to Action for all ads (e.g. GET_QUOTE)
+    pixelOverride: '',        // v0.2.3: forces pixel_id (skips CSV "Pixel"/"Optimized Conversion Tracking Pixels")
+    customEventOverride: '',  // v0.2.3: forces custom_event_type (PURCHASE/LEAD/etc)
+    pixelsList: [],           // v0.2.3: pixels fetched for selected account ([{id, name}])
+    pixelsLoading: false,
     creativesInput: '',       // v0.2: raw user input (textarea)
     creativesParsed: null,    // v0.2: { mode: 'list'|'map'|'single', list?, map?, value? }
     creativesError: '',
@@ -287,6 +291,24 @@
       setStatus('warning', `No accounts found. Token may have limited scope. Are you logged in to FB with admin access?`);
     }
     render();
+  }
+
+  // ─── PIXEL LOADER (for selected account) ────────────────────────────────
+  async function loadPixelsForAccount(accId) {
+    if (!accId) { state.pixelsList = []; render(); return; }
+    state.pixelsLoading = true;
+    state.pixelsList = [];
+    render();
+    try {
+      const items = await apiAll(`/act_${accId}/adspixels`, { fields: 'id,name', limit: 100 });
+      state.pixelsList = items.map(p => ({ id: String(p.id), name: p.name || 'Untitled' }));
+      addLog('info', `Pixels for ${accId}: ${state.pixelsList.length} found`);
+    } catch (e) {
+      addLog('warning', `Pixel fetch failed: ${e.message}`);
+    } finally {
+      state.pixelsLoading = false;
+      render();
+    }
   }
 
   // ─── CSV PARSER (auto-detect tab vs comma) ──────────────────────────────
@@ -673,6 +695,28 @@
     const plan = analyzePlan();
     if (!plan) { setStatus('error', 'Cannot analyze plan from CSV.'); return; }
 
+    // Pre-flight: validate effective pixel for first adset
+    const firstAdsetRow = [...plan.groups.values()][0]?.[0];
+    const csvPixelFirst = stripPfx(firstAdsetRow?.['Optimized Conversion Tracking Pixels'] || firstAdsetRow?.['Pixel'] || '');
+    const effectivePixel = state.pixelOverride || csvPixelFirst;
+    if (!effectivePixel) {
+      setStatus('error', 'No pixel ID. Set "Pixel" override in step 4, or fill it in CSV.');
+      return;
+    }
+    if (!/^\d{8,20}$/.test(effectivePixel)) {
+      setStatus('error', `Invalid pixel ID "${effectivePixel}". Must be 8-20 digits (e.g. 1451350725476785). Got placeholder or wrong format. Set override in step 4.`);
+      return;
+    }
+    // Sanity check: pixel should be in account's pixel list if list was loaded
+    if (state.pixelsList.length && !state.pixelsList.find(p => p.id === effectivePixel)) {
+      const ok = confirm(
+        `Pixel ${effectivePixel} is NOT in this account's pixel list.\n\n` +
+        `Available pixels:\n${state.pixelsList.slice(0, 5).map(p => `  ${p.id} — ${p.name}`).join('\n')}\n\n` +
+        `Launch anyway? (FB may reject all adsets with subcode 1487429)`
+      );
+      if (!ok) { setStatus('warning', 'Launch cancelled. Pick a pixel from the dropdown in step 4.'); return; }
+    }
+
     const accId = state.targetAccId;
     const acc = ACCOUNTS.find(a => a.id === accId);
     const accLabel = acc?.name || accId;
@@ -772,8 +816,13 @@
       const igPositions = String(aFirst['Instagram Positions'] || '').split(',').map(s => s.trim()).filter(Boolean);
       const devicePlatforms = String(aFirst['Device Platforms'] || '').split(',').map(s => s.trim()).filter(Boolean);
 
-      const pixelId = stripPfx(aFirst['Optimized Conversion Tracking Pixels'] || aFirst['Pixel'] || '');
-      const customEventType = aFirst['Optimized Event'] || aFirst['Custom Event Type'] || 'PURCHASE';
+      // Pixel: UI override (highest) > CSV columns
+      const csvPixel = stripPfx(aFirst['Optimized Conversion Tracking Pixels'] || aFirst['Pixel'] || '');
+      const pixelId = state.pixelOverride || csvPixel;
+      const customEventType = state.customEventOverride
+        || aFirst['Optimized Event']
+        || aFirst['Custom Event Type']
+        || 'PURCHASE';
       const optGoal = aFirst['Optimization Goal'] || 'OFFSITE_CONVERSIONS';
       const billingEvent = aFirst['Billing Event'] || 'IMPRESSIONS';
       const bidStrategy = mapBidStrategy(firstRow['Campaign Bid Strategy']);
@@ -1031,11 +1080,17 @@
         ].join('')
       : '<option value="">No accounts loaded</option>';
 
+    // Effective pixel: override > CSV
+    const effPixel = state.pixelOverride || plan?.pixel || '';
+    const effEvent = state.customEventOverride || plan?.event || 'PURCHASE';
+    const pixelValid = /^\d{8,20}$/.test(effPixel);
+    const pixelInAccount = !state.pixelsList.length || !!state.pixelsList.find(p => p.id === effPixel);
+
     const previewHtml = plan ? `
       <div class="preview">
         <div><b>${plan.adsetCount}</b> adset${plan.adsetCount > 1 ? 's' : ''} ${plan.adsMode ? `× <b>${plan.adsModeItems.length}</b> creatives = <b>${plan.adCount}</b> ads` : `· <b>${plan.adCount}</b> ad${plan.adCount > 1 ? 's' : ''}`} · <b>${plan.isCBO ? 'CBO' : 'ABO'}</b> ${plan.isCBO ? `$${plan.cboBudget}/d` : `$${plan.aboTotal}/d total`}</div>
-        <div>Objective: <b>${esc(plan.objective || '?')}</b> · Event: <b>${esc(plan.event || '?')}</b></div>
-        <div>Pixel: <b>${esc(plan.pixel || 'MISSING')}</b></div>
+        <div>Objective: <b>${esc(plan.objective || '?')}</b> · Event: <b>${esc(effEvent)}</b></div>
+        <div>Pixel: <b style="color:${pixelValid && pixelInAccount ? '#22c55e' : '#ef4444'}">${esc(effPixel || 'MISSING')}</b> ${state.pixelOverride ? '<span style="color:#6e7681">(override)</span>' : '<span style="color:#6e7681">(from CSV)</span>'} ${!pixelValid && effPixel ? '<span style="color:#ef4444">⚠ invalid format</span>' : ''} ${pixelValid && state.pixelsList.length && !pixelInAccount ? '<span style="color:#ef4444">⚠ not in this account</span>' : ''}</div>
         ${plan.adsMode ? `<div style="color:#22c55e">⚡ ads-mode: each adset gets ${plan.adsModeItems.length} new ads from creatives JSON (CSV Ad Name/Image Hash/Video ID ignored)</div>` : ''}
         ${plan.sacList.length ? `<div style="color:#fbbf24">SAC: <b>${esc(plan.sacList[0])}</b> (region-targeting disabled)</div>` : ''}
       </div>` : '';
@@ -1044,7 +1099,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.2.2
+      <h2>🚀 FB Launcher v0.2.3
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -1074,7 +1129,30 @@
       </div>
 
       <div class="field">
-        <label>4. Creatives override (optional) <span style="color:#6e7681">— hashes/video IDs; overrides CSV Image Hash &amp; Video ID columns</span></label>
+        <label>4. Pixel &amp; Conversion event <span style="color:#6e7681">— ${state.pixelsLoading ? 'loading pixels...' : `${state.pixelsList.length} pixels in account`}</span></label>
+        ${state.pixelsList.length ? `
+        <select id="fbl-pixel-select" style="margin-bottom:5px">
+          <option value="">— from CSV column —</option>
+          ${state.pixelsList.map(p => `<option value="${esc(p.id)}" ${state.pixelOverride === p.id ? 'selected' : ''}>${esc(p.name)} (${esc(p.id)})</option>`).join('')}
+        </select>` : ''}
+        <input type="text" id="fbl-pixel-override" value="${esc(state.pixelOverride)}" placeholder="${state.pixelsList.length ? 'or paste custom pixel ID' : 'pixel ID (8-20 digits) — empty = use CSV'}" style="margin-bottom:5px">
+        <select id="fbl-event-override">
+          <option value="">— event from CSV (or PURCHASE default) —</option>
+          <option value="PURCHASE" ${state.customEventOverride === 'PURCHASE' ? 'selected' : ''}>PURCHASE</option>
+          <option value="LEAD" ${state.customEventOverride === 'LEAD' ? 'selected' : ''}>LEAD (most lead-gen)</option>
+          <option value="COMPLETE_REGISTRATION" ${state.customEventOverride === 'COMPLETE_REGISTRATION' ? 'selected' : ''}>COMPLETE_REGISTRATION</option>
+          <option value="SUBSCRIBE" ${state.customEventOverride === 'SUBSCRIBE' ? 'selected' : ''}>SUBSCRIBE</option>
+          <option value="ADD_TO_CART" ${state.customEventOverride === 'ADD_TO_CART' ? 'selected' : ''}>ADD_TO_CART</option>
+          <option value="INITIATE_CHECKOUT" ${state.customEventOverride === 'INITIATE_CHECKOUT' ? 'selected' : ''}>INITIATE_CHECKOUT</option>
+          <option value="ADD_PAYMENT_INFO" ${state.customEventOverride === 'ADD_PAYMENT_INFO' ? 'selected' : ''}>ADD_PAYMENT_INFO</option>
+          <option value="VIEW_CONTENT" ${state.customEventOverride === 'VIEW_CONTENT' ? 'selected' : ''}>VIEW_CONTENT</option>
+          <option value="SEARCH" ${state.customEventOverride === 'SEARCH' ? 'selected' : ''}>SEARCH</option>
+          <option value="CONTACT" ${state.customEventOverride === 'CONTACT' ? 'selected' : ''}>CONTACT</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>5. Creatives override (optional) <span style="color:#6e7681">— hashes/video IDs; overrides CSV Image Hash &amp; Video ID columns</span></label>
         <textarea id="fbl-creatives" placeholder='Paste any of:
 
 ADS-MODE (each item = new ad, replicated per adset, CSV ads ignored):
@@ -1095,17 +1173,17 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       </div>
 
       <div class="field">
-        <label>5. Link override (optional) <span style="color:#6e7681">— tokens: {pixel_id} {account_id} {adset_name} {ad_name} {geo} {date}</span></label>
+        <label>6. Link override (optional) <span style="color:#6e7681">— tokens: {pixel_id} {account_id} {adset_name} {ad_name} {geo} {date}</span></label>
         <input type="text" id="fbl-link-override" value="${esc(state.linkOverride)}" placeholder="empty = use CSV Link column. e.g. https://t.com/click?p={pixel_id}&amp;geo={geo}">
       </div>
 
       <div class="field">
-        <label>6. URL Tags override (optional) <span style="color:#6e7681">— same tokens; {{fb.macros}} preserved</span></label>
+        <label>7. URL Tags override (optional) <span style="color:#6e7681">— same tokens; {{fb.macros}} preserved</span></label>
         <input type="text" id="fbl-tags-override" value="${esc(state.urlTagsOverride)}" placeholder="empty = use CSV URL Tags. e.g. keyword={pixel_id}&amp;sub2={account_id}&amp;sub5={{ad.name}}">
       </div>
 
       <div class="field">
-        <label>7. Ad copy override (optional) <span style="color:#6e7681">— same for all ads; per-creative title/body/cta in ads-mode JSON wins</span></label>
+        <label>8. Ad copy override (optional) <span style="color:#6e7681">— same for all ads; per-creative title/body/cta in ads-mode JSON wins</span></label>
         <input type="text" id="fbl-title-override" value="${esc(state.titleOverride)}" placeholder="Title (headline) — empty = use CSV Title" style="margin-bottom:5px">
         <textarea id="fbl-body-override" placeholder="Body (primary text) — empty = use CSV Body" style="width:100%;min-height:50px;padding:6px 8px;background:#1e293b;border:1px solid #334155;border-radius:5px;color:#e2e8f0;font-size:12px;font-family:inherit;box-sizing:border-box;resize:vertical;margin-bottom:5px">${esc(state.bodyOverride)}</textarea>
         <select id="fbl-cta-override">
@@ -1128,7 +1206,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       </div>
 
       <div class="field">
-        <label>8. Quick: replace single URL Tag param <span style="color:#6e7681">— skipped if step 6 is set</span></label>
+        <label>9. Quick: replace single URL Tag param <span style="color:#6e7681">— skipped if step 7 is set</span></label>
         <div class="row">
           <input type="text" id="fbl-tag-param" value="${esc(state.urlTagParam)}" placeholder="sub2" style="flex:1">
           <select id="fbl-tag-mode" style="flex:1.5">
@@ -1142,7 +1220,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       </div>
 
       <div class="field">
-        <label>9. Create status</label>
+        <label>10. Create status</label>
         <select id="fbl-status">
           <option value="PAUSED" ${state.createStatus === 'PAUSED' ? 'selected' : ''}>PAUSED (review before launch)</option>
           <option value="ACTIVE" ${state.createStatus === 'ACTIVE' ? 'selected' : ''}>ACTIVE (launch immediately)</option>
@@ -1179,7 +1257,20 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     });
     document.getElementById('fbl-acc-select')?.addEventListener('change', e => {
       state.targetAccId = e.target.value;
+      state.pixelsList = [];          // reset pixels on account change
+      state.pixelOverride = '';
       render();
+      if (state.targetAccId) loadPixelsForAccount(state.targetAccId);
+    });
+    document.getElementById('fbl-pixel-select')?.addEventListener('change', e => {
+      state.pixelOverride = e.target.value;
+      render();
+    });
+    document.getElementById('fbl-pixel-override')?.addEventListener('input', e => {
+      state.pixelOverride = e.target.value.trim();
+    });
+    document.getElementById('fbl-event-override')?.addEventListener('change', e => {
+      state.customEventOverride = e.target.value;
     });
     document.getElementById('fbl-page-id')?.addEventListener('input', e => {
       state.pageIdOverride = e.target.value.trim();
