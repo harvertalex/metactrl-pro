@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.4.0 — Bookmarklet
+ * FB Launcher v0.4.1.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -968,7 +968,7 @@
     return { imageHash: csvImage, videoId: csvVideo };
   }
 
-  function transformUrlTags(raw, accId) {
+  function transformUrlTags(raw, accId, adName) {
     if (!raw) return raw;
     const target = String(state.urlTagParam || '').trim();
     if (!target || state.urlTagMode === 'keep') return raw;
@@ -977,6 +977,7 @@
       return [k, rest.join('=')];
     });
     const newVal = state.urlTagMode === 'acc_id' ? accId
+      : state.urlTagMode === 'ad_name' ? String(adName || '')
       : state.urlTagMode === 'empty' ? ''
       : state.urlTagMode === 'custom' ? String(state.urlTagCustom || '') : '';
     let saw = false;
@@ -1323,7 +1324,7 @@
           const tagsResolved = resolveTokens(rawTags, tokenCtx);
           const urlTags = state.urlTagsOverride
             ? tagsResolved   // override mode: skip single-param replace (full template wins)
-            : transformUrlTags(tagsResolved, accId);
+            : transformUrlTags(tagsResolved, accId, adName);
 
           // Resolve creative
           let imageHash, videoId;
@@ -1550,7 +1551,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.4
+      <h2>🚀 FB Launcher v0.4.1
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -1776,6 +1777,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
           <input type="text" id="fbl-tag-param" value="${esc(state.urlTagParam)}" placeholder="sub2" style="flex:1">
           <select id="fbl-tag-mode" style="flex:1.5">
             <option value="acc_id" ${state.urlTagMode === 'acc_id' ? 'selected' : ''}>= account ID</option>
+            <option value="ad_name" ${state.urlTagMode === 'ad_name' ? 'selected' : ''}>= creative name (file)</option>
             <option value="keep" ${state.urlTagMode === 'keep' ? 'selected' : ''}>keep as-is</option>
             <option value="empty" ${state.urlTagMode === 'empty' ? 'selected' : ''}>empty</option>
             <option value="custom" ${state.urlTagMode === 'custom' ? 'selected' : ''}>custom...</option>
