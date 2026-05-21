@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.4.4.0 — Bookmarklet
+ * FB Launcher v0.4.5.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -1542,6 +1542,17 @@
       activeScrollTop = active.scrollTop || null;
     }
 
+    // Preserve scroll positions of ANY scrollable element with id in the panel
+    // (matrix horizontal scroll, log scroll, account list, uploads list, etc.)
+    const scrollSnapshot = new Map();
+    panel.querySelectorAll('[id]').forEach(el => {
+      if (el.scrollLeft > 0 || el.scrollTop > 0) {
+        scrollSnapshot.set(el.id, { left: el.scrollLeft, top: el.scrollTop });
+      }
+    });
+    // Also snapshot panel's own scroll (the right-side side panel itself)
+    const panelScrollTop = panel.scrollTop;
+
     const plan = analyzePlan();
     const accFilter = state.accFilter.toLowerCase();
     const visibleAccs = accFilter
@@ -1586,7 +1597,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.4.4
+      <h2>🚀 FB Launcher v0.4.5
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -1744,7 +1755,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
         </label>
         ${state.showAssignments ? `
         <div style="margin-top:8px;font-size:11px;color:#94a3b8">Check which creatives to use per adset. Uncheck all = use all creatives (default).</div>
-        <div style="margin-top:6px;max-height:280px;overflow:auto;border:1px solid #334155;border-radius:5px">
+        <div id="fbl-matrix-scroll" style="margin-top:6px;max-height:280px;overflow:auto;border:1px solid #334155;border-radius:5px">
           <table style="border-collapse:collapse;font-size:11px;min-width:100%">
             <thead style="position:sticky;top:0;background:#1e293b;z-index:2">
               <tr>
@@ -1842,11 +1853,23 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
 
     bindEvents();
 
+    // Restore scroll positions on previously-scrolled elements (must come BEFORE focus
+    // restore — focus() can trigger scroll-into-view which would overwrite scrollLeft)
+    scrollSnapshot.forEach((pos, id) => {
+      const el = document.getElementById(id);
+      if (el) {
+        if (pos.left) el.scrollLeft = pos.left;
+        if (pos.top) el.scrollTop = pos.top;
+      }
+    });
+    if (panelScrollTop) panel.scrollTop = panelScrollTop;
+
     // Restore focus + cursor position to the same input/textarea after re-render
     if (activeId) {
       const el = document.getElementById(activeId);
       if (el) {
-        el.focus();
+        // preventScroll avoids jumping the parent containers when focusing a checkbox
+        try { el.focus({ preventScroll: true }); } catch { el.focus(); }
         try {
           if (activeSelStart != null && typeof el.setSelectionRange === 'function') {
             el.setSelectionRange(activeSelStart, activeSelEnd ?? activeSelStart);
