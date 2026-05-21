@@ -1,9 +1,10 @@
 /* ===========================================================================
- * FB Launcher v0.1.0 — Bookmarklet
+ * FB Launcher v0.2.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
  * tab+comma CSV auto-detect, video+image ads, US state region targeting.
+ * v0.2: Link override, URL Tags override, token engine, pixel placeholder substitution.
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -36,7 +37,12 @@
     accFilter: '',
     targetAccId: '',
     pageIdOverride: '',
-    urlTagParam: 'sub2',
+    linkOverride: '',         // v0.2: replaces CSV Link column (with token substitution)
+    urlTagsOverride: '',      // v0.2: replaces CSV URL Tags column (with token substitution)
+    creativesInput: '',       // v0.2: raw user input (textarea)
+    creativesParsed: null,    // v0.2: { mode: 'list'|'map'|'single', list?, map?, value? }
+    creativesError: '',
+    urlTagParam: 'sub2',      // legacy: single-param replacement in URL Tags
     urlTagMode: 'acc_id',
     urlTagCustom: '',
     createStatus: 'PAUSED',
@@ -340,6 +346,140 @@
     return String(tpl || '').replace(/\{(\w+)\}|\$\{(\w+)\}/g, (_, a, b) => String(ctx[a || b] ?? ''));
   }
 
+  /**
+   * Resolve tokens in a URL or URL Tag string.
+   * - Single-brace tokens {pixel_id}, {account_id}, etc. → replaced from ctx
+   * - Literal "pixelID" (case-sensitive, our gen-gambling-csv.ts convention) → pixel_id
+   * - Double-brace FB macros {{campaign.id}} → LEFT AS-IS (FB substitutes at runtime)
+   */
+  function resolveTokens(str, ctx) {
+    if (!str) return str;
+    let out = String(str);
+    // Preserve FB {{...}} macros: protect them, then restore after single-brace replace
+    const fbMacros = [];
+    out = out.replace(/\{\{[^}]+\}\}/g, m => {
+      fbMacros.push(m);
+      return `\x00FBM${fbMacros.length - 1}\x00`;
+    });
+    // Replace single-brace tokens
+    out = out.replace(/\{(\w+)\}/g, (_, k) => {
+      const v = ctx[k];
+      return v == null ? '' : String(v);
+    });
+    // Legacy: literal "pixelID" → ctx.pixel_id (from gen-gambling-csv.ts placeholder)
+    if (ctx.pixel_id) {
+      out = out.replace(/\bpixelID\b/g, String(ctx.pixel_id));
+    }
+    // Restore FB macros
+    out = out.replace(/\x00FBM(\d+)\x00/g, (_, i) => fbMacros[+i] || '');
+    return out;
+  }
+
+  /**
+   * Parse creatives input from textarea.
+   * Returns: { mode, list?, map?, value? } or null on empty.
+   * Sets state.creativesError on parse failure.
+   * Supported:
+   *   - JSON array:  ["abc123", "vid:567890"]
+   *   - JSON object: {"adname1": "abc123", "GMB-ROM-01": "vid:567890"}
+   *   - JSON array of {hash, video_id, name} objects (Creative Uploader format)
+   *   - Newline/comma list: abc123\nvid:567890\ndef456
+   *   - Single value: abc123
+   */
+  function parseCreatives(input) {
+    state.creativesError = '';
+    if (!input || !input.trim()) return null;
+    const trimmed = input.trim();
+
+    // Try JSON
+    try {
+      const json = JSON.parse(trimmed);
+      if (Array.isArray(json)) {
+        // Support [{hash:'x',name:'y'}, ...] or [{video_id:'123',name:'y'}, ...] or ['x','y']
+        if (json.length && typeof json[0] === 'object' && json[0] !== null) {
+          const map = {}; const list = [];
+          for (const o of json) {
+            const val = o.hash || o.image_hash || o.video_id || o.videoId || o.id || '';
+            if (!val) continue;
+            const v = String(val);
+            list.push(v);
+            const key = o.name || o.filename || o.ad_name || '';
+            if (key) map[String(key).trim()] = v;
+          }
+          if (Object.keys(map).length) return { mode: 'map', map, list };
+          if (list.length) return { mode: 'list', list };
+        } else {
+          return { mode: 'list', list: json.map(String) };
+        }
+      } else if (typeof json === 'object' && json !== null) {
+        const map = {};
+        for (const k of Object.keys(json)) map[k.trim()] = String(json[k]);
+        return { mode: 'map', map };
+      } else if (typeof json === 'string') {
+        return { mode: 'single', value: json };
+      }
+    } catch {}
+
+    // Newline/comma-separated
+    const lines = trimmed.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+    if (lines.length > 1) return { mode: 'list', list: lines };
+    if (lines.length === 1) return { mode: 'single', value: lines[0] };
+
+    state.creativesError = 'Could not parse creatives input';
+    return null;
+  }
+
+  /**
+   * Detect creative type from raw value.
+   * Returns { type: 'image' | 'video' | 'none', value }.
+   * Rules:
+   *   - "vid:XXX" or "v:XXX" → video, strip prefix
+   *   - "img:XXX" or "hash:XXX" → image, strip prefix
+   *   - All digits, 13-18 chars → video_id (FB IDs are ~15 digits)
+   *   - Otherwise → image_hash (FB image hashes are 32-char hex)
+   */
+  function detectCreativeType(value) {
+    if (!value) return { type: 'none', value: '' };
+    const v = String(value).trim();
+    if (/^v(id)?:/i.test(v)) return { type: 'video', value: v.replace(/^v(id)?:/i, '') };
+    if (/^(img|hash):/i.test(v)) return { type: 'image', value: v.replace(/^(img|hash):/i, '') };
+    if (/^\d{13,18}$/.test(v)) return { type: 'video', value: v };
+    return { type: 'image', value: v };
+  }
+
+  /**
+   * Resolve creative for an ad given override state + CSV row.
+   * Priority: UI override (map by name → list by index → single) > CSV row.
+   * Returns { imageHash, videoId } (one or the other, or both empty).
+   */
+  function resolveCreative(adGlobalIdx, adName, csvRow) {
+    let raw = '';
+    const p = state.creativesParsed;
+    if (p) {
+      if (p.mode === 'map') {
+        // Exact match first, then substring
+        if (p.map[adName]) raw = p.map[adName];
+        else {
+          const key = Object.keys(p.map).find(k => adName.includes(k) || k.includes(adName));
+          if (key) raw = p.map[key];
+        }
+      } else if (p.mode === 'list') {
+        raw = p.list[adGlobalIdx] || '';
+      } else if (p.mode === 'single') {
+        raw = p.value || '';
+      }
+    }
+    if (raw) {
+      const det = detectCreativeType(raw);
+      if (det.type === 'video') return { imageHash: '', videoId: det.value };
+      if (det.type === 'image') return { imageHash: det.value, videoId: '' };
+    }
+    // Fallback to CSV columns
+    const csvVideo = csvRow['Video ID'] ? stripPfx(csvRow['Video ID']) : '';
+    const csvImage = (csvRow['Image Hash'] || '').split(':').pop();
+    return { imageHash: csvImage, videoId: csvVideo };
+  }
+
   function transformUrlTags(raw, accId) {
     if (!raw) return raw;
     const target = String(state.urlTagParam || '').trim();
@@ -468,6 +608,7 @@
 
     // ── Adsets + Ads (loop) ──
     let adsetIdx = 0;
+    let adGlobalIdx = 0;  // 0-based across all adsets, for creatives list mode
     let totalAdOk = 0, totalAdErr = 0;
     for (const [adsetSourceName, groupRows] of plan.groups) {
       adsetIdx++;
@@ -566,10 +707,33 @@
         try {
           const pageId = state.pageIdOverride || (r['Link Object ID'] ? stripPfx(r['Link Object ID']) : '');
           if (!pageId) throw new Error('No page_id (provide override or fill "Link Object ID" in CSV)');
-          const link = r['Link'] || '';
-          const videoId = r['Video ID'] ? stripPfx(r['Video ID']) : '';
-          const imageHash = (r['Image Hash'] || '').split(':').pop();
-          const urlTags = transformUrlTags(r['URL Tags'] || '', accId);
+
+          // Build token context for Link/URL Tags substitution
+          const rowPixelId = stripPfx(r['Optimized Conversion Tracking Pixels'] || r['Pixel'] || '') || plan.pixel || '';
+          const firstGeo = (String(aFirst['Countries'] || '').split(',').map(s => s.trim()).filter(Boolean)[0]) || '';
+          const tokenCtx = {
+            pixel_id: rowPixelId,
+            account_id: accId,
+            adset_name: adsetName,
+            ad_name: adName,
+            geo: firstGeo,
+            date: dateStr,
+            adset_idx: String(adsetIdx).padStart(2, '0'),
+          };
+
+          // Link: override template or CSV (always run through resolveTokens for pixelID literal)
+          const rawLink = state.linkOverride || (r['Link'] || '');
+          const link = resolveTokens(rawLink, tokenCtx);
+
+          // URL Tags: override template OR CSV → resolveTokens → transformUrlTags (single-param replace)
+          const rawTags = state.urlTagsOverride || (r['URL Tags'] || '');
+          const tagsResolved = resolveTokens(rawTags, tokenCtx);
+          const urlTags = state.urlTagsOverride
+            ? tagsResolved   // override mode: skip single-param replace (full template wins)
+            : transformUrlTags(tagsResolved, accId);
+
+          // Resolve creative: UI override (creativesParsed) > CSV row
+          const { imageHash, videoId } = resolveCreative(adGlobalIdx, adName, r);
           const cta = r['Call to Action'] || 'LEARN_MORE';
           const adBody = r['Body'] || '';
           const adTitle = r['Title'] || '';
@@ -622,6 +786,7 @@
           state.progress.done++;
           addLog('error', `[${accLabel}] ✗ ad "${adName}": ${e.message}`);
         }
+        adGlobalIdx++;
         await sleep(RATE_AD_MS);
       }
     }
@@ -650,11 +815,11 @@
       #${PANEL_ID} .sub { color:#94a3b8; font-size:11px; margin-bottom:12px; }
       #${PANEL_ID} .field { margin-bottom:10px; }
       #${PANEL_ID} label { display:block; font-size:11px; color:#94a3b8; margin-bottom:3px; }
-      #${PANEL_ID} input[type=text], #${PANEL_ID} input[type=file], #${PANEL_ID} select {
+      #${PANEL_ID} input[type=text], #${PANEL_ID} input[type=file], #${PANEL_ID} select, #${PANEL_ID} textarea {
         width:100%; padding:6px 8px; background:#1e293b; border:1px solid #334155;
         border-radius:5px; color:#e2e8f0; font-size:12px; box-sizing:border-box;
         font-family:inherit; }
-      #${PANEL_ID} input:focus, #${PANEL_ID} select:focus { outline:1px solid #3b82f6; border-color:#3b82f6; }
+      #${PANEL_ID} input:focus, #${PANEL_ID} select:focus, #${PANEL_ID} textarea:focus { outline:1px solid #3b82f6; border-color:#3b82f6; }
       #${PANEL_ID} button { padding:7px 12px; border-radius:5px; border:1px solid #334155;
         background:#1e293b; color:#e2e8f0; font-size:12px; cursor:pointer; font-family:inherit; }
       #${PANEL_ID} button:hover { background:#334155; }
@@ -726,7 +891,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.1
+      <h2>🚀 FB Launcher v0.2
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -756,7 +921,30 @@
       </div>
 
       <div class="field">
-        <label>4. URL Tag param replacement</label>
+        <label>4. Creatives override (optional) <span style="color:#6e7681">— hashes/video IDs; overrides CSV Image Hash &amp; Video ID columns</span></label>
+        <textarea id="fbl-creatives" placeholder='Paste any of:
+JSON array: ["abc123", "vid:567890", "def456"]
+JSON map:   {"GMB-ROM-01": "abc123", "GMB-DACH": "vid:567890"}
+Uploader:   [{"hash":"abc","name":"creative1.png"}, ...]
+Newline:    abc123
+            vid:567890
+Single:     abc123 (applied to all ads)' style="width:100%;min-height:70px;padding:6px 8px;background:#1e293b;border:1px solid #334155;border-radius:5px;color:#e2e8f0;font-size:11px;font-family:ui-monospace,monospace;box-sizing:border-box;resize:vertical">${esc(state.creativesInput)}</textarea>
+        ${state.creativesError ? `<div style="color:#ef4444;font-size:11px;margin-top:4px">⚠ ${esc(state.creativesError)}</div>` : ''}
+        ${state.creativesParsed ? `<div style="color:#22c55e;font-size:11px;margin-top:4px">✓ ${state.creativesParsed.mode === 'map' ? `Map: ${Object.keys(state.creativesParsed.map).length} entries` : state.creativesParsed.mode === 'list' ? `List: ${state.creativesParsed.list.length} items` : 'Single value (all ads)'}</div>` : ''}
+      </div>
+
+      <div class="field">
+        <label>5. Link override (optional) <span style="color:#6e7681">— tokens: {pixel_id} {account_id} {adset_name} {ad_name} {geo} {date}</span></label>
+        <input type="text" id="fbl-link-override" value="${esc(state.linkOverride)}" placeholder="empty = use CSV Link column. e.g. https://t.com/click?p={pixel_id}&amp;geo={geo}">
+      </div>
+
+      <div class="field">
+        <label>6. URL Tags override (optional) <span style="color:#6e7681">— same tokens; {{fb.macros}} preserved</span></label>
+        <input type="text" id="fbl-tags-override" value="${esc(state.urlTagsOverride)}" placeholder="empty = use CSV URL Tags. e.g. keyword={pixel_id}&amp;sub2={account_id}&amp;sub5={{ad.name}}">
+      </div>
+
+      <div class="field">
+        <label>7. Quick: replace single URL Tag param <span style="color:#6e7681">— skipped if step 6 is set</span></label>
         <div class="row">
           <input type="text" id="fbl-tag-param" value="${esc(state.urlTagParam)}" placeholder="sub2" style="flex:1">
           <select id="fbl-tag-mode" style="flex:1.5">
@@ -770,7 +958,7 @@
       </div>
 
       <div class="field">
-        <label>5. Create status</label>
+        <label>8. Create status</label>
         <select id="fbl-status">
           <option value="PAUSED" ${state.createStatus === 'PAUSED' ? 'selected' : ''}>PAUSED (review before launch)</option>
           <option value="ACTIVE" ${state.createStatus === 'ACTIVE' ? 'selected' : ''}>ACTIVE (launch immediately)</option>
@@ -811,6 +999,21 @@
     });
     document.getElementById('fbl-page-id')?.addEventListener('input', e => {
       state.pageIdOverride = e.target.value.trim();
+    });
+    const creativesEl = document.getElementById('fbl-creatives');
+    if (creativesEl) {
+      creativesEl.addEventListener('input', e => {
+        state.creativesInput = e.target.value;
+        state.creativesParsed = parseCreatives(state.creativesInput);
+        // Don't re-render on each keystroke — would lose focus on textarea
+      });
+      creativesEl.addEventListener('blur', () => render());
+    }
+    document.getElementById('fbl-link-override')?.addEventListener('input', e => {
+      state.linkOverride = e.target.value.trim();
+    });
+    document.getElementById('fbl-tags-override')?.addEventListener('input', e => {
+      state.urlTagsOverride = e.target.value.trim();
     });
     document.getElementById('fbl-tag-param')?.addEventListener('input', e => {
       state.urlTagParam = e.target.value.trim();
