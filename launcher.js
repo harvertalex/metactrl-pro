@@ -132,6 +132,43 @@
   // ─── TOKEN DISCOVERY ────────────────────────────────────────────────────
   async function getToken() {
     if (TOKEN) return TOKEN;
+
+    // 1. FB native global on adsmanager.facebook.com and business.facebook.com
+    try {
+      if (typeof __accessToken !== 'undefined' && __accessToken) {
+        addLog('info', 'Token source: __accessToken global');
+        return __accessToken;
+      }
+    } catch {}
+    try {
+      if (window.__accessToken) {
+        addLog('info', 'Token source: window.__accessToken');
+        return window.__accessToken;
+      }
+    } catch {}
+
+    // 2. Scrape from script tags on current page
+    try {
+      const scripts = document.querySelectorAll('script');
+      for (const s of scripts) {
+        const m = (s.textContent || '').match(/"access_token":"(EAA[A-Za-z0-9_-]+)"/);
+        if (m) {
+          addLog('info', 'Token source: scraped from current page script tag');
+          return m[1];
+        }
+      }
+    } catch {}
+
+    // 3. Scrape from full document.documentElement.outerHTML
+    try {
+      const m = (document.documentElement.outerHTML || '').match(/"access_token":"(EAA[A-Za-z0-9_-]+)"/);
+      if (m) {
+        addLog('info', 'Token source: scraped from documentElement');
+        return m[1];
+      }
+    } catch {}
+
+    // 4. Fetch from FB endpoints (fallback — may have limited scope)
     const candidates = [
       'https://business.facebook.com/ajax/bootloader-endpoint/?modules=AdsCanvasComposerDialog.react&__a=1',
       'https://adsmanager.facebook.com/adsmanager/',
@@ -142,7 +179,10 @@
         const res = await fetch(u, { credentials: 'include' });
         const txt = await res.text();
         const m = txt.match(/"access_token":"(EAA[A-Za-z0-9_-]+)"/);
-        if (m) return m[1];
+        if (m) {
+          addLog('info', `Token source: fetch ${new URL(u).hostname}`);
+          return m[1];
+        }
       } catch {}
     }
     return '';
@@ -153,53 +193,97 @@
     if (accountsLoading) return;
     accountsLoading = true;
     setStatus('info', 'Loading ad accounts...');
-    try {
-      const fields = 'id,account_id,name,account_status,currency';
-      let businesses = [];
-      try { businesses = await apiAll('/me/businesses', { fields: 'id,name', limit: 200 }); } catch {}
-      const seenBiz = new Set();
-      businesses = businesses.filter(b => b?.id && !seenBiz.has(b.id) && seenBiz.add(b.id));
+    render();
 
-      const rows = [];
+    const fields = 'id,account_id,name,account_status,currency';
+    const rows = [];
+    let bmCount = 0;
+    let personalErr = null;
+    let bizErr = null;
+
+    // 1. Personal accounts via /me/adaccounts (catches accounts not in any BM,
+    //    and works even when /me/businesses scope is missing)
+    try {
+      const personal = await apiAll('/me/adaccounts', { fields, limit: 200 });
+      personal.forEach(a => rows.push({ ...a, _bm_id: '', _bm_name: 'Personal' }));
+      addLog('info', `/me/adaccounts: ${personal.length} accounts`);
+    } catch (e) {
+      personalErr = e;
+      addLog('warning', `/me/adaccounts failed: ${e.message}`);
+    }
+
+    // 2. Multi-BM via /me/businesses
+    let businesses = [];
+    try {
+      businesses = await apiAll('/me/businesses', { fields: 'id,name', limit: 200 });
+      addLog('info', `/me/businesses: ${businesses.length} BMs`);
+    } catch (e) {
+      bizErr = e;
+      addLog('warning', `/me/businesses failed: ${e.message}`);
+    }
+
+    // Also try /me?fields=businesses{id,name} as alternate
+    if (!businesses.length) {
+      try {
+        const p = await apiFetch('/me', { params: { fields: 'businesses{id,name}' } });
+        const altBiz = p?.businesses?.data || [];
+        if (altBiz.length) {
+          businesses = altBiz;
+          addLog('info', `/me?businesses: ${altBiz.length} BMs (alt path)`);
+        }
+      } catch (e) {
+        addLog('warning', `/me?businesses failed: ${e.message}`);
+      }
+    }
+
+    const seenBiz = new Set();
+    businesses = businesses.filter(b => b?.id && !seenBiz.has(b.id) && seenBiz.add(b.id));
+    bmCount = businesses.length;
+
+    if (businesses.length) {
       await Promise.all(businesses.map(async biz => {
         await Promise.all(['owned_ad_accounts', 'client_ad_accounts'].map(async edge => {
           try {
             const items = await apiAll(`/${biz.id}/${edge}`, { fields, limit: 200 });
             items.forEach(a => rows.push({ ...a, _bm_id: biz.id, _bm_name: biz.name }));
-          } catch {}
+            if (items.length) addLog('info', `${biz.name} (${edge.replace('_ad_accounts','')}): ${items.length}`);
+          } catch (e) {
+            addLog('warning', `${biz.name}/${edge}: ${e.message}`);
+          }
         }));
       }));
-      try {
-        const personal = await apiAll('/me/adaccounts', { fields, limit: 200 });
-        personal.forEach(a => rows.push({ ...a, _bm_id: '', _bm_name: 'No BM' }));
-      } catch {}
-
-      const seen = new Set();
-      ACCOUNTS.length = 0;
-      rows.filter(a => {
-        const id = String(a.account_id || a.id || '').replace(/^act_/, '');
-        if (!id || seen.has(id)) return false;
-        seen.add(id);
-        return true;
-      }).forEach(a => {
-        const id = String(a.account_id || a.id || '').replace(/^act_/, '');
-        ACCOUNTS.push({
-          id,
-          name: a.name || 'Untitled',
-          bm: a._bm_name || 'No BM',
-          status: a.account_status,
-          currency: a.currency || 'USD',
-          label: `${a.name || 'Untitled'} (${id})`,
-        });
-      });
-      ACCOUNTS.sort((a, b) => a.bm.localeCompare(b.bm) || a.name.localeCompare(b.name));
-      setStatus('success', `Loaded ${ACCOUNTS.length} accounts across ${businesses.length} BMs.`);
-    } catch (e) {
-      setStatus('error', `Account load failed: ${e.message}`);
-    } finally {
-      accountsLoading = false;
-      render();
     }
+
+    // Dedupe by id
+    const seen = new Set();
+    ACCOUNTS.length = 0;
+    rows.filter(a => {
+      const id = String(a.account_id || a.id || '').replace(/^act_/, '');
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    }).forEach(a => {
+      const id = String(a.account_id || a.id || '').replace(/^act_/, '');
+      ACCOUNTS.push({
+        id,
+        name: a.name || 'Untitled',
+        bm: a._bm_name || 'Personal',
+        status: a.account_status,
+        currency: a.currency || 'USD',
+        label: `${a.name || 'Untitled'} (${id})`,
+      });
+    });
+    ACCOUNTS.sort((a, b) => a.bm.localeCompare(b.bm) || a.name.localeCompare(b.name));
+
+    accountsLoading = false;
+    if (ACCOUNTS.length) {
+      setStatus('success', `Loaded ${ACCOUNTS.length} accounts across ${bmCount} BMs + personal.`);
+    } else if (personalErr && bizErr) {
+      setStatus('error', `Both /me/adaccounts and /me/businesses failed. Token scope issue? Try opening business.facebook.com first, then click bookmark again.`);
+    } else {
+      setStatus('warning', `No accounts found. Token may have limited scope. Are you logged in to FB with admin access?`);
+    }
+    render();
   }
 
   // ─── CSV PARSER (auto-detect tab vs comma) ──────────────────────────────
