@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.4.2.0 — Bookmarklet
+ * FB Launcher v0.4.3.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -107,6 +107,17 @@
   }
 
   // ─── FB API CLIENT ──────────────────────────────────────────────────────
+  // Build a rich error message from FB's error object — used in logs everywhere
+  function fbErrorMsg(err, httpStatus) {
+    if (!err) return `API error (${httpStatus || '?'})`;
+    const codePart = err.code != null
+      ? `[${err.code}${err.error_subcode ? '/' + err.error_subcode : ''}] `
+      : '';
+    const msg = err.error_user_msg || err.message || 'Unknown error';
+    const trace = err.fbtrace_id ? ` · trace=${err.fbtrace_id}` : '';
+    return `${codePart}${msg}${trace}`;
+  }
+
   async function apiFetch(path, opts = {}) {
     const method = opts.method || 'GET';
     const isFull = /^https?:\/\//i.test(path);
@@ -137,17 +148,25 @@
         const res = await fetch(url.toString(), fo);
         const json = await res.json().catch(() => ({}));
         if (res.ok && !json?.error) return json;
-        const code = json?.error?.code;
+        const fbErr = json?.error;
+        const code = fbErr?.code;
         // 4: rate limit, 17: user request limit, 32: page rate, 80004: too many calls
         if ([4, 17, 32, 80004].includes(code) && attempt < MAX_RETRIES) {
           const wait = BACKOFF_BASE_MS * Math.pow(2, attempt - 1);
           await sleep(wait);
           continue;
         }
-        throw new Error(json?.error?.error_user_msg || json?.error?.message || `API error (${res.status})`);
+        // Build rich error — attaches FB details so caller can show them in log
+        const richMsg = fbErrorMsg(fbErr, res.status);
+        const err = new Error(richMsg);
+        err.fbError = fbErr || null;
+        err.httpStatus = res.status;
+        err.path = path;
+        throw err;
       } catch (e) {
         lastErr = e;
-        if (attempt >= MAX_RETRIES) break;
+        // Don't retry if it's a structured FB error (not transient network issue)
+        if (e.fbError || attempt >= MAX_RETRIES) break;
         await sleep(1000 * attempt);
       }
     }
@@ -1424,7 +1443,7 @@
     const style = document.createElement('style');
     style.id = '__fb_launcher_styles__';
     style.textContent = `
-      #${PANEL_ID} { position:fixed; top:0; right:0; width:420px; height:100vh;
+      #${PANEL_ID} { position:fixed; top:0; right:0; width:580px; height:100vh;
         background:#0f172a; color:#e2e8f0; z-index:2147483646;
         border-left:1px solid #334155; box-shadow:-8px 0 24px rgba(0,0,0,.4);
         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
@@ -1453,8 +1472,10 @@
       #${PANEL_ID} .log { background:rgba(0,0,0,.3); border:1px solid #334155; border-radius:6px;
         padding:8px 10px; max-height:240px; overflow-y:auto; font-family:ui-monospace,monospace;
         font-size:11px; }
-      #${PANEL_ID} .log div { white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-        margin-bottom:1px; }
+      #${PANEL_ID} .log div { word-break:break-word; line-height:1.45; margin-bottom:2px;
+        padding:1px 0; }
+      #${PANEL_ID} .log div.error-line { background:rgba(239,68,68,.08);
+        border-left:2px solid #ef4444; padding-left:4px; margin:2px 0; }
       #${PANEL_ID} .log .ts { opacity:.5; margin-right:6px; }
       #${PANEL_ID} .progress { height:5px; border-radius:3px; background:#334155; overflow:hidden; margin:6px 0; }
       #${PANEL_ID} .progress > div { height:100%; background:#3b82f6; transition:width .3s; }
@@ -1501,7 +1522,7 @@
 
   function logHtml() {
     return state.log.slice(-100).map(l =>
-      `<div style="color:${SC[l.type] || SC.info}"><span class="ts">${esc(l.ts)}</span>${esc(l.msg)}</div>`
+      `<div class="${l.type === 'error' ? 'error-line' : ''}" style="color:${SC[l.type] || SC.info}"><span class="ts">${esc(l.ts)}</span>${esc(l.msg)}</div>`
     ).join('');
   }
 
@@ -1565,7 +1586,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.4.2
+      <h2>🚀 FB Launcher v0.4.3
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
