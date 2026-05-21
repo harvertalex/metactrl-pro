@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.3.0 — Bookmarklet
+ * FB Launcher v0.3.1.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -389,15 +389,32 @@
       await sleep(300);
     }
 
-    // Merge into creatives textarea (replace if it was auto-generated from previous upload, else append)
-    if (results.length) {
-      const json = JSON.stringify(results, null, 2);
+    // Auto-pair: videos + images with same base name → image becomes thumbnail, image removed as standalone ad
+    let pairedCount = 0;
+    const videos = results.filter(r => r.videoId);
+    const images = results.filter(r => r.imageHash);
+    const consumedImageNames = new Set();
+    for (const v of videos) {
+      const match = images.find(img => img.name === v.name && !consumedImageNames.has(img.name));
+      if (match) {
+        v.thumbnailHash = match.imageHash;
+        consumedImageNames.add(match.name);
+        pairedCount++;
+        addLog('info', `🔗 paired: ${v.name}.mp4 ← ${v.name}.jpg as thumbnail`);
+      }
+    }
+    const finalResults = results.filter(r => !(r.imageHash && consumedImageNames.has(r.name)));
+
+    // Merge into creatives textarea
+    if (finalResults.length) {
+      const json = JSON.stringify(finalResults, null, 2);
       state.creativesInput = json;
       state.creativesParsed = parseCreatives(json);
     }
     state.uploading = false;
-    setStatus(results.length ? 'success' : 'warning',
-      `Upload done: ${results.length}/${files.length} successful. ${results.length ? 'Creatives auto-populated in step 7.' : ''}`);
+    const pairedSuffix = pairedCount ? ` · ${pairedCount} thumbnail${pairedCount > 1 ? 's' : ''} paired` : '';
+    setStatus(finalResults.length ? 'success' : 'warning',
+      `Upload done: ${results.length}/${files.length} successful${pairedSuffix}. ${finalResults.length ? 'Creatives auto-populated.' : ''}`);
     render();
   }
 
@@ -650,7 +667,8 @@
               name: String(o.name || o.ad_name || o.filename || `Ad ${i + 1}`).trim(),
               imageHash: String(o.imageHash || o.image_hash || '').trim(),
               videoId: String(o.videoId || o.video_id || '').trim(),
-              title: String(o.title || o.headline || '').trim() || null,   // optional per-item override
+              thumbnailHash: String(o.thumbnailHash || o.thumbnail_hash || o.thumb_hash || '').trim() || null,
+              title: String(o.title || o.headline || '').trim() || null,
               body: String(o.body || o.message || '').trim() || null,
               cta: String(o.cta || o.call_to_action || '').trim() || null,
             })).filter(o => o.imageHash || o.videoId);
@@ -1112,19 +1130,26 @@
 
           const objectStorySpec = { page_id: pageId };
           if (videoId) {
-            let thumbUrl = '';
-            try {
-              const vInfo = await apiFetch(`/${videoId}`, { params: { fields: 'picture,thumbnails{uri,is_preferred}' } });
-              const prefThumb = vInfo?.thumbnails?.data?.find(t => t.is_preferred)?.uri;
-              thumbUrl = prefThumb || vInfo?.thumbnails?.data?.[0]?.uri || vInfo?.picture || '';
-            } catch {}
+            // Thumbnail priority: per-item thumbnailHash (from upload pairing or JSON) > FB auto-thumbnail
+            const itemThumb = plan.adsMode ? (plan.adsModeItems[i]?.thumbnailHash || null) : null;
             objectStorySpec.video_data = {
               video_id: videoId,
               call_to_action: { type: cta, value: { link } },
             };
             if (adBody) objectStorySpec.video_data.message = adBody;
             if (adTitle) objectStorySpec.video_data.title = adTitle;
-            if (thumbUrl) objectStorySpec.video_data.image_url = thumbUrl;
+            if (itemThumb) {
+              objectStorySpec.video_data.image_hash = itemThumb;
+            } else {
+              // Fallback: fetch auto-thumbnail from FB
+              let thumbUrl = '';
+              try {
+                const vInfo = await apiFetch(`/${videoId}`, { params: { fields: 'picture,thumbnails{uri,is_preferred}' } });
+                const prefThumb = vInfo?.thumbnails?.data?.find(t => t.is_preferred)?.uri;
+                thumbUrl = prefThumb || vInfo?.thumbnails?.data?.[0]?.uri || vInfo?.picture || '';
+              } catch {}
+              if (thumbUrl) objectStorySpec.video_data.image_url = thumbUrl;
+            }
           } else if (imageHash) {
             objectStorySpec.link_data = {
               image_hash: imageHash,
@@ -1286,7 +1311,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.3
+      <h2>🚀 FB Launcher v0.3.1
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -1357,12 +1382,18 @@
       <div class="field">
         <label>6. Creatives — upload files OR paste hashes/JSON <span style="color:#6e7681">— overrides CSV Image Hash &amp; Video ID</span></label>
         <div style="margin-bottom:8px;padding:8px 10px;background:rgba(59,130,246,.06);border:1px solid rgba(59,130,246,.2);border-radius:5px">
-          <div style="font-size:11px;color:#94a3b8;margin-bottom:5px">↑ Upload creatives directly to this ad account (images → /adimages, videos → /advideos)</div>
+          <div style="font-size:11px;color:#94a3b8;margin-bottom:3px">↑ Upload creatives directly (images → /adimages, videos → /advideos)</div>
+          <div style="font-size:10px;color:#6e7681;margin-bottom:5px">💡 Tip: upload <code>video1.mp4</code> + <code>video1.jpg</code> (same base name) → auto-pairs as video + thumbnail</div>
           <input type="file" id="fbl-upload-files" multiple accept="image/*,video/*" ${!state.targetAccId || state.uploading ? 'disabled' : ''} style="width:100%">
           ${state.uploads.length ? `<div style="margin-top:6px;font-size:11px">${state.uploads.map(u => {
             const icon = u.status === 'done' ? '✓' : u.status === 'error' ? '✗' : u.status === 'uploading' ? '⏳' : '○';
             const color = u.status === 'done' ? '#22c55e' : u.status === 'error' ? '#ef4444' : u.status === 'uploading' ? '#fbbf24' : '#6e7681';
-            const detail = u.status === 'done' ? ` → <code>${esc((u.imageHash || u.videoId || '').slice(0, 16))}…</code>` : u.status === 'error' ? ` <span style="color:#ef4444">${esc(u.error || '')}</span>` : '';
+            // Check if this image was paired as thumbnail (its base name matches a video and we have ads-mode JSON)
+            const wasPairedThumb = u.type === 'image' && u.status === 'done' && state.creativesParsed?.mode === 'ads'
+              && state.creativesParsed.items.some(it => it.videoId && it.thumbnailHash === u.imageHash);
+            const detail = u.status === 'done'
+              ? wasPairedThumb ? ` <span style="color:#a78bfa">🔗 paired as thumbnail</span>` : ` → <code>${esc((u.imageHash || u.videoId || '').slice(0, 16))}…</code>`
+              : u.status === 'error' ? ` <span style="color:#ef4444">${esc(u.error || '')}</span>` : '';
             return `<div style="color:${color}">${icon} ${esc(u.name)} (${u.type})${detail}</div>`;
           }).join('')}</div>` : ''}
           ${!state.targetAccId ? '<div style="font-size:10px;color:#fbbf24;margin-top:4px">⚠ Select target account (step 3) before uploading</div>' : ''}
