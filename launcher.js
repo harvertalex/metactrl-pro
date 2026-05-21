@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.2.5.0 — Bookmarklet
+ * FB Launcher v0.2.6.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -48,6 +48,8 @@
     pixelsLoading: false,
     pagesList: [],            // v0.2.5: pages fetched for selected account ([{id, name}])
     pagesLoading: false,
+    dsaBeneficiary: '',       // v0.2.6: EU DSA — name of person/org being advertised
+    dsaPayer: '',             // v0.2.6: EU DSA — name of who pays (optional, defaults to beneficiary)
     creativesInput: '',       // v0.2: raw user input (textarea)
     creativesParsed: null,    // v0.2: { mode: 'list'|'map'|'single', list?, map?, value? }
     creativesError: '',
@@ -673,6 +675,22 @@
     return out.map(([k, v]) => v === '' ? `${k}=` : `${k}=${v}`).join('&');
   }
 
+  // ─── EU COUNTRIES (DSA compliance) ──────────────────────────────────────
+  const EU_COUNTRIES = new Set([
+    'AT','BE','BG','HR','CY','CZ','DK','EE','FI','FR','DE','GR','HU','IE','IT',
+    'LV','LT','LU','MT','NL','PL','PT','RO','SK','SI','ES','SE',
+    // EEA + UK (DSA-equivalent)
+    'NO','IS','LI','GB','UK',
+  ]);
+
+  function hasEuTargeting(rows) {
+    for (const r of rows) {
+      const countries = String(r['Countries'] || '').split(',').map(s => s.trim().toUpperCase());
+      if (countries.some(c => EU_COUNTRIES.has(c))) return true;
+    }
+    return false;
+  }
+
   // ─── US STATES (for SafeX HI region targeting) ──────────────────────────
   const US_STATE_KEYS = {
     'alabama':3847,'alaska':3848,'arizona':3849,'arkansas':3850,'california':3851,
@@ -726,6 +744,12 @@
     if (!state.targetAccId) { setStatus('error', 'Select a target ad account.'); return; }
     const plan = analyzePlan();
     if (!plan) { setStatus('error', 'Cannot analyze plan from CSV.'); return; }
+
+    // Pre-flight: EU DSA compliance — beneficiary required when targeting any EU country
+    if (hasEuTargeting(state.rows) && !state.dsaBeneficiary) {
+      setStatus('error', '⚠ EU targeting detected. DSA Beneficiary required (step 5). Type your business name or page name.');
+      return;
+    }
 
     // Pre-flight: validate Page ID
     if (state.pageIdOverride) {
@@ -1018,15 +1042,18 @@
           if (urlTags) creativeBody.url_tags = urlTags;
 
           const creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: creativeBody });
-          await apiFetch(`/act_${accId}/ads`, {
-            method: 'POST',
-            body: {
-              name: adName,
-              adset_id: adsetId,
-              creative: JSON.stringify({ creative_id: creative.id }),
-              status: state.createStatus,
-            },
-          });
+          const adBodyPost = {
+            name: adName,
+            adset_id: adsetId,
+            creative: JSON.stringify({ creative_id: creative.id }),
+            status: state.createStatus,
+          };
+          // EU DSA fields (required when targeting EU; safe to send for all)
+          if (state.dsaBeneficiary) {
+            adBodyPost.dsa_beneficiary = state.dsaBeneficiary;
+            adBodyPost.dsa_payer = state.dsaPayer || state.dsaBeneficiary;  // payer defaults to beneficiary
+          }
+          await apiFetch(`/act_${accId}/ads`, { method: 'POST', body: adBodyPost });
           totalAdOk++;
           state.progress.done++;
           addLog('success', `[${accLabel}] ✓ ad ${i + 1}/${adsToCreate.length} "${adName}"`);
@@ -1152,6 +1179,7 @@
     else if (state.pageIdOverride && !/^\d{10,20}$/.test(state.pageIdOverride)) blockReason = `⚠ Page ID "${state.pageIdOverride}" invalid (10-20 digits)`;
     else if (state.pageIdOverride && state.pagesList.length && !state.pagesList.find(p => p.id === state.pageIdOverride)) blockReason = `⚠ Page ${state.pageIdOverride} not in this account`;
     else if (!effPixel) blockReason = '⬆ Set Pixel (step 4)';
+    else if (hasEuTargeting(state.rows) && !state.dsaBeneficiary) blockReason = '⚠ EU targeting — set DSA Beneficiary (step 5)';
     else if (!pixelValid) blockReason = `⚠ Pixel "${effPixel}" invalid format (8-20 digits)`;
     else if (state.pixelsList.length && !pixelInAccount) blockReason = `⚠ Pixel ${effPixel} not in this account`;
     const runDisabled = !!blockReason;
@@ -1159,7 +1187,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.2.5
+      <h2>🚀 FB Launcher v0.2.6
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -1216,8 +1244,14 @@
         </select>
       </div>
 
+      <div class="field" ${hasEuTargeting(state.rows) && !state.dsaBeneficiary ? 'style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:6px;padding:8px 10px"' : ''}>
+        <label>5. DSA Advertiser (EU-required) ${hasEuTargeting(state.rows) ? '<span style="color:#fbbf24">⚠ EU targeting detected</span>' : '<span style="color:#6e7681">— only needed for EU ads</span>'}</label>
+        <input type="text" id="fbl-dsa-beneficiary" value="${esc(state.dsaBeneficiary)}" placeholder="Beneficiary (person or org being advertised) — e.g. your business or page name" style="margin-bottom:5px">
+        <input type="text" id="fbl-dsa-payer" value="${esc(state.dsaPayer)}" placeholder="Payer (optional — defaults to beneficiary)">
+      </div>
+
       <div class="field">
-        <label>5. Creatives override (optional) <span style="color:#6e7681">— hashes/video IDs; overrides CSV Image Hash &amp; Video ID columns</span></label>
+        <label>6. Creatives override (optional) <span style="color:#6e7681">— hashes/video IDs; overrides CSV Image Hash &amp; Video ID columns</span></label>
         <textarea id="fbl-creatives" placeholder='Paste any of:
 
 ADS-MODE (each item = new ad, replicated per adset, CSV ads ignored):
@@ -1238,17 +1272,17 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       </div>
 
       <div class="field">
-        <label>6. Link override (optional) <span style="color:#6e7681">— tokens: {pixel_id} {account_id} {adset_name} {ad_name} {geo} {date}</span></label>
+        <label>7. Link override (optional) <span style="color:#6e7681">— tokens: {pixel_id} {account_id} {adset_name} {ad_name} {geo} {date}</span></label>
         <input type="text" id="fbl-link-override" value="${esc(state.linkOverride)}" placeholder="empty = use CSV Link column. e.g. https://t.com/click?p={pixel_id}&amp;geo={geo}">
       </div>
 
       <div class="field">
-        <label>7. URL Tags override (optional) <span style="color:#6e7681">— same tokens; {{fb.macros}} preserved</span></label>
+        <label>8. URL Tags override (optional) <span style="color:#6e7681">— same tokens; {{fb.macros}} preserved</span></label>
         <input type="text" id="fbl-tags-override" value="${esc(state.urlTagsOverride)}" placeholder="empty = use CSV URL Tags. e.g. keyword={pixel_id}&amp;sub2={account_id}&amp;sub5={{ad.name}}">
       </div>
 
       <div class="field">
-        <label>8. Ad copy override (optional) <span style="color:#6e7681">— same for all ads; per-creative title/body/cta in ads-mode JSON wins</span></label>
+        <label>9. Ad copy override (optional) <span style="color:#6e7681">— same for all ads; per-creative title/body/cta in ads-mode JSON wins</span></label>
         <input type="text" id="fbl-title-override" value="${esc(state.titleOverride)}" placeholder="Title (headline) — empty = use CSV Title" style="margin-bottom:5px">
         <textarea id="fbl-body-override" placeholder="Body (primary text) — empty = use CSV Body" style="width:100%;min-height:50px;padding:6px 8px;background:#1e293b;border:1px solid #334155;border-radius:5px;color:#e2e8f0;font-size:12px;font-family:inherit;box-sizing:border-box;resize:vertical;margin-bottom:5px">${esc(state.bodyOverride)}</textarea>
         <select id="fbl-cta-override">
@@ -1271,7 +1305,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       </div>
 
       <div class="field">
-        <label>9. Quick: replace single URL Tag param <span style="color:#6e7681">— skipped if step 7 is set</span></label>
+        <label>10. Quick: replace single URL Tag param <span style="color:#6e7681">— skipped if step 8 is set</span></label>
         <div class="row">
           <input type="text" id="fbl-tag-param" value="${esc(state.urlTagParam)}" placeholder="sub2" style="flex:1">
           <select id="fbl-tag-mode" style="flex:1.5">
@@ -1285,7 +1319,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       </div>
 
       <div class="field">
-        <label>10. Create status</label>
+        <label>11. Create status</label>
         <select id="fbl-status">
           <option value="PAUSED" ${state.createStatus === 'PAUSED' ? 'selected' : ''}>PAUSED (review before launch)</option>
           <option value="ACTIVE" ${state.createStatus === 'ACTIVE' ? 'selected' : ''}>ACTIVE (launch immediately)</option>
@@ -1334,7 +1368,18 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     });
     document.getElementById('fbl-page-select')?.addEventListener('change', e => {
       state.pageIdOverride = e.target.value;
+      // Auto-suggest DSA beneficiary from page name (only if empty)
+      if (!state.dsaBeneficiary && e.target.value) {
+        const page = state.pagesList.find(p => p.id === e.target.value);
+        if (page?.name) state.dsaBeneficiary = page.name;
+      }
       render();
+    });
+    document.getElementById('fbl-dsa-beneficiary')?.addEventListener('input', e => {
+      state.dsaBeneficiary = e.target.value;
+    });
+    document.getElementById('fbl-dsa-payer')?.addEventListener('input', e => {
+      state.dsaPayer = e.target.value;
     });
     document.getElementById('fbl-pixel-select')?.addEventListener('change', e => {
       state.pixelOverride = e.target.value;
