@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.2.0 — Bookmarklet
+ * FB Launcher v0.2.2.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -39,6 +39,9 @@
     pageIdOverride: '',
     linkOverride: '',         // v0.2: replaces CSV Link column (with token substitution)
     urlTagsOverride: '',      // v0.2: replaces CSV URL Tags column (with token substitution)
+    titleOverride: '',        // v0.2.2: replaces CSV Title (headline) for all ads
+    bodyOverride: '',         // v0.2.2: replaces CSV Body (primary text) for all ads
+    ctaOverride: '',          // v0.2.2: replaces CSV Call to Action for all ads (e.g. GET_QUOTE)
     creativesInput: '',       // v0.2: raw user input (textarea)
     creativesParsed: null,    // v0.2: { mode: 'list'|'map'|'single', list?, map?, value? }
     creativesError: '',
@@ -389,10 +392,19 @@
       }
     }
 
+    // Ads-mode (creatives override defines new ads per adset)
+    const adsMode = state.creativesParsed?.mode === 'ads';
+    const adsModeItems = adsMode ? state.creativesParsed.items : null;
+    const adCount = adsMode
+      ? groups.size * adsModeItems.length
+      : state.rows.length;
+
     return {
       groups,
       adsetCount: groups.size,
-      adCount: state.rows.length,
+      adCount,
+      adsMode,
+      adsModeItems,
       isCBO,
       cboBudget,
       aboTotal,
@@ -461,14 +473,19 @@
 
   /**
    * Parse creatives input from textarea.
-   * Returns: { mode, list?, map?, value? } or null on empty.
+   * Returns one of:
+   *   - { mode: 'ads',    items: [{name, imageHash?, videoId?}, ...] }  ← ads-mode: each item = 1 new ad, replicated per adset
+   *   - { mode: 'map',    map: {adName: hash} }                          ← override CSV per ad by name
+   *   - { mode: 'list',   list: [hash, ...] }                            ← override CSV per ad by index
+   *   - { mode: 'single', value: hash }                                  ← same creative for every CSV ad
+   *   - null (empty input)
+   *
    * Sets state.creativesError on parse failure.
-   * Supported:
-   *   - JSON array:  ["abc123", "vid:567890"]
-   *   - JSON object: {"adname1": "abc123", "GMB-ROM-01": "vid:567890"}
-   *   - JSON array of {hash, video_id, name} objects (Creative Uploader format)
-   *   - Newline/comma list: abc123\nvid:567890\ndef456
-   *   - Single value: abc123
+   *
+   * Detection priority (JSON array of objects):
+   *   - If items have explicit imageHash/image_hash OR videoId/video_id fields → 'ads' mode
+   *     (each item creates a new ad; CSV Ad Name/Image Hash/Video ID columns ignored)
+   *   - Else fall back to 'map'/'list' (objects with just {hash, name})
    */
   function parseCreatives(input) {
     state.creativesError = '';
@@ -479,8 +496,26 @@
     try {
       const json = JSON.parse(trimmed);
       if (Array.isArray(json)) {
-        // Support [{hash:'x',name:'y'}, ...] or [{video_id:'123',name:'y'}, ...] or ['x','y']
         if (json.length && typeof json[0] === 'object' && json[0] !== null) {
+          // Detect ads-mode: items have explicit imageHash or videoId
+          const hasExplicitType = json.every(o =>
+            o && typeof o === 'object' &&
+            (o.imageHash !== undefined || o.image_hash !== undefined ||
+             o.videoId !== undefined || o.video_id !== undefined)
+          );
+          if (hasExplicitType) {
+            const items = json.map((o, i) => ({
+              name: String(o.name || o.ad_name || o.filename || `Ad ${i + 1}`).trim(),
+              imageHash: String(o.imageHash || o.image_hash || '').trim(),
+              videoId: String(o.videoId || o.video_id || '').trim(),
+              title: String(o.title || o.headline || '').trim() || null,   // optional per-item override
+              body: String(o.body || o.message || '').trim() || null,
+              cta: String(o.cta || o.call_to_action || '').trim() || null,
+            })).filter(o => o.imageHash || o.videoId);
+            if (items.length) return { mode: 'ads', items };
+          }
+
+          // Fallback: legacy {hash, name} format → map by name + list by index
           const map = {}; const list = [];
           for (const o of json) {
             const val = o.hash || o.image_hash || o.video_id || o.videoId || o.id || '';
@@ -698,11 +733,28 @@
       adsetIdx++;
       const aFirst = groupRows[0];
 
+      // Build ads list for this adset early (needed for progress + logs).
+      // ads-mode: items from creatives override become NEW ads (CSV Ad Name/Image Hash/Video ID ignored)
+      // legacy: 1 ad per CSV row in this group
+      const adsToCreate = plan.adsMode
+        ? plan.adsModeItems.map(item => ({
+            csvRow: groupRows[0],
+            forcedName: item.name,
+            forcedImageHash: item.imageHash,
+            forcedVideoId: item.videoId,
+          }))
+        : groupRows.map(r => ({
+            csvRow: r,
+            forcedName: null,
+            forcedImageHash: null,
+            forcedVideoId: null,
+          }));
+
       const adsetName = state.adsetNameTpl
         ? renderTpl(state.adsetNameTpl, {
             date: dateStr, acc_id: accId,
             source_name: adsetSourceName,
-            ad_count: groupRows.length,
+            ad_count: adsToCreate.length,
             n: String(adsetIdx).padStart(2, '0'),
           })
         : (adsetSourceName !== '__default__' ? adsetSourceName : `Ad Set ${adsetIdx}`);
@@ -775,19 +827,20 @@
         const adset = await apiFetch(`/act_${accId}/adsets`, { method: 'POST', body: adsetBody });
         adsetId = adset.id;
         state.progress.done++;
-        addLog('success', `[${accLabel}] ✓ adset ${adsetIdx}/${plan.adsetCount} id=${adsetId} (${groupRows.length} ads coming)`);
+        addLog('success', `[${accLabel}] ✓ adset ${adsetIdx}/${plan.adsetCount} id=${adsetId} (${adsToCreate.length} ads coming)`);
       } catch (e) {
         addLog('error', `[${accLabel}] ✗ adset ${adsetIdx} "${adsetName}": ${e.message}`);
-        state.progress.done += 1 + groupRows.length; // skip this adset's ads in progress
+        state.progress.done += 1 + adsToCreate.length; // skip this adset's ads in progress
         continue;
       }
 
       await sleep(RATE_ADSET_MS);
 
       // ── Ads in this adset ──
-      for (let i = 0; i < groupRows.length; i++) {
-        const r = groupRows[i];
-        const adName = r['Ad Name'] || `Ad ${adsetIdx}.${i + 1}`;
+      for (let i = 0; i < adsToCreate.length; i++) {
+        const adInfo = adsToCreate[i];
+        const r = adInfo.csvRow;
+        const adName = adInfo.forcedName || r['Ad Name'] || `Ad ${adsetIdx}.${i + 1}`;
         try {
           const pageId = state.pageIdOverride || (r['Link Object ID'] ? stripPfx(r['Link Object ID']) : '');
           if (!pageId) throw new Error('No page_id (provide override or fill "Link Object ID" in CSV)');
@@ -816,11 +869,26 @@
             ? tagsResolved   // override mode: skip single-param replace (full template wins)
             : transformUrlTags(tagsResolved, accId);
 
-          // Resolve creative: UI override (creativesParsed) > CSV row
-          const { imageHash, videoId } = resolveCreative(adGlobalIdx, adName, r);
-          const cta = r['Call to Action'] || 'LEARN_MORE';
-          const adBody = r['Body'] || '';
-          const adTitle = r['Title'] || '';
+          // Resolve creative
+          let imageHash, videoId;
+          if (adInfo.forcedImageHash || adInfo.forcedVideoId) {
+            // ads-mode: use creative from item directly (CSV Image Hash/Video ID ignored)
+            imageHash = adInfo.forcedImageHash || '';
+            videoId = adInfo.forcedVideoId || '';
+          } else {
+            // legacy mode: UI override (map/list/single) > CSV row
+            const resolved = resolveCreative(adGlobalIdx, adName, r);
+            imageHash = resolved.imageHash;
+            videoId = resolved.videoId;
+          }
+
+          // Resolve copy text — priority: per-item (ads-mode JSON) > UI override > CSV row
+          const itemTitle = plan.adsMode ? (plan.adsModeItems[i]?.title || null) : null;
+          const itemBody  = plan.adsMode ? (plan.adsModeItems[i]?.body  || null) : null;
+          const itemCta   = plan.adsMode ? (plan.adsModeItems[i]?.cta   || null) : null;
+          const adTitle = itemTitle || state.titleOverride || r['Title'] || '';
+          const adBody  = itemBody  || state.bodyOverride  || r['Body']  || '';
+          const cta     = itemCta   || state.ctaOverride   || r['Call to Action'] || 'LEARN_MORE';
 
           const objectStorySpec = { page_id: pageId };
           if (videoId) {
@@ -864,7 +932,7 @@
           });
           totalAdOk++;
           state.progress.done++;
-          addLog('success', `[${accLabel}] ✓ ad ${i + 1}/${groupRows.length} "${adName}"`);
+          addLog('success', `[${accLabel}] ✓ ad ${i + 1}/${adsToCreate.length} "${adName}"`);
         } catch (e) {
           totalAdErr++;
           state.progress.done++;
@@ -965,9 +1033,10 @@
 
     const previewHtml = plan ? `
       <div class="preview">
-        <div><b>${plan.adsetCount}</b> adset${plan.adsetCount > 1 ? 's' : ''} · <b>${plan.adCount}</b> ad${plan.adCount > 1 ? 's' : ''} · <b>${plan.isCBO ? 'CBO' : 'ABO'}</b> ${plan.isCBO ? `$${plan.cboBudget}/d` : `$${plan.aboTotal}/d total`}</div>
+        <div><b>${plan.adsetCount}</b> adset${plan.adsetCount > 1 ? 's' : ''} ${plan.adsMode ? `× <b>${plan.adsModeItems.length}</b> creatives = <b>${plan.adCount}</b> ads` : `· <b>${plan.adCount}</b> ad${plan.adCount > 1 ? 's' : ''}`} · <b>${plan.isCBO ? 'CBO' : 'ABO'}</b> ${plan.isCBO ? `$${plan.cboBudget}/d` : `$${plan.aboTotal}/d total`}</div>
         <div>Objective: <b>${esc(plan.objective || '?')}</b> · Event: <b>${esc(plan.event || '?')}</b></div>
         <div>Pixel: <b>${esc(plan.pixel || 'MISSING')}</b></div>
+        ${plan.adsMode ? `<div style="color:#22c55e">⚡ ads-mode: each adset gets ${plan.adsModeItems.length} new ads from creatives JSON (CSV Ad Name/Image Hash/Video ID ignored)</div>` : ''}
         ${plan.sacList.length ? `<div style="color:#fbbf24">SAC: <b>${esc(plan.sacList[0])}</b> (region-targeting disabled)</div>` : ''}
       </div>` : '';
 
@@ -975,7 +1044,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.2
+      <h2>🚀 FB Launcher v0.2.2
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -1007,14 +1076,22 @@
       <div class="field">
         <label>4. Creatives override (optional) <span style="color:#6e7681">— hashes/video IDs; overrides CSV Image Hash &amp; Video ID columns</span></label>
         <textarea id="fbl-creatives" placeholder='Paste any of:
-JSON array: ["abc123", "vid:567890", "def456"]
+
+ADS-MODE (each item = new ad, replicated per adset, CSV ads ignored):
+[{"name":"creative-1","imageHash":"abc123"},{"name":"video-1","videoId":"3934499366843210"}]
+
+Override CSV per-ad creative (legacy, keeps CSV ad count):
+JSON list:  ["abc123", "vid:567890"]
 JSON map:   {"GMB-ROM-01": "abc123", "GMB-DACH": "vid:567890"}
-Uploader:   [{"hash":"abc","name":"creative1.png"}, ...]
-Newline:    abc123
-            vid:567890
-Single:     abc123 (applied to all ads)' style="width:100%;min-height:70px;padding:6px 8px;background:#1e293b;border:1px solid #334155;border-radius:5px;color:#e2e8f0;font-size:11px;font-family:ui-monospace,monospace;box-sizing:border-box;resize:vertical">${esc(state.creativesInput)}</textarea>
+Newline:    abc123\nvid:567890
+Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;padding:6px 8px;background:#1e293b;border:1px solid #334155;border-radius:5px;color:#e2e8f0;font-size:11px;font-family:ui-monospace,monospace;box-sizing:border-box;resize:vertical">${esc(state.creativesInput)}</textarea>
         ${state.creativesError ? `<div style="color:#ef4444;font-size:11px;margin-top:4px">⚠ ${esc(state.creativesError)}</div>` : ''}
-        ${state.creativesParsed ? `<div style="color:#22c55e;font-size:11px;margin-top:4px">✓ ${state.creativesParsed.mode === 'map' ? `Map: ${Object.keys(state.creativesParsed.map).length} entries` : state.creativesParsed.mode === 'list' ? `List: ${state.creativesParsed.list.length} items` : 'Single value (all ads)'}</div>` : ''}
+        ${state.creativesParsed ? `<div style="color:#22c55e;font-size:11px;margin-top:4px">✓ ${
+          state.creativesParsed.mode === 'ads' ? `Ads-mode: ${state.creativesParsed.items.length} new ads per adset`
+          : state.creativesParsed.mode === 'map' ? `Map: ${Object.keys(state.creativesParsed.map).length} entries (per ad name)`
+          : state.creativesParsed.mode === 'list' ? `List: ${state.creativesParsed.list.length} items (per ad index)`
+          : 'Single value (all ads same creative)'
+        }</div>` : ''}
       </div>
 
       <div class="field">
@@ -1028,7 +1105,30 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:70px;paddi
       </div>
 
       <div class="field">
-        <label>7. Quick: replace single URL Tag param <span style="color:#6e7681">— skipped if step 6 is set</span></label>
+        <label>7. Ad copy override (optional) <span style="color:#6e7681">— same for all ads; per-creative title/body/cta in ads-mode JSON wins</span></label>
+        <input type="text" id="fbl-title-override" value="${esc(state.titleOverride)}" placeholder="Title (headline) — empty = use CSV Title" style="margin-bottom:5px">
+        <textarea id="fbl-body-override" placeholder="Body (primary text) — empty = use CSV Body" style="width:100%;min-height:50px;padding:6px 8px;background:#1e293b;border:1px solid #334155;border-radius:5px;color:#e2e8f0;font-size:12px;font-family:inherit;box-sizing:border-box;resize:vertical;margin-bottom:5px">${esc(state.bodyOverride)}</textarea>
+        <select id="fbl-cta-override">
+          <option value="">— CTA from CSV (or LEARN_MORE if empty) —</option>
+          <option value="LEARN_MORE" ${state.ctaOverride === 'LEARN_MORE' ? 'selected' : ''}>LEARN_MORE</option>
+          <option value="GET_QUOTE" ${state.ctaOverride === 'GET_QUOTE' ? 'selected' : ''}>GET_QUOTE (insurance)</option>
+          <option value="SIGN_UP" ${state.ctaOverride === 'SIGN_UP' ? 'selected' : ''}>SIGN_UP</option>
+          <option value="APPLY_NOW" ${state.ctaOverride === 'APPLY_NOW' ? 'selected' : ''}>APPLY_NOW</option>
+          <option value="SHOP_NOW" ${state.ctaOverride === 'SHOP_NOW' ? 'selected' : ''}>SHOP_NOW</option>
+          <option value="GET_OFFER" ${state.ctaOverride === 'GET_OFFER' ? 'selected' : ''}>GET_OFFER</option>
+          <option value="PLAY_GAME" ${state.ctaOverride === 'PLAY_GAME' ? 'selected' : ''}>PLAY_GAME (gambling)</option>
+          <option value="SUBSCRIBE" ${state.ctaOverride === 'SUBSCRIBE' ? 'selected' : ''}>SUBSCRIBE</option>
+          <option value="BUY_NOW" ${state.ctaOverride === 'BUY_NOW' ? 'selected' : ''}>BUY_NOW</option>
+          <option value="DOWNLOAD" ${state.ctaOverride === 'DOWNLOAD' ? 'selected' : ''}>DOWNLOAD</option>
+          <option value="INSTALL_NOW" ${state.ctaOverride === 'INSTALL_NOW' ? 'selected' : ''}>INSTALL_NOW</option>
+          <option value="CONTACT_US" ${state.ctaOverride === 'CONTACT_US' ? 'selected' : ''}>CONTACT_US</option>
+          <option value="MESSAGE_PAGE" ${state.ctaOverride === 'MESSAGE_PAGE' ? 'selected' : ''}>MESSAGE_PAGE</option>
+          <option value="BOOK_TRAVEL" ${state.ctaOverride === 'BOOK_TRAVEL' ? 'selected' : ''}>BOOK_TRAVEL</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>8. Quick: replace single URL Tag param <span style="color:#6e7681">— skipped if step 6 is set</span></label>
         <div class="row">
           <input type="text" id="fbl-tag-param" value="${esc(state.urlTagParam)}" placeholder="sub2" style="flex:1">
           <select id="fbl-tag-mode" style="flex:1.5">
@@ -1042,7 +1142,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:70px;paddi
       </div>
 
       <div class="field">
-        <label>8. Create status</label>
+        <label>9. Create status</label>
         <select id="fbl-status">
           <option value="PAUSED" ${state.createStatus === 'PAUSED' ? 'selected' : ''}>PAUSED (review before launch)</option>
           <option value="ACTIVE" ${state.createStatus === 'ACTIVE' ? 'selected' : ''}>ACTIVE (launch immediately)</option>
@@ -1098,6 +1198,15 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:70px;paddi
     });
     document.getElementById('fbl-tags-override')?.addEventListener('input', e => {
       state.urlTagsOverride = e.target.value.trim();
+    });
+    document.getElementById('fbl-title-override')?.addEventListener('input', e => {
+      state.titleOverride = e.target.value;
+    });
+    document.getElementById('fbl-body-override')?.addEventListener('input', e => {
+      state.bodyOverride = e.target.value;
+    });
+    document.getElementById('fbl-cta-override')?.addEventListener('change', e => {
+      state.ctaOverride = e.target.value;
     });
     document.getElementById('fbl-tag-param')?.addEventListener('input', e => {
       state.urlTagParam = e.target.value.trim();
