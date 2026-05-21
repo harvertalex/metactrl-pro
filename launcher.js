@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.4.1.0 — Bookmarklet
+ * FB Launcher v0.4.2.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -1507,6 +1507,20 @@
 
   function render() {
     if (!panel) return;
+
+    // Preserve focus + cursor position across innerHTML rebuild
+    // (otherwise typing in any input loses focus after each keystroke)
+    const active = document.activeElement;
+    const activeId = active && active.id && panel.contains(active) ? active.id : null;
+    let activeSelStart = null, activeSelEnd = null, activeScrollTop = null;
+    if (activeId) {
+      try {
+        activeSelStart = active.selectionStart;
+        activeSelEnd = active.selectionEnd;
+      } catch {} // not all inputs support selection
+      activeScrollTop = active.scrollTop || null;
+    }
+
     const plan = analyzePlan();
     const accFilter = state.accFilter.toLowerCase();
     const visibleAccs = accFilter
@@ -1551,7 +1565,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.4.1
+      <h2>🚀 FB Launcher v0.4.2
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -1806,6 +1820,20 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     `;
 
     bindEvents();
+
+    // Restore focus + cursor position to the same input/textarea after re-render
+    if (activeId) {
+      const el = document.getElementById(activeId);
+      if (el) {
+        el.focus();
+        try {
+          if (activeSelStart != null && typeof el.setSelectionRange === 'function') {
+            el.setSelectionRange(activeSelStart, activeSelEnd ?? activeSelStart);
+          }
+        } catch {}
+        if (activeScrollTop != null) el.scrollTop = activeScrollTop;
+      }
+    }
   }
 
   function bindEvents() {
