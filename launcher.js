@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.2.7.0 — Bookmarklet
+ * FB Launcher v0.3.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -50,6 +50,9 @@
     pagesLoading: false,
     dsaBeneficiary: '',       // v0.2.6: EU DSA — name of person/org being advertised
     dsaPayer: '',             // v0.2.6: EU DSA — name of who pays (optional, defaults to beneficiary)
+    campNamePrefix: '',       // v0.3: user's prefix; launcher appends "| CBO $X/d | Nads | MMDDYY | acc_id"
+    uploads: [],              // v0.3: [{name, type:'image'|'video', status:'pending'|'uploading'|'done'|'error', hash?, videoId?, error?}]
+    uploading: false,         // v0.3: true while batch upload in progress
     creativesInput: '',       // v0.2: raw user input (textarea)
     creativesParsed: null,    // v0.2: { mode: 'list'|'map'|'single', list?, map?, value? }
     creativesError: '',
@@ -313,6 +316,89 @@
       state.pixelsLoading = false;
       render();
     }
+  }
+
+  // ─── CREATIVE UPLOADER (image to /adimages, video to /advideos) ─────────
+  async function uploadOneCreative(file, accId) {
+    const isVideo = file.type.startsWith('video/') || /\.(mp4|mov|avi|webm|mkv|m4v)$/i.test(file.name);
+    const endpoint = isVideo
+      ? `${HOST_GRAPH}/act_${accId}/advideos`
+      : `${HOST_GRAPH}/act_${accId}/adimages`;
+    const fieldName = isVideo ? 'source' : 'filename';
+    const fd = new FormData();
+    fd.append(fieldName, file, file.name);
+    fd.append('access_token', TOKEN);
+
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      body: fd,
+      credentials: 'include',
+      mode: 'cors',
+      referrer: 'https://business.facebook.com/',
+      referrerPolicy: 'origin-when-cross-origin',
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json?.error) {
+      throw new Error(json?.error?.error_user_msg || json?.error?.message || `HTTP ${res.status}`);
+    }
+
+    const baseName = file.name.replace(/\.[^.]+$/, '');
+    if (isVideo) {
+      if (!json.id) throw new Error('No video id in response');
+      return { type: 'video', videoId: String(json.id), name: baseName };
+    }
+    // Image response: {images: {filename_no_ext: {hash, url}}}
+    const images = json.images || {};
+    const firstKey = Object.keys(images)[0];
+    const hash = images[firstKey]?.hash;
+    if (!hash) throw new Error('No image hash in response');
+    return { type: 'image', imageHash: hash, name: baseName };
+  }
+
+  async function runUploads(files) {
+    if (!state.targetAccId) { setStatus('error', 'Select target account first.'); return; }
+    if (!files.length) return;
+    state.uploading = true;
+    state.uploads = Array.from(files).map(f => ({
+      name: f.name,
+      type: (f.type.startsWith('video/') || /\.(mp4|mov|avi|webm|mkv|m4v)$/i.test(f.name)) ? 'video' : 'image',
+      status: 'pending',
+    }));
+    render();
+
+    const results = [];
+    for (let i = 0; i < files.length; i++) {
+      state.uploads[i].status = 'uploading';
+      render();
+      try {
+        const r = await uploadOneCreative(files[i], state.targetAccId);
+        state.uploads[i].status = 'done';
+        state.uploads[i].imageHash = r.imageHash;
+        state.uploads[i].videoId = r.videoId;
+        results.push({
+          name: r.name,
+          ...(r.imageHash ? { imageHash: r.imageHash } : { videoId: r.videoId }),
+        });
+        addLog('success', `↑ ${r.type} "${r.name}" → ${r.imageHash || r.videoId}`);
+      } catch (e) {
+        state.uploads[i].status = 'error';
+        state.uploads[i].error = e.message;
+        addLog('error', `↑ FAIL "${files[i].name}": ${e.message}`);
+      }
+      render();
+      await sleep(300);
+    }
+
+    // Merge into creatives textarea (replace if it was auto-generated from previous upload, else append)
+    if (results.length) {
+      const json = JSON.stringify(results, null, 2);
+      state.creativesInput = json;
+      state.creativesParsed = parseCreatives(json);
+    }
+    state.uploading = false;
+    setStatus(results.length ? 'success' : 'warning',
+      `Upload done: ${results.length}/${files.length} successful. ${results.length ? 'Creatives auto-populated in step 7.' : ''}`);
+    render();
   }
 
   // ─── PAGES LOADER (for selected account) ────────────────────────────────
@@ -812,12 +898,20 @@
     try {
       // ── Campaign ──
       const budgetForName = plan.isCBO ? plan.cboBudget : plan.aboTotal;
-      const campName = state.campNameTpl
-        ? renderTpl(state.campNameTpl, {
-            budget: budgetForName, ad_count: plan.adCount, adset_count: plan.adsetCount,
-            date: dateStr, acc_id: accId, source_name: firstRow['Campaign Name'] || '',
-          })
-        : (firstRow['Campaign Name'] || `FB Launcher ${dateStr}`);
+      const budgetMode = plan.isCBO ? 'CBO' : 'ABO';
+      let campName;
+      if (state.campNamePrefix) {
+        // User-provided prefix: launcher auto-appends budget/count/date/acc_id
+        campName = `${state.campNamePrefix} | ${budgetMode} $${budgetForName}/d | ${plan.adsetCount}as${plan.adCount}ads | ${dateStr} | ${accId}`;
+      } else if (state.campNameTpl) {
+        // Legacy template support
+        campName = renderTpl(state.campNameTpl, {
+          budget: budgetForName, ad_count: plan.adCount, adset_count: plan.adsetCount,
+          date: dateStr, acc_id: accId, source_name: firstRow['Campaign Name'] || '',
+        });
+      } else {
+        campName = firstRow['Campaign Name'] || `FB Launcher ${dateStr}`;
+      }
 
       const campBody = {
         name: campName,
@@ -1192,7 +1286,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.2.7
+      <h2>🚀 FB Launcher v0.3
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -1203,6 +1297,11 @@
         <label>1. CSV file ${!state.rows.length ? '<span style="color:#ef4444">⚠ required — defines campaign, adsets, geo, budget</span>' : ''}</label>
         <input type="file" id="fbl-csv" accept=".csv,.tsv,.txt">
         ${state.fileName ? `<div style="font-size:11px;color:#22c55e;margin-top:4px">📄 ${esc(state.fileName)} · ${state.rows.length} rows parsed</div>` : ''}
+        <div style="margin-top:8px">
+          <div style="font-size:11px;color:#94a3b8;margin-bottom:3px">Campaign name prefix (optional) <span style="color:#6e7681">— launcher appends "| ${plan?.isCBO ? 'CBO' : 'ABO'} $X/d | Nas Mads | MMDDYY | acc_id"</span></div>
+          <input type="text" id="fbl-camp-prefix" value="${esc(state.campNamePrefix)}" placeholder="e.g. VERT | Multi | COLD TEST">
+          ${state.campNamePrefix && plan ? `<div style="font-size:10px;color:#22c55e;margin-top:3px;font-family:ui-monospace,monospace;word-break:break-all">Preview: ${esc(state.campNamePrefix)} | ${plan.isCBO ? 'CBO' : 'ABO'} $${plan.isCBO ? plan.cboBudget : plan.aboTotal}/d | ${plan.adsetCount}as${plan.adCount}ads | ${(() => { const n = new Date(); return String(n.getMonth()+1).padStart(2,'0') + String(n.getDate()).padStart(2,'0') + String(n.getFullYear()).slice(-2); })()} | ${esc(state.targetAccId || '<acc_id>')}</div>` : ''}
+        </div>
       </div>
 
       ${previewHtml}
@@ -1256,7 +1355,19 @@
       </div>
 
       <div class="field">
-        <label>6. Creatives override (optional) <span style="color:#6e7681">— hashes/video IDs; overrides CSV Image Hash &amp; Video ID columns</span></label>
+        <label>6. Creatives — upload files OR paste hashes/JSON <span style="color:#6e7681">— overrides CSV Image Hash &amp; Video ID</span></label>
+        <div style="margin-bottom:8px;padding:8px 10px;background:rgba(59,130,246,.06);border:1px solid rgba(59,130,246,.2);border-radius:5px">
+          <div style="font-size:11px;color:#94a3b8;margin-bottom:5px">↑ Upload creatives directly to this ad account (images → /adimages, videos → /advideos)</div>
+          <input type="file" id="fbl-upload-files" multiple accept="image/*,video/*" ${!state.targetAccId || state.uploading ? 'disabled' : ''} style="width:100%">
+          ${state.uploads.length ? `<div style="margin-top:6px;font-size:11px">${state.uploads.map(u => {
+            const icon = u.status === 'done' ? '✓' : u.status === 'error' ? '✗' : u.status === 'uploading' ? '⏳' : '○';
+            const color = u.status === 'done' ? '#22c55e' : u.status === 'error' ? '#ef4444' : u.status === 'uploading' ? '#fbbf24' : '#6e7681';
+            const detail = u.status === 'done' ? ` → <code>${esc((u.imageHash || u.videoId || '').slice(0, 16))}…</code>` : u.status === 'error' ? ` <span style="color:#ef4444">${esc(u.error || '')}</span>` : '';
+            return `<div style="color:${color}">${icon} ${esc(u.name)} (${u.type})${detail}</div>`;
+          }).join('')}</div>` : ''}
+          ${!state.targetAccId ? '<div style="font-size:10px;color:#fbbf24;margin-top:4px">⚠ Select target account (step 3) before uploading</div>' : ''}
+        </div>
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Or paste manually:</div>
         <textarea id="fbl-creatives" placeholder='Paste any of:
 
 ADS-MODE (each item = new ad, replicated per adset, CSV ads ignored):
@@ -1353,6 +1464,15 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     document.getElementById('fbl-csv')?.addEventListener('change', e => {
       const f = e.target.files?.[0];
       if (f) onCsvFile(f);
+    });
+    document.getElementById('fbl-camp-prefix')?.addEventListener('input', e => {
+      state.campNamePrefix = e.target.value;
+      render();  // re-render to update preview
+    });
+    document.getElementById('fbl-upload-files')?.addEventListener('change', e => {
+      const files = Array.from(e.target.files || []);
+      if (files.length) runUploads(files);
+      e.target.value = '';  // reset so same file can be re-selected
     });
     document.getElementById('fbl-reload-acc')?.addEventListener('click', () => loadAccounts());
     document.getElementById('fbl-acc-filter')?.addEventListener('input', e => {
