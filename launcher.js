@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.4.3.0 — Bookmarklet
+ * FB Launcher v0.4.4.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -1443,7 +1443,7 @@
     const style = document.createElement('style');
     style.id = '__fb_launcher_styles__';
     style.textContent = `
-      #${PANEL_ID} { position:fixed; top:0; right:0; width:580px; height:100vh;
+      #${PANEL_ID} { position:fixed; top:0; right:0; width:720px; height:100vh;
         background:#0f172a; color:#e2e8f0; z-index:2147483646;
         border-left:1px solid #334155; box-shadow:-8px 0 24px rgba(0,0,0,.4);
         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
@@ -1586,7 +1586,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.4.3
+      <h2>🚀 FB Launcher v0.4.4
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -1744,12 +1744,12 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
         </label>
         ${state.showAssignments ? `
         <div style="margin-top:8px;font-size:11px;color:#94a3b8">Check which creatives to use per adset. Uncheck all = use all creatives (default).</div>
-        <div style="margin-top:6px;max-height:240px;overflow-y:auto;border:1px solid #334155;border-radius:5px">
-          <table style="width:100%;border-collapse:collapse;font-size:11px">
-            <thead style="position:sticky;top:0;background:#1e293b">
+        <div style="margin-top:6px;max-height:280px;overflow:auto;border:1px solid #334155;border-radius:5px">
+          <table style="border-collapse:collapse;font-size:11px;min-width:100%">
+            <thead style="position:sticky;top:0;background:#1e293b;z-index:2">
               <tr>
-                <th style="text-align:left;padding:5px 8px;border-bottom:1px solid #334155;color:#94a3b8;font-weight:600">Adset</th>
-                ${plan.adsModeItems.map((it, i) => `<th style="padding:5px 4px;border-bottom:1px solid #334155;border-left:1px solid #334155;color:${it.videoId ? '#c084fc' : '#60a5fa'};font-weight:600;font-size:9px;text-align:center" title="${esc(it.name)}">${esc(it.name.slice(0, 10))}${it.name.length > 10 ? '…' : ''}</th>`).join('')}
+                <th style="text-align:left;padding:5px 8px;border-bottom:1px solid #334155;color:#94a3b8;font-weight:600;position:sticky;left:0;background:#1e293b;z-index:3;min-width:180px">Adset</th>
+                ${plan.adsModeItems.map((it, i) => `<th style="padding:5px 6px;border-bottom:1px solid #334155;border-left:1px solid #334155;color:${it.videoId ? '#c084fc' : '#60a5fa'};font-weight:600;font-size:10px;text-align:center;white-space:nowrap" title="${esc(it.name)}">${esc(it.name.length > 14 ? it.name.slice(0, 14) + '…' : it.name)}</th>`).join('')}
               </tr>
             </thead>
             <tbody>
@@ -1757,10 +1757,10 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
                 const assigned = state.adsetAssignments[adsetName] || [];
                 const allChecked = assigned.length === 0; // empty = all
                 return `<tr>
-                  <td style="padding:5px 8px;border-bottom:1px solid #1e293b;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px" title="${esc(adsetName)}">${esc(adsetName)}</td>
+                  <td style="padding:5px 8px;border-bottom:1px solid #1e293b;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:sticky;left:0;background:#0f172a;z-index:1;max-width:220px" title="${esc(adsetName)}">${esc(adsetName)}</td>
                   ${plan.adsModeItems.map((_, i) => {
                     const checked = allChecked || assigned.includes(i);
-                    return `<td style="padding:3px;border-bottom:1px solid #1e293b;border-left:1px solid #1e293b;text-align:center"><input type="checkbox" class="fbl-assign-cb" data-adset="${esc(adsetName)}" data-idx="${i}" ${checked ? 'checked' : ''} style="cursor:pointer"></td>`;
+                    return `<td style="padding:3px 6px;border-bottom:1px solid #1e293b;border-left:1px solid #1e293b;text-align:center"><input type="checkbox" class="fbl-assign-cb" data-adset="${esc(adsetName)}" data-idx="${i}" ${checked ? 'checked' : ''} style="cursor:pointer"></td>`;
                   }).join('')}
                 </tr>`;
               }).join('')}
