@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.3.2.0 — Bookmarklet
+ * FB Launcher v0.4.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -53,6 +53,10 @@
     campNamePrefix: '',       // v0.3: user's prefix; launcher appends "| CBO $X/d | Nads | MMDDYY | acc_id"
     uploads: [],              // v0.3: [{name, type:'image'|'video', status:'pending'|'uploading'|'done'|'error', hash?, videoId?, error?}]
     uploading: false,         // v0.3: true while batch upload in progress
+    presets: [],              // v0.4: [{id, name, createdAt, csvText, fileName, settings:{...}}]
+    selectedPresetId: '',     // v0.4: currently loaded preset
+    adsetAssignments: {},     // v0.4: { adsetName: [creativeIndex, ...] } — empty = all creatives go to all adsets
+    showAssignments: false,   // v0.4: collapse state for per-adset assignment UI
     creativesInput: '',       // v0.2: raw user input (textarea)
     creativesParsed: null,    // v0.2: { mode: 'list'|'map'|'single', list?, map?, value? }
     creativesError: '',
@@ -317,6 +321,110 @@
     } else {
       setStatus('warning', `No accounts found. Token may have limited scope. Are you logged in to FB with admin access?`);
     }
+    render();
+  }
+
+  // ─── PRESETS (localStorage) ─────────────────────────────────────────────
+  const PRESETS_KEY = 'fbl_presets_v1';
+
+  function loadPresets() {
+    try {
+      const raw = localStorage.getItem(PRESETS_KEY);
+      if (raw) state.presets = JSON.parse(raw) || [];
+    } catch (e) {
+      addLog('warning', `Could not load presets: ${e.message}`);
+      state.presets = [];
+    }
+  }
+
+  function savePresetsToStorage() {
+    try {
+      localStorage.setItem(PRESETS_KEY, JSON.stringify(state.presets));
+    } catch (e) {
+      addLog('error', `Could not save presets: ${e.message}`);
+    }
+  }
+
+  function savePreset() {
+    if (!state.rows.length) { setStatus('error', 'Load CSV first before saving preset.'); return; }
+    const defaultName = state.campNamePrefix || state.fileName.replace(/\.[^.]+$/, '') || 'Preset';
+    const name = prompt('Preset name:', defaultName);
+    if (!name) return;
+    const preset = {
+      id: 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+      name: name.trim(),
+      createdAt: new Date().toISOString(),
+      fileName: state.fileName,
+      csvText: state.rows.length ? JSON.stringify(state.rows) : '',  // pre-parsed rows
+      settings: {
+        campNamePrefix: state.campNamePrefix,
+        linkOverride: state.linkOverride,
+        urlTagsOverride: state.urlTagsOverride,
+        titleOverride: state.titleOverride,
+        bodyOverride: state.bodyOverride,
+        ctaOverride: state.ctaOverride,
+        pixelOverride: state.pixelOverride,
+        customEventOverride: state.customEventOverride,
+        pageIdOverride: state.pageIdOverride,
+        dsaBeneficiary: state.dsaBeneficiary,
+        dsaPayer: state.dsaPayer,
+        urlTagParam: state.urlTagParam,
+        urlTagMode: state.urlTagMode,
+        urlTagCustom: state.urlTagCustom,
+        adsetAssignments: state.adsetAssignments,
+      },
+    };
+    state.presets.unshift(preset);  // newest first
+    state.selectedPresetId = preset.id;
+    savePresetsToStorage();
+    setStatus('success', `Preset "${name}" saved.`);
+    render();
+  }
+
+  function loadPreset(presetId) {
+    const preset = state.presets.find(p => p.id === presetId);
+    if (!preset) return;
+    try {
+      const rows = preset.csvText ? JSON.parse(preset.csvText) : [];
+      state.rows = rows;
+      state.fileName = preset.fileName || '(from preset)';
+    } catch {
+      state.rows = [];
+    }
+    const s = preset.settings || {};
+    state.campNamePrefix = s.campNamePrefix || '';
+    state.linkOverride = s.linkOverride || '';
+    state.urlTagsOverride = s.urlTagsOverride || '';
+    state.titleOverride = s.titleOverride || '';
+    state.bodyOverride = s.bodyOverride || '';
+    state.ctaOverride = s.ctaOverride || '';
+    state.pixelOverride = s.pixelOverride || '';
+    state.customEventOverride = s.customEventOverride || '';
+    state.pageIdOverride = s.pageIdOverride || '';
+    state.dsaBeneficiary = s.dsaBeneficiary || '';
+    state.dsaPayer = s.dsaPayer || '';
+    state.urlTagParam = s.urlTagParam || 'sub2';
+    state.urlTagMode = s.urlTagMode || 'acc_id';
+    state.urlTagCustom = s.urlTagCustom || '';
+    state.adsetAssignments = s.adsetAssignments || {};
+    state.selectedPresetId = presetId;
+    // Reset creatives — must be fresh per launch
+    state.creativesInput = '';
+    state.creativesParsed = null;
+    state.uploads = [];
+    setStatus('success', `Loaded preset "${preset.name}". Upload fresh creatives and launch.`);
+    render();
+  }
+
+  function deletePreset() {
+    if (!state.selectedPresetId) return;
+    const preset = state.presets.find(p => p.id === state.selectedPresetId);
+    if (!preset) return;
+    if (!confirm(`Delete preset "${preset.name}"?`)) return;
+    state.presets = state.presets.filter(p => p.id !== state.selectedPresetId);
+    state.selectedPresetId = '';
+    savePresetsToStorage();
+    setStatus('info', `Preset "${preset.name}" deleted.`);
     render();
   }
 
@@ -643,9 +751,21 @@
     // Ads-mode (creatives override defines new ads per adset)
     const adsMode = state.creativesParsed?.mode === 'ads';
     const adsModeItems = adsMode ? state.creativesParsed.items : null;
-    const adCount = adsMode
-      ? groups.size * adsModeItems.length
-      : state.rows.length;
+    let adCount;
+    if (adsMode) {
+      const hasAssignments = Object.keys(state.adsetAssignments || {}).length > 0;
+      if (hasAssignments) {
+        adCount = 0;
+        for (const [adsetName] of groups) {
+          const assigned = state.adsetAssignments[adsetName];
+          adCount += (assigned && assigned.length) ? assigned.length : adsModeItems.length;
+        }
+      } else {
+        adCount = groups.size * adsModeItems.length;
+      }
+    } else {
+      adCount = state.rows.length;
+    }
 
     return {
       groups,
@@ -1053,18 +1173,27 @@
       // Build ads list for this adset early (needed for progress + logs).
       // ads-mode: items from creatives override become NEW ads (CSV Ad Name/Image Hash/Video ID ignored)
       // legacy: 1 ad per CSV row in this group
+      // Per-adset assignment (v0.4): if state.adsetAssignments[adsetSourceName] is set,
+      // filter creativesItems to only those indices for this adset.
+      let activeItems = plan.adsModeItems;
+      if (plan.adsMode && state.adsetAssignments && state.adsetAssignments[adsetSourceName]) {
+        const indices = state.adsetAssignments[adsetSourceName];
+        if (indices.length) activeItems = indices.map(i => plan.adsModeItems[i]).filter(Boolean);
+      }
       const adsToCreate = plan.adsMode
-        ? plan.adsModeItems.map(item => ({
+        ? activeItems.map(item => ({
             csvRow: groupRows[0],
             forcedName: item.name,
             forcedImageHash: item.imageHash,
             forcedVideoId: item.videoId,
+            forcedItem: item,  // full reference for title/body/cta/thumbnailHash overrides
           }))
         : groupRows.map(r => ({
             csvRow: r,
             forcedName: null,
             forcedImageHash: null,
             forcedVideoId: null,
+            forcedItem: null,
           }));
 
       const adsetName = state.adsetNameTpl
@@ -1210,9 +1339,9 @@
           }
 
           // Resolve copy text — priority: per-item (ads-mode JSON) > UI override > CSV row
-          const itemTitle = plan.adsMode ? (plan.adsModeItems[i]?.title || null) : null;
-          const itemBody  = plan.adsMode ? (plan.adsModeItems[i]?.body  || null) : null;
-          const itemCta   = plan.adsMode ? (plan.adsModeItems[i]?.cta   || null) : null;
+          const itemTitle = adInfo.forcedItem?.title || null;
+          const itemBody  = adInfo.forcedItem?.body  || null;
+          const itemCta   = adInfo.forcedItem?.cta   || null;
           const adTitle = itemTitle || state.titleOverride || r['Title'] || '';
           const adBody  = itemBody  || state.bodyOverride  || r['Body']  || '';
           const cta     = itemCta   || state.ctaOverride   || r['Call to Action'] || 'LEARN_MORE';
@@ -1220,7 +1349,7 @@
           const objectStorySpec = { page_id: pageId };
           if (videoId) {
             // Thumbnail priority: per-item thumbnailHash (from upload pairing or JSON) > FB auto-thumbnail
-            const itemThumb = plan.adsMode ? (plan.adsModeItems[i]?.thumbnailHash || null) : null;
+            const itemThumb = adInfo.forcedItem?.thumbnailHash || null;
             objectStorySpec.video_data = {
               video_id: videoId,
               call_to_action: { type: cta, value: { link } },
@@ -1421,12 +1550,30 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.3.2
+      <h2>🚀 FB Launcher v0.4
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
 
       <div class="status ${state.status.type}">${esc(state.status.text)}</div>
+
+      ${state.presets.length || state.rows.length ? `
+      <div class="field" style="background:rgba(168,85,247,.06);border:1px solid rgba(168,85,247,.2);border-radius:6px;padding:8px 10px">
+        <label style="color:#c084fc">⭐ Presets <span style="color:#6e7681">— ${state.presets.length} saved</span></label>
+        <div style="display:flex;gap:5px;align-items:center">
+          <select id="fbl-preset-select" style="flex:1">
+            <option value="">— select preset to load —</option>
+            ${state.presets.map(p => {
+              const dt = new Date(p.createdAt);
+              const dStr = `${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')}`;
+              return `<option value="${esc(p.id)}" ${state.selectedPresetId === p.id ? 'selected' : ''}>${esc(p.name)} · ${dStr}</option>`;
+            }).join('')}
+          </select>
+          <button id="fbl-preset-save" ${!state.rows.length ? 'disabled' : ''} title="Save current CSV + settings as preset">💾</button>
+          <button id="fbl-preset-delete" ${!state.selectedPresetId ? 'disabled' : ''} title="Delete selected preset">🗑</button>
+        </div>
+        <div style="font-size:10px;color:#6e7681;margin-top:4px">Saves: CSV, all overrides, prefix, DSA, assignments. Excludes: creatives, account.</div>
+      </div>` : ''}
 
       <div class="field" ${!state.rows.length ? 'style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.25);border-radius:6px;padding:8px 10px"' : ''}>
         <label>1. CSV file ${!state.rows.length ? '<span style="color:#ef4444">⚠ required — defines campaign, adsets, geo, budget</span>' : ''}</label>
@@ -1553,6 +1700,43 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
         }</div>` : ''}
       </div>
 
+      ${plan?.adsMode && plan.adsModeItems.length > 1 && plan.adsetCount > 1 ? `
+      <div class="field" style="background:rgba(34,197,94,.05);border:1px solid rgba(34,197,94,.2);border-radius:6px;padding:8px 10px">
+        <label style="cursor:pointer" id="fbl-assign-toggle">
+          ${state.showAssignments ? '▼' : '▶'} 6.5. Per-adset creative assignment (optional)
+          <span style="color:#6e7681">— ${Object.keys(state.adsetAssignments).length ? `${Object.keys(state.adsetAssignments).length} adset(s) customized` : 'all creatives → all adsets'}</span>
+        </label>
+        ${state.showAssignments ? `
+        <div style="margin-top:8px;font-size:11px;color:#94a3b8">Check which creatives to use per adset. Uncheck all = use all creatives (default).</div>
+        <div style="margin-top:6px;max-height:240px;overflow-y:auto;border:1px solid #334155;border-radius:5px">
+          <table style="width:100%;border-collapse:collapse;font-size:11px">
+            <thead style="position:sticky;top:0;background:#1e293b">
+              <tr>
+                <th style="text-align:left;padding:5px 8px;border-bottom:1px solid #334155;color:#94a3b8;font-weight:600">Adset</th>
+                ${plan.adsModeItems.map((it, i) => `<th style="padding:5px 4px;border-bottom:1px solid #334155;border-left:1px solid #334155;color:${it.videoId ? '#c084fc' : '#60a5fa'};font-weight:600;font-size:9px;text-align:center" title="${esc(it.name)}">${esc(it.name.slice(0, 10))}${it.name.length > 10 ? '…' : ''}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+              ${[...plan.groups.keys()].map(adsetName => {
+                const assigned = state.adsetAssignments[adsetName] || [];
+                const allChecked = assigned.length === 0; // empty = all
+                return `<tr>
+                  <td style="padding:5px 8px;border-bottom:1px solid #1e293b;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px" title="${esc(adsetName)}">${esc(adsetName)}</td>
+                  ${plan.adsModeItems.map((_, i) => {
+                    const checked = allChecked || assigned.includes(i);
+                    return `<td style="padding:3px;border-bottom:1px solid #1e293b;border-left:1px solid #1e293b;text-align:center"><input type="checkbox" class="fbl-assign-cb" data-adset="${esc(adsetName)}" data-idx="${i}" ${checked ? 'checked' : ''} style="cursor:pointer"></td>`;
+                  }).join('')}
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+        <div style="margin-top:6px;display:flex;gap:5px">
+          <button id="fbl-assign-reset" style="font-size:11px;padding:3px 8px">Reset (all → all)</button>
+        </div>
+        ` : ''}
+      </div>` : ''}
+
       <div class="field">
         <label>7. Link override (optional) <span style="color:#6e7681">— tokens: {pixel_id} {account_id} {adset_name} {ad_name} {geo} {date}</span></label>
         <input type="text" id="fbl-link-override" value="${esc(state.linkOverride)}" placeholder="empty = use CSV Link column. e.g. https://t.com/click?p={pixel_id}&amp;geo={geo}">
@@ -1630,6 +1814,45 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     document.getElementById('fbl-csv')?.addEventListener('change', e => {
       const f = e.target.files?.[0];
       if (f) onCsvFile(f);
+    });
+    // Presets
+    document.getElementById('fbl-preset-select')?.addEventListener('change', e => {
+      if (e.target.value) loadPreset(e.target.value);
+      else state.selectedPresetId = '';
+    });
+    document.getElementById('fbl-preset-save')?.addEventListener('click', savePreset);
+    document.getElementById('fbl-preset-delete')?.addEventListener('click', deletePreset);
+    // Per-adset assignment
+    document.getElementById('fbl-assign-toggle')?.addEventListener('click', () => {
+      state.showAssignments = !state.showAssignments;
+      render();
+    });
+    document.getElementById('fbl-assign-reset')?.addEventListener('click', () => {
+      state.adsetAssignments = {};
+      render();
+    });
+    panel.querySelectorAll('.fbl-assign-cb').forEach(cb => {
+      cb.addEventListener('change', e => {
+        const adsetName = e.target.dataset.adset;
+        const idx = +e.target.dataset.idx;
+        if (!state.adsetAssignments[adsetName]) {
+          // First customization: initialize with all currently checked indices (which is all minus this one if unchecking)
+          const plan = analyzePlan();
+          if (plan?.adsMode) {
+            state.adsetAssignments[adsetName] = plan.adsModeItems.map((_, i) => i);
+          }
+        }
+        const arr = state.adsetAssignments[adsetName];
+        const pos = arr.indexOf(idx);
+        if (e.target.checked && pos === -1) arr.push(idx);
+        else if (!e.target.checked && pos !== -1) arr.splice(pos, 1);
+        // If all checked now match the full list length, clear (=default "all")
+        const plan2 = analyzePlan();
+        if (plan2 && arr.length === plan2.adsModeItems.length) {
+          delete state.adsetAssignments[adsetName];
+        }
+        render();
+      });
     });
     document.getElementById('fbl-camp-prefix')?.addEventListener('input', e => {
       state.campNamePrefix = e.target.value;
@@ -1756,6 +1979,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
 
   // ─── INIT ───────────────────────────────────────────────────────────────
   createPanel();
+  loadPresets();
   render();
 
   TOKEN = await getToken();
