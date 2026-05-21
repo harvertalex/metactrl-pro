@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.2.6.0 — Bookmarklet
+ * FB Launcher v0.2.7.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -935,6 +935,11 @@
         promoted_object: JSON.stringify(promoted),
         attribution_spec: aFirst['Attribution Spec'] || '[{"event_type":"CLICK_THROUGH","window_days":1}]',
       };
+      // EU DSA on adset level — required for some EU geos (esp. CEE: PL/CZ/HU/...)
+      if (state.dsaBeneficiary) {
+        adsetBody.dsa_beneficiary = state.dsaBeneficiary;
+        adsetBody.dsa_payer = state.dsaPayer || state.dsaBeneficiary;
+      }
       if (!plan.isCBO) {
         const ab = String(aFirst['Ad Set Daily Budget'] || '').trim();
         const abNum = (ab && ab.toUpperCase() !== 'UNDEFINED') ? +ab : 0;
@@ -1187,7 +1192,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.2.6
+      <h2>🚀 FB Launcher v0.2.7
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
