@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.2.4.0 — Bookmarklet
+ * FB Launcher v0.2.5.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -46,6 +46,8 @@
     customEventOverride: '',  // v0.2.3: forces custom_event_type (PURCHASE/LEAD/etc)
     pixelsList: [],           // v0.2.3: pixels fetched for selected account ([{id, name}])
     pixelsLoading: false,
+    pagesList: [],            // v0.2.5: pages fetched for selected account ([{id, name}])
+    pagesLoading: false,
     creativesInput: '',       // v0.2: raw user input (textarea)
     creativesParsed: null,    // v0.2: { mode: 'list'|'map'|'single', list?, map?, value? }
     creativesError: '',
@@ -309,6 +311,36 @@
       state.pixelsLoading = false;
       render();
     }
+  }
+
+  // ─── PAGES LOADER (for selected account) ────────────────────────────────
+  async function loadPagesForAccount(accId) {
+    if (!accId) { state.pagesList = []; render(); return; }
+    state.pagesLoading = true;
+    state.pagesList = [];
+    render();
+    const found = new Map();
+    // Primary: pages connected to this ad account (most accurate)
+    try {
+      const items = await apiAll(`/act_${accId}/promote_pages`, { fields: 'id,name', limit: 100 });
+      items.forEach(p => found.set(String(p.id), p.name || 'Untitled'));
+      if (items.length) addLog('info', `Pages (promote_pages): ${items.length} for ${accId}`);
+    } catch (e) {
+      addLog('warning', `promote_pages failed: ${e.message}`);
+    }
+    // Fallback: pages owned by user (broader pool, may include some not connected)
+    if (!found.size) {
+      try {
+        const items = await apiAll('/me/accounts', { fields: 'id,name', limit: 100 });
+        items.forEach(p => found.set(String(p.id), p.name || 'Untitled'));
+        if (items.length) addLog('info', `Pages (/me/accounts): ${items.length}`);
+      } catch (e) {
+        addLog('warning', `/me/accounts failed: ${e.message}`);
+      }
+    }
+    state.pagesList = [...found.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+    state.pagesLoading = false;
+    render();
   }
 
   // ─── CSV PARSER (auto-detect tab vs comma) ──────────────────────────────
@@ -694,6 +726,22 @@
     if (!state.targetAccId) { setStatus('error', 'Select a target ad account.'); return; }
     const plan = analyzePlan();
     if (!plan) { setStatus('error', 'Cannot analyze plan from CSV.'); return; }
+
+    // Pre-flight: validate Page ID
+    if (state.pageIdOverride) {
+      if (!/^\d{10,20}$/.test(state.pageIdOverride)) {
+        setStatus('error', `Invalid Page ID "${state.pageIdOverride}". Must be 10-20 digits. Pick from dropdown in step 3.`);
+        return;
+      }
+      if (state.pagesList.length && !state.pagesList.find(p => p.id === state.pageIdOverride)) {
+        const ok = confirm(
+          `Page ${state.pageIdOverride} is NOT in this account's page list.\n\n` +
+          `Available pages:\n${state.pagesList.slice(0, 5).map(p => `  ${p.id} — ${p.name}`).join('\n')}\n\n` +
+          `Launch anyway? (FB may reject all ads with subcode 1815813)`
+        );
+        if (!ok) { setStatus('warning', 'Launch cancelled. Pick a page from the dropdown in step 3.'); return; }
+      }
+    }
 
     // Pre-flight: validate effective pixel for first adset
     const firstAdsetRow = [...plan.groups.values()][0]?.[0];
@@ -1101,6 +1149,8 @@
     else if (!state.rows.length) blockReason = '⬆ Load CSV first (step 1)';
     else if (!state.targetAccId) blockReason = '⬆ Select target account (step 2)';
     else if (!state.pageIdOverride && !state.rows.some(r => r['Link Object ID'])) blockReason = '⬆ Set Page ID (step 3)';
+    else if (state.pageIdOverride && !/^\d{10,20}$/.test(state.pageIdOverride)) blockReason = `⚠ Page ID "${state.pageIdOverride}" invalid (10-20 digits)`;
+    else if (state.pageIdOverride && state.pagesList.length && !state.pagesList.find(p => p.id === state.pageIdOverride)) blockReason = `⚠ Page ${state.pageIdOverride} not in this account`;
     else if (!effPixel) blockReason = '⬆ Set Pixel (step 4)';
     else if (!pixelValid) blockReason = `⚠ Pixel "${effPixel}" invalid format (8-20 digits)`;
     else if (state.pixelsList.length && !pixelInAccount) blockReason = `⚠ Pixel ${effPixel} not in this account`;
@@ -1109,7 +1159,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.2.4
+      <h2>🚀 FB Launcher v0.2.5
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -1134,8 +1184,13 @@
       </div>
 
       <div class="field">
-        <label>3. Page ID override (req. if "Link Object ID" not in CSV)</label>
-        <input type="text" id="fbl-page-id" value="${esc(state.pageIdOverride)}" placeholder="e.g. 102345678901234">
+        <label>3. Page ID <span style="color:#6e7681">— ${state.pagesLoading ? 'loading pages...' : `${state.pagesList.length} pages found`}</span></label>
+        ${state.pagesList.length ? `
+        <select id="fbl-page-select" style="margin-bottom:5px">
+          <option value="">— from CSV "Link Object ID" —</option>
+          ${state.pagesList.map(p => `<option value="${esc(p.id)}" ${state.pageIdOverride === p.id ? 'selected' : ''}>${esc(p.name)} (${esc(p.id)})</option>`).join('')}
+        </select>` : ''}
+        <input type="text" id="fbl-page-id" value="${esc(state.pageIdOverride)}" placeholder="${state.pagesList.length ? 'or paste custom page ID' : 'page ID (14-20 digits) — empty = use CSV'}">
       </div>
 
       <div class="field">
@@ -1267,10 +1322,19 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     });
     document.getElementById('fbl-acc-select')?.addEventListener('change', e => {
       state.targetAccId = e.target.value;
-      state.pixelsList = [];          // reset pixels on account change
+      state.pixelsList = [];
       state.pixelOverride = '';
+      state.pagesList = [];
+      state.pageIdOverride = '';
       render();
-      if (state.targetAccId) loadPixelsForAccount(state.targetAccId);
+      if (state.targetAccId) {
+        loadPixelsForAccount(state.targetAccId);
+        loadPagesForAccount(state.targetAccId);
+      }
+    });
+    document.getElementById('fbl-page-select')?.addEventListener('change', e => {
+      state.pageIdOverride = e.target.value;
+      render();
     });
     document.getElementById('fbl-pixel-select')?.addEventListener('change', e => {
       state.pixelOverride = e.target.value;
