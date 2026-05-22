@@ -934,68 +934,77 @@
     render();
   }
 
-  // v0.6.3: fetch the Instagram ACTOR ID (page-backed, used as instagram_user_id in ads API).
+  // v0.6.4: fetch an Instagram actor that's guaranteed promotable in the chosen ad account.
   //
-  // History: v0.6.2 used /<page>?fields=connected_instagram_account.id which returns the
-  // IG Business Account ID (newer 178…-prefixed format). FB Marketing API's
-  // instagram_user_id field rejects that with code 100 "must be a valid Instagram
-  // account id" — it wants the legacy actor ID (the same value Power Editor exports
-  // with the "x:" prefix). The fix is to query endpoints that return ACTORS:
-  //   1. /<page_id>/instagram_accounts — IG actors connected to the page
-  //   2. /act_<account_id>/instagram_accounts — IG actors available in this ad account
-  // Both return items whose `id` is the actor format compatible with instagram_user_id.
-  async function loadIgForPage(pageId, accId) {
-    if (!pageId) return '';
-    if (pageId in state.pageIgMap) return state.pageIgMap[pageId]?.igId || '';
-    if (state.pageIgLoading[pageId]) return '';
-    state.pageIgLoading[pageId] = true;
+  // The lookup order changed from v0.6.3 — account-level FIRST, page-level fallback.
+  // Reason: /<page>/instagram_accounts returns actors connected to the Page across
+  // ALL BMs the page lives in. If the launch account's BM doesn't have rights to
+  // that actor, FB rejects the creative with "instagram_user_id must be valid".
+  // /act_<accId>/instagram_accounts only ever returns actors promotable in THAT
+  // account, so its IDs are guaranteed to work for adcreatives POST in that account.
+  //
+  // Cache is keyed by (accId, pageId) since the same page can resolve differently
+  // in different accounts.
+  async function loadIgForAccount(accId, pageId) {
+    const key = `${accId || ''}__${pageId || ''}`;
+    if (key in state.pageIgMap) return state.pageIgMap[key]?.igId || '';
+    if (state.pageIgLoading[key]) return '';
+    state.pageIgLoading[key] = true;
     let pageName = '';
     try {
-      try {
-        const r0 = await apiFetch(`/${pageId}`, { params: { fields: 'name' } });
-        pageName = r0?.name || '';
-      } catch {}
-
-      // 1) Actors connected to this page (correct format).
-      try {
-        const r = await apiFetch(`/${pageId}/instagram_accounts`, { params: { fields: 'id,username', limit: 5 } });
-        const item = r?.data?.[0];
-        if (item?.id) {
-          const entry = { igId: String(item.id), igName: item.username || '', pageName, source: 'page' };
-          state.pageIgMap[pageId] = entry;
-          addLog('info', `🔗 IG actor for page ${pageId} (${pageName}): ${entry.igId}${entry.igName ? ' @' + entry.igName : ''}`);
-          return entry.igId;
-        }
-      } catch (e) {
-        addLog('warning', `Page /instagram_accounts lookup failed: ${e.message}`);
+      if (pageId) {
+        try { const r = await apiFetch(`/${pageId}`, { params: { fields: 'name' } }); pageName = r?.name || ''; } catch {}
       }
 
-      // 2) Fallback: IG actors usable in the chosen ad account.
-      const fallbackAcc = accId || state.targetAccIds[0] || '';
-      if (fallbackAcc) {
+      // 1) Actors promotable in THIS account — these are guaranteed to work.
+      if (accId) {
         try {
-          const r = await apiFetch(`/act_${fallbackAcc}/instagram_accounts`, { params: { fields: 'id,username', limit: 5 } });
-          const item = r?.data?.[0];
-          if (item?.id) {
-            const entry = { igId: String(item.id), igName: item.username || '', pageName, source: 'account' };
-            state.pageIgMap[pageId] = entry;
-            addLog('info', `🔗 IG actor from account ${fallbackAcc} (no actor on page): ${entry.igId}${entry.igName ? ' @' + entry.igName : ''}`);
+          const r = await apiFetch(`/act_${accId}/instagram_accounts`, { params: { fields: 'id,username', limit: 25 } });
+          const actors = r?.data || [];
+          if (actors.length) {
+            const item = actors[0];
+            const entry = { igId: String(item.id), igName: item.username || '', pageName, source: 'account', count: actors.length };
+            state.pageIgMap[key] = entry;
+            const extra = actors.length > 1 ? ` (${actors.length} available)` : '';
+            addLog('info', `🔗 IG actor for acc ${accId}: ${entry.igId}${entry.igName ? ' @' + entry.igName : ''}${extra}`);
             return entry.igId;
           }
         } catch (e) {
-          addLog('warning', `Account /instagram_accounts lookup failed: ${e.message}`);
+          addLog('warning', `Account ${accId} /instagram_accounts lookup failed: ${e.message}`);
         }
       }
 
-      // 3) Nothing usable — leave field empty so we don't send a bad ID. FB will
-      // fall back to its default actor (matches pre-v0.6.1 behavior).
-      state.pageIgMap[pageId] = { igId: '', igName: '', pageName, source: 'none' };
-      addLog('warning', `No IG actor found for page ${pageId} (${pageName}) — instagram_user_id will be omitted, FB picks default`);
+      // 2) Fallback: actors connected to the Page. May not be promotable in this
+      // account (cross-BM mismatch), but worth a try — if the creative POST fails
+      // with code 100 the launch loop retries without instagram_user_id anyway.
+      if (pageId) {
+        try {
+          const r = await apiFetch(`/${pageId}/instagram_accounts`, { params: { fields: 'id,username', limit: 5 } });
+          const item = r?.data?.[0];
+          if (item?.id) {
+            const entry = { igId: String(item.id), igName: item.username || '', pageName, source: 'page' };
+            state.pageIgMap[key] = entry;
+            addLog('warning', `🔗 No account-level IG, using page actor (may not be promotable here): ${entry.igId}${entry.igName ? ' @' + entry.igName : ''}`);
+            return entry.igId;
+          }
+        } catch (e) {
+          addLog('warning', `Page ${pageId} /instagram_accounts lookup failed: ${e.message}`);
+        }
+      }
+
+      state.pageIgMap[key] = { igId: '', igName: '', pageName, source: 'none' };
+      addLog('warning', `No IG actor available for acc=${accId || '?'} page=${pageId || '?'} — instagram_user_id omitted (FB uses default)`);
       return '';
     } finally {
-      state.pageIgLoading[pageId] = false;
+      state.pageIgLoading[key] = false;
       render();
     }
+  }
+
+  // v0.6.3 compatibility shim: older callers pass just pageId. Resolve via primary
+  // selected account if we have one.
+  function loadIgForPage(pageId, accId) {
+    return loadIgForAccount(accId || state.targetAccIds[0] || '', pageId);
   }
 
   // ─── CSV PARSER (auto-detect tab vs comma) ──────────────────────────────
@@ -1836,7 +1845,28 @@
           const creativeBody = { object_story_spec: JSON.stringify(objectStorySpec) };
           if (urlTags) creativeBody.url_tags = urlTags;
 
-          const creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: creativeBody });
+          // v0.6.4: safety net — if FB rejects the creative because instagram_user_id
+          // isn't promotable in this account, drop the field and retry once. Lets the
+          // launch finish (FB falls back to its default actor) instead of killing every ad.
+          let creative;
+          try {
+            creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: creativeBody });
+          } catch (e) {
+            const msg = String(e.message || '');
+            if (msg.includes('instagram_user_id') && objectStorySpec.instagram_user_id) {
+              addLog('warning', `[${accLabel}] IG actor ${objectStorySpec.instagram_user_id} not promotable here — retrying "${adName}" without instagram_user_id`);
+              const retrySpec = { ...objectStorySpec };
+              delete retrySpec.instagram_user_id;
+              const retryBody = { object_story_spec: JSON.stringify(retrySpec) };
+              if (urlTags) retryBody.url_tags = urlTags;
+              creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: retryBody });
+              // Burn this account's IG cache entry so the rest of the loop doesn't keep retrying.
+              const cacheKey = `${accId}__${pageId}`;
+              if (state.pageIgMap[cacheKey]) state.pageIgMap[cacheKey] = { ...state.pageIgMap[cacheKey], igId: '', source: 'rejected' };
+            } else {
+              throw e;
+            }
+          }
           const adBodyPost = {
             name: adName,
             adset_id: adsetId,
@@ -2043,7 +2073,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.6.3
+      <h2>🚀 FB Launcher v0.6.4
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -2131,22 +2161,26 @@
         <label style="margin-top:5px">Instagram Account ID <span style="color:#6e7681">— empty = auto-fetch from Page's connected IG${isMulti ? ' · ⚠ same ID for all accounts' : ''}</span></label>
         <input type="text" id="fbl-ig-id" value="${esc(state.instagramOverride)}" placeholder="leave empty → launcher auto-detects from Page · or paste IG actor ID to override">
         ${(() => {
-          // Auto-detected IG hint: shows whichever page we know about (override > primary CSV row).
+          // v0.6.4: cache key changed to "acc__page" since same page can resolve differently
+          // per account. Hint shows status for the primary selected account.
           const probePage = state.pageIdOverride || (state.rows[0] && stripPfx(state.rows[0]['Link Object ID'] || '')) || '';
-          if (!probePage) return '';
-          const ig = state.pageIgMap[probePage];
-          if (state.pageIgLoading[probePage]) {
-            return `<div style="font-size:11px;color:#94a3b8;margin-top:4px">🔄 fetching connected Instagram for page ${esc(probePage)}...</div>`;
+          const probeAcc = primaryAcc || '';
+          if (!probePage && !probeAcc) return '';
+          const key = `${probeAcc}__${probePage}`;
+          const ig = state.pageIgMap[key];
+          if (state.pageIgLoading[key]) {
+            return `<div style="font-size:11px;color:#94a3b8;margin-top:4px">🔄 fetching Instagram actor for account ${esc(probeAcc || '?')}...</div>`;
           }
           if (!ig) return '';
           if (state.instagramOverride) {
             return `<div style="font-size:11px;color:#6e7681;margin-top:4px">Override active — auto-detected (${esc(ig.igId || 'none')}) ignored</div>`;
           }
           if (ig.igId) {
-            const srcLabel = ig.source === 'page' ? 'page actor' : ig.source === 'account' ? 'account actor' : 'detected';
-            return `<div style="font-size:11px;color:#22c55e;margin-top:4px">🔗 Auto-detected (${srcLabel}): <b>${esc(ig.igId)}</b>${ig.igName ? ` @${esc(ig.igName)}` : ''}${ig.pageName ? ` (Page: ${esc(ig.pageName)})` : ''} — used when CSV column is empty</div>`;
+            const srcLabel = ig.source === 'account' ? `account actor${ig.count > 1 ? ` · 1 of ${ig.count}` : ''}` : ig.source === 'page' ? '⚠ page actor (may not be promotable here)' : 'detected';
+            const color = ig.source === 'account' ? '#22c55e' : '#fbbf24';
+            return `<div style="font-size:11px;color:${color};margin-top:4px">🔗 Auto-detected (${srcLabel}): <b>${esc(ig.igId)}</b>${ig.igName ? ` @${esc(ig.igName)}` : ''}${isMulti ? ' · Note: lookup runs per account at launch' : ''}</div>`;
           }
-          return `<div style="font-size:11px;color:#fbbf24;margin-top:4px">⚠ No IG actor found for page ${esc(probePage)}${ig.pageName ? ` "${esc(ig.pageName)}"` : ''} — instagram_user_id will be omitted (FB uses default)</div>`;
+          return `<div style="font-size:11px;color:#fbbf24;margin-top:4px">⚠ No IG actor available for account ${esc(probeAcc || '?')} — instagram_user_id omitted at launch (FB uses default)</div>`;
         })()}
       </div>
 
