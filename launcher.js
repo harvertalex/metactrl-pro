@@ -53,6 +53,8 @@
     pagesByAccount: {},       // v0.6: { accId: [{id,name}] } — pages fetched per selected account
     accountsLoadingMap: {},   // v0.6: { accId: true } while pixel/page lookup is in flight
     showAccountPicker: false, // v0.6: expanded state of multi-account picker dropdown
+    pageIgMap: {},            // v0.6.2: { pageId: { igId, igName, pageName } } — auto-detected IG per page
+    pageIgLoading: {},        // v0.6.2: { pageId: true } while IG lookup is in flight
     dsaBeneficiary: '',       // v0.2.6: EU DSA — name of person/org being advertised
     dsaPayer: '',             // v0.2.6: EU DSA — name of who pays (optional, defaults to beneficiary)
     campNamePrefix: '',       // v0.3: user's prefix; launcher appends "| CBO $X/d | Nads | MMDDYY | acc_id"
@@ -932,6 +934,40 @@
     render();
   }
 
+  // v0.6.2: fetch the Instagram actor connected to a Page. Used to auto-fill
+  // instagram_user_id when the user hasn't set an override and the CSV row's
+  // "Instagram Account ID" column is empty. Result is cached per page.
+  async function loadIgForPage(pageId) {
+    if (!pageId) return '';
+    if (pageId in state.pageIgMap) return state.pageIgMap[pageId]?.igId || '';
+    if (state.pageIgLoading[pageId]) return '';
+    state.pageIgLoading[pageId] = true;
+    try {
+      // Try both fields — different BMs expose different ones.
+      const r = await apiFetch(`/${pageId}`, {
+        params: { fields: 'name,connected_instagram_account{id,username},instagram_business_account{id,username}' },
+      });
+      const ig = r?.connected_instagram_account || r?.instagram_business_account || null;
+      const entry = ig
+        ? { igId: String(ig.id), igName: ig.username || '', pageName: r?.name || '' }
+        : { igId: '', igName: '', pageName: r?.name || '' };
+      state.pageIgMap[pageId] = entry;
+      if (entry.igId) {
+        addLog('info', `🔗 IG for page ${pageId} (${entry.pageName}): ${entry.igId}${entry.igName ? ' @' + entry.igName : ''}`);
+      } else {
+        addLog('warning', `Page ${pageId} (${entry.pageName}) has no connected Instagram — FB will use default actor`);
+      }
+      return entry.igId;
+    } catch (e) {
+      addLog('warning', `Could not fetch IG for page ${pageId}: ${e.message}`);
+      state.pageIgMap[pageId] = { igId: '', igName: '', pageName: '' };
+      return '';
+    } finally {
+      state.pageIgLoading[pageId] = false;
+      render();
+    }
+  }
+
   // ─── CSV PARSER (auto-detect tab vs comma) ──────────────────────────────
   function parseCsv(buf) {
     let text;
@@ -989,6 +1025,10 @@
       state.fileName = file.name;
       const sepLabel = sep === '\t' ? 'TSV' : 'CSV';
       setStatus('success', `Parsed ${rows.length} rows from ${file.name} (${sepLabel})`);
+      // v0.6.2: warm the IG cache for whichever page the CSV references first.
+      // If the user later overrides the page in step 3 that triggers its own fetch.
+      const csvPageId = stripPfx(rows[0]?.['Link Object ID'] || '');
+      if (/^\d{10,20}$/.test(csvPageId)) loadIgForPage(csvPageId);
     } catch (e) {
       setStatus('error', `CSV parse error: ${e.message}`);
     }
@@ -1717,10 +1757,12 @@
           const adBody  = itemBody  || state.bodyOverride  || r['Body']  || '';
           const cta     = itemCta   || state.ctaOverride   || r['Call to Action'] || 'LEARN_MORE';
 
-          // Instagram actor (optional): override > CSV. Without it, FB silently leaves the
-          // ad without an IG profile, which is what we saw before adding this in v0.6.1.
+          // Instagram actor priority: UI override > CSV column > auto-detected from page.
+          // The auto-detected value was cached when the user picked the page (or is
+          // fetched here on demand for whatever page this ad ends up using).
           const csvIg = stripPfx(r['Instagram Account ID'] || '');
-          const igId = state.instagramOverride || csvIg;
+          let igId = state.instagramOverride || csvIg;
+          if (!igId && pageId) igId = await loadIgForPage(pageId);
           const objectStorySpec = { page_id: pageId };
           if (igId) objectStorySpec.instagram_user_id = igId;
           if (videoId) {
@@ -1971,7 +2013,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.6.1
+      <h2>🚀 FB Launcher v0.6.2
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -2056,8 +2098,25 @@
           ${state.pagesList.map(p => `<option value="${esc(p.id)}" ${state.pageIdOverride === p.id ? 'selected' : ''}>${esc(p.name)} (${esc(p.id)})</option>`).join('')}
         </select>` : ''}
         <input type="text" id="fbl-page-id" value="${esc(state.pageIdOverride)}" placeholder="${state.pagesList.length ? 'or paste custom page ID' : 'page ID (14-20 digits) — empty = use CSV'}" style="margin-bottom:8px">
-        <label style="margin-top:5px">Instagram Account ID <span style="color:#6e7681">— empty = use CSV "Instagram Account ID" column${isMulti ? ' · ⚠ same ID across all accounts; FB rejects ads in accounts where the IG isn\'t connected' : ''}</span></label>
-        <input type="text" id="fbl-ig-id" value="${esc(state.instagramOverride)}" placeholder="e.g. 17841401234567890 — paste IG actor ID to override CSV">
+        <label style="margin-top:5px">Instagram Account ID <span style="color:#6e7681">— empty = auto-fetch from Page's connected IG${isMulti ? ' · ⚠ same ID for all accounts' : ''}</span></label>
+        <input type="text" id="fbl-ig-id" value="${esc(state.instagramOverride)}" placeholder="leave empty → launcher auto-detects from Page · or paste IG actor ID to override">
+        ${(() => {
+          // Auto-detected IG hint: shows whichever page we know about (override > primary CSV row).
+          const probePage = state.pageIdOverride || (state.rows[0] && stripPfx(state.rows[0]['Link Object ID'] || '')) || '';
+          if (!probePage) return '';
+          const ig = state.pageIgMap[probePage];
+          if (state.pageIgLoading[probePage]) {
+            return `<div style="font-size:11px;color:#94a3b8;margin-top:4px">🔄 fetching connected Instagram for page ${esc(probePage)}...</div>`;
+          }
+          if (!ig) return '';
+          if (state.instagramOverride) {
+            return `<div style="font-size:11px;color:#6e7681;margin-top:4px">Override active — auto-detected (${esc(ig.igId || 'none')}) ignored</div>`;
+          }
+          if (ig.igId) {
+            return `<div style="font-size:11px;color:#22c55e;margin-top:4px">🔗 Auto-detected: <b>${esc(ig.igId)}</b>${ig.igName ? ` @${esc(ig.igName)}` : ''}${ig.pageName ? ` (Page: ${esc(ig.pageName)})` : ''} — used when CSV column is empty</div>`;
+          }
+          return `<div style="font-size:11px;color:#fbbf24;margin-top:4px">⚠ Page ${esc(probePage)}${ig.pageName ? ` "${esc(ig.pageName)}"` : ''} has no connected Instagram — paste an IG ID above or FB will use its default actor</div>`;
+        })()}
       </div>
 
       <div class="field">
@@ -2487,6 +2546,8 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
         const page = state.pagesList.find(p => p.id === e.target.value);
         if (page?.name) state.dsaBeneficiary = page.name;
       }
+      // v0.6.2: auto-fetch connected IG so we can show it in the UI hint.
+      if (e.target.value) loadIgForPage(e.target.value);
       render();
     });
     document.getElementById('fbl-dsa-beneficiary')?.addEventListener('input', e => {
@@ -2506,7 +2567,10 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       state.customEventOverride = e.target.value;
     });
     document.getElementById('fbl-page-id')?.addEventListener('input', e => {
-      state.pageIdOverride = e.target.value.trim();
+      const v = e.target.value.trim();
+      state.pageIdOverride = v;
+      // v0.6.2: when user types a full Page ID, prefetch its connected IG for the UI hint.
+      if (/^\d{10,20}$/.test(v)) loadIgForPage(v);
     });
     document.getElementById('fbl-ig-id')?.addEventListener('input', e => {
       // Strip "x:" / similar Power-Editor prefixes the user may paste from a CSV cell.
