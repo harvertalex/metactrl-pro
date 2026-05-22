@@ -37,6 +37,7 @@
     accFilter: '',
     targetAccIds: [],         // v0.6: array of selected account IDs (1+ for multi-account launch)
     pageIdOverride: '',
+    instagramOverride: '',    // v0.6.1: forces instagram_user_id (skips CSV "Instagram Account ID")
     linkOverride: '',         // v0.2: replaces CSV Link column (with token substitution)
     urlTagsOverride: '',      // v0.2: replaces CSV URL Tags column (with token substitution)
     titleOverride: '',        // v0.2.2: replaces CSV Title (headline) for all ads
@@ -418,6 +419,7 @@
         pixelOverride: state.pixelOverride,
         customEventOverride: state.customEventOverride,
         pageIdOverride: state.pageIdOverride,
+        instagramOverride: state.instagramOverride,
         dsaBeneficiary: state.dsaBeneficiary,
         dsaPayer: state.dsaPayer,
         urlTagParam: state.urlTagParam,
@@ -453,6 +455,7 @@
     state.pixelOverride = s.pixelOverride || '';
     state.customEventOverride = s.customEventOverride || '';
     state.pageIdOverride = s.pageIdOverride || '';
+    state.instagramOverride = s.instagramOverride || '';
     state.dsaBeneficiary = s.dsaBeneficiary || '';
     state.dsaPayer = s.dsaPayer || '';
     state.urlTagParam = s.urlTagParam || 'sub2';
@@ -524,6 +527,7 @@
         pixelOverride: state.pixelOverride,
         customEventOverride: state.customEventOverride,
         pageIdOverride: state.pageIdOverride,
+        instagramOverride: state.instagramOverride,
         dsaBeneficiary: state.dsaBeneficiary,
         dsaPayer: state.dsaPayer,
         urlTagParam: state.urlTagParam,
@@ -1713,7 +1717,12 @@
           const adBody  = itemBody  || state.bodyOverride  || r['Body']  || '';
           const cta     = itemCta   || state.ctaOverride   || r['Call to Action'] || 'LEARN_MORE';
 
+          // Instagram actor (optional): override > CSV. Without it, FB silently leaves the
+          // ad without an IG profile, which is what we saw before adding this in v0.6.1.
+          const csvIg = stripPfx(r['Instagram Account ID'] || '');
+          const igId = state.instagramOverride || csvIg;
           const objectStorySpec = { page_id: pageId };
+          if (igId) objectStorySpec.instagram_user_id = igId;
           if (videoId) {
             // Thumbnail priority: per-item thumbnailHash (from upload pairing or JSON) > FB auto-thumbnail
             let itemThumb = adInfo.forcedItem?.thumbnailHash || null;
@@ -1962,7 +1971,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.6.0
+      <h2>🚀 FB Launcher v0.6.1
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -2046,7 +2055,9 @@
           <option value="">— from CSV "Link Object ID" —</option>
           ${state.pagesList.map(p => `<option value="${esc(p.id)}" ${state.pageIdOverride === p.id ? 'selected' : ''}>${esc(p.name)} (${esc(p.id)})</option>`).join('')}
         </select>` : ''}
-        <input type="text" id="fbl-page-id" value="${esc(state.pageIdOverride)}" placeholder="${state.pagesList.length ? 'or paste custom page ID' : 'page ID (14-20 digits) — empty = use CSV'}">
+        <input type="text" id="fbl-page-id" value="${esc(state.pageIdOverride)}" placeholder="${state.pagesList.length ? 'or paste custom page ID' : 'page ID (14-20 digits) — empty = use CSV'}" style="margin-bottom:8px">
+        <label style="margin-top:5px">Instagram Account ID <span style="color:#6e7681">— empty = use CSV "Instagram Account ID" column${isMulti ? ' · ⚠ same ID across all accounts; FB rejects ads in accounts where the IG isn\'t connected' : ''}</span></label>
+        <input type="text" id="fbl-ig-id" value="${esc(state.instagramOverride)}" placeholder="e.g. 17841401234567890 — paste IG actor ID to override CSV">
       </div>
 
       <div class="field">
@@ -2496,6 +2507,10 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     });
     document.getElementById('fbl-page-id')?.addEventListener('input', e => {
       state.pageIdOverride = e.target.value.trim();
+    });
+    document.getElementById('fbl-ig-id')?.addEventListener('input', e => {
+      // Strip "x:" / similar Power-Editor prefixes the user may paste from a CSV cell.
+      state.instagramOverride = stripPfx(e.target.value.trim());
     });
     const creativesEl = document.getElementById('fbl-creatives');
     if (creativesEl) {
