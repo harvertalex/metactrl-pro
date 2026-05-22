@@ -561,7 +561,6 @@ function makeModal() {
       <button id="tab-insp"  class="ar-tab">🔎 Accounts</button>
       <button id="tab-px"    class="ar-tab">🔗 Pixel Manager</button>
       <button id="tab-ops"   class="ar-tab">🛠 Ops</button>
-      <button id="tab-fix"   class="ar-tab">🐛 Bug Fixes</button>
       <button id="tab-links" class="ar-tab">🌐 Links</button>
     </div>
   `;
@@ -572,7 +571,6 @@ function makeModal() {
   const insp  = document.createElement('div'); insp.id  = 'ar-insp';
   const px    = document.createElement('div'); px.id    = 'ar-px';
   const ops   = document.createElement('div'); ops.id   = 'ar-ops';
-  const fix   = document.createElement('div'); fix.id   = 'ar-fix';
   const links = document.createElement('div'); links.id = 'ar-links';
   wrap.appendChild(ar);
   wrap.appendChild(col);
@@ -580,7 +578,6 @@ function makeModal() {
   wrap.appendChild(insp);
   wrap.appendChild(px);
   wrap.appendChild(ops);
-  wrap.appendChild(fix);
   wrap.appendChild(links);
   document.body.appendChild(wrap);
 
@@ -591,7 +588,6 @@ function makeModal() {
   wrap.querySelector('#tab-insp').onclick    = () => { setTab('insp'); };
   wrap.querySelector('#tab-px').onclick      = () => { setTab('px'); };
   wrap.querySelector('#tab-ops').onclick     = () => { setTab('ops'); };
-  wrap.querySelector('#tab-fix').onclick     = () => { setTab('fix'); };
   wrap.querySelector('#tab-links').onclick   = () => { setTab('links'); };
 
   function setTab(t) {
@@ -601,7 +597,6 @@ function makeModal() {
     insp.style.display  = t === 'insp'  ? 'block' : 'none';
     px.style.display    = t === 'px'    ? 'block' : 'none';
     ops.style.display   = t === 'ops'   ? 'block' : 'none';
-    fix.style.display   = t === 'fix'   ? 'block' : 'none';
     links.style.display = t === 'links' ? 'block' : 'none';
     wrap.querySelector('#tab-ar').classList.toggle('active',    t === 'ar');
     wrap.querySelector('#tab-col').classList.toggle('active',   t === 'col');
@@ -609,10 +604,9 @@ function makeModal() {
     wrap.querySelector('#tab-insp').classList.toggle('active',  t === 'insp');
     wrap.querySelector('#tab-px').classList.toggle('active',    t === 'px');
     wrap.querySelector('#tab-ops').classList.toggle('active',   t === 'ops');
-    wrap.querySelector('#tab-fix').classList.toggle('active',   t === 'fix');
     wrap.querySelector('#tab-links').classList.toggle('active', t === 'links');
   }
-  return { wrap, ar, col, anl, insp, px, ops, fix, links, setTab };
+  return { wrap, ar, col, anl, insp, px, ops, links, setTab };
 }
 
 
@@ -5054,9 +5048,28 @@ function mountOperations(container) {
   }
 
   function getBizId() {
+    try {
+      const ctx = require('BusinessUnifiedNavigationContext');
+      if (ctx && ctx.businessID) return String(ctx.businessID);
+    } catch {}
     try { const p=new URL(window.location.href).searchParams.get('business_id'); if(p) return p; } catch {}
     return String(window.location.href).match(/[?&#]business_id=(\d+)/)?.[1]||'';
   }
+
+  /* fallback token loader for environments without global TOKEN (BM Invite uses this) */
+  async function getInviteToken() {
+    if (TOKEN) return TOKEN;
+    try {
+      const res = await fetch('https://business.facebook.com/ajax/bootloader-endpoint/?modules=AdsCanvasComposerDialog.react&__a=1', {credentials:'include'});
+      const txt = await res.text();
+      return txt.match(/"access_token":"(EAAI[^"]+)"/)?.[1] || '';
+    } catch { return ''; }
+  }
+
+  const MAIL_SERVICES = [
+    { id:'smvmail',   label:'smvmail.com',       domain:'smvmail.com',       inboxUrl:e=>`https://smvmail.com/email/inbox?email=${encodeURIComponent(e)}` },
+    { id:'dropinbox', label:'fviadropinbox.com', domain:'fviadropinbox.com', inboxUrl:e=>`https://fviadropinbox.com/inbox/${encodeURIComponent(e.split('@')[0])}` },
+  ];
 
   function exportCsv(rows, filename) {
     const csv = rows.map(r => r.map(c => `"${String(c??'').replace(/"/g,'""')}"`).join(',')).join('\n');
@@ -5094,7 +5107,7 @@ function mountOperations(container) {
 
   /* ---- sub-tab state ---- */
   const ops = {
-    tab: 'csv',        /* csv | pause | zombies | audiences */
+    tab: 'bm-invite',  /* bm-invite | pause | zombies | audiences */
 
     /* pause/resume */
     pauseAccFilter: '',
@@ -5119,21 +5132,16 @@ function mountOperations(container) {
     audLoading: false,
     audSearch: '',
 
-    /* csv launch */
-    csvAccFilter: '',
-    csvTargetAccIds: new Set(),
-    csvFileName: '',
-    csvRows: [],
-    csvCampaignNameTpl: 'COLD TEST | CBO ${budget}/d | 1as{ad_count}ads | {date} | {acc_id}',
-    csvAdsetNameTpl: '{date} | {n}',
-    csvDefaultCountries: 'US',
-    csvPageIdOverride: '',
-    csvUrlTagParam: 'sub2',
-    csvUrlTagMode: 'acc_id',
-    csvUrlTagCustom: '',
-    csvCreateStatus: 'PAUSED',
-    csvRunning: false,
-    csvLog: [], csvDone: 0, csvTotal: 0,
+    /* bm bulk invite */
+    invToken: '',
+    invBmId: '',
+    invEmails: '',
+    invRole: 'admin',
+    invMailService: 'smvmail',
+    invRunning: false,
+    invLog: [],
+    invResult: null,
+    invInited: false,
 
     status: { type:'info', text:'Select a tool.' },
   };
@@ -5229,457 +5237,127 @@ function mountOperations(container) {
     ops.pauseRunning=false; ops.pausePreview=[]; ops.pausePreviewSel=new Set(); render();
   }
 
-  /* =============== CSV LAUNCH =============== */
+  /* =============== BM BULK INVITE =============== */
 
-  async function loadCsvAccounts() { await loadOpsAccounts(); }
-
-  /** Parse FB Ads Manager CSV export (UTF-16 LE or UTF-8, tab-separated). */
-  function parseFbCsv(buf) {
-    let text;
-    const view = new Uint8Array(buf);
-    // UTF-16 LE BOM (FF FE) or UTF-16 BE (FE FF)
-    if (view[0]===0xFF && view[1]===0xFE) text = new TextDecoder('utf-16le').decode(buf.slice(2));
-    else if (view[0]===0xFE && view[1]===0xFF) text = new TextDecoder('utf-16be').decode(buf.slice(2));
-    else if (view[0]===0xEF && view[1]===0xBB && view[2]===0xBF) text = new TextDecoder('utf-8').decode(buf.slice(3));
-    else text = new TextDecoder('utf-8').decode(buf);
-
-    // Proper CSV parse with quoted fields + tab separator
-    const rows = [];
-    let row = [], cur = '', inQ = false;
-    for (let i = 0; i < text.length; i++) {
-      const ch = text[i];
-      if (inQ) {
-        if (ch === '"' && text[i+1] === '"') { cur += '"'; i++; }
-        else if (ch === '"') inQ = false;
-        else cur += ch;
-      } else {
-        if (ch === '"') inQ = true;
-        else if (ch === '\t') { row.push(cur); cur = ''; }
-        else if (ch === '\r') { /* skip */ }
-        else if (ch === '\n') { row.push(cur); cur = ''; rows.push(row); row = []; }
-        else cur += ch;
-      }
-    }
-    if (cur || row.length) { row.push(cur); rows.push(row); }
-    if (rows.length < 2) return [];
-    const header = rows[0].map(h=>String(h).trim());
-    return rows.slice(1).filter(r=>r.some(c=>c&&c.trim())).map(r=>{
-      const o = {};
-      header.forEach((h,i)=> o[h] = (r[i]||'').trim());
-      return o;
-    });
-  }
-
-  async function onCsvFile(file) {
-    try {
-      const buf = await file.arrayBuffer();
-      const rows = parseFbCsv(buf);
-      if (!rows.length) { setStatus('error','CSV is empty or invalid.'); return; }
-      ops.csvFileName = file.name;
-      ops.csvRows = rows;
-      setStatus('success',`Parsed ${rows.length} rows from ${file.name}`);
-      render();
-    } catch(e) { setStatus('error',`CSV parse error: ${e.message}`); }
-  }
-
-  /** Build campaign name from template tokens. */
-  function csvRenderTpl(tpl, ctx) {
-    return String(tpl||'').replace(/\{(\w+)\}|\$\{(\w+)\}/g, (_,a,b) => String(ctx[a||b] ?? ''));
-  }
-
-  /** Transform URL Tags — modify a chosen param (paramName) based on mode. */
-  function csvTransformUrlTags(raw, accId, paramName, mode, customVal) {
-    if (!raw) return raw;
-    const target = String(paramName||'').trim();
-    if (!target || mode === 'keep') return raw;
-    const pairs = String(raw).split('&').map(p=>{
-      const [k,...rest] = p.split('=');
-      return [k, rest.join('=')];
-    });
-    const newVal = mode === 'acc_id' ? accId
-                 : mode === 'empty' ? ''
-                 : mode === 'custom' ? String(customVal||'') : '';
-    let saw = false;
-    const out = pairs.map(([k,v]) => {
-      if (k === target) { saw = true; return [k, newVal]; }
-      return [k, v];
-    });
-    if (!saw) out.push([target, newVal]);
-    return out.map(([k,v]) => v===''?`${k}=`:`${k}=${v}`).join('&');
-  }
-
-  /** Map Objective label from CSV to API enum. */
-  function csvObjectiveMap(o) {
-    const n = String(o||'').toUpperCase().trim();
-    const m = {
-      'OUTCOME SALES':'OUTCOME_SALES','SALES':'OUTCOME_SALES',
-      'OUTCOME LEADS':'OUTCOME_LEADS','LEADS':'OUTCOME_LEADS',
-      'OUTCOME TRAFFIC':'OUTCOME_TRAFFIC','TRAFFIC':'OUTCOME_TRAFFIC',
-      'OUTCOME ENGAGEMENT':'OUTCOME_ENGAGEMENT','ENGAGEMENT':'OUTCOME_ENGAGEMENT',
-      'OUTCOME AWARENESS':'OUTCOME_AWARENESS','AWARENESS':'OUTCOME_AWARENESS',
-      'OUTCOME APP PROMOTION':'OUTCOME_APP_PROMOTION','APP PROMOTION':'OUTCOME_APP_PROMOTION',
-    };
-    return m[n] || n.replace(/\s+/g,'_');
-  }
-
-  function csvBidStrategyMap(b) {
-    const n = String(b||'').toLowerCase();
-    if (n.includes('highest value')) return 'LOWEST_COST_WITHOUT_CAP';
-    if (n.includes('highest volume')) return 'LOWEST_COST_WITHOUT_CAP';
-    if (n.includes('cost per result')) return 'COST_CAP';
-    if (n.includes('cost cap')) return 'COST_CAP';
-    if (n.includes('bid cap')) return 'LOWEST_COST_WITH_BID_CAP';
-    return 'LOWEST_COST_WITHOUT_CAP';
-  }
-
-  /** Strip FB ID prefixes like "cg:", "c:", "a:", "o:", "tp:", "v:", "x:" */
-  function csvStripPrefix(v) {
-    return String(v||'').replace(/^[a-z]+:/,'');
-  }
-
-  async function runCsvLaunch() {
-    if (!ops.csvRows.length) { setStatus('error','Load a CSV first.'); return; }
-    const targets = [...ops.csvTargetAccIds];
-    if (!targets.length) { setStatus('error','Select at least one target account.'); return; }
-
-    // group rows by ad set (1×1×N case — single campaign + single adset + N ads)
-    const firstRow = ops.csvRows[0];
-    const adRows = ops.csvRows;
-    const adCount = adRows.length;
-
-    ops.csvRunning = true; ops.csvLog = []; ops.csvDone = 0; ops.csvTotal = targets.length;
-    const now = new Date();
-    const dateStr = String(now.getMonth()+1).padStart(2,'0') + String(now.getDate()).padStart(2,'0') + String(now.getFullYear()).slice(-2);
-
-    addLog(ops.csvLog,'info',`Launching to ${targets.length} accounts × ${adCount} ads...`);
+  async function ensureInviteInited() {
+    if (ops.invInited) return;
+    ops.invInited = true;
+    ops.invToken = await getInviteToken();
+    ops.invBmId  = getBizId();
     render();
-
-    for (const accId of targets) {
-      const acc = OPS_ACCOUNTS_CACHE.find(a=>a.id===accId);
-      const accLabel = acc?.name || accId;
-      try {
-        // --- Campaign ---
-        const budget = firstRow['Campaign Daily Budget'] || '50';
-        const campaignName = csvRenderTpl(ops.csvCampaignNameTpl, {
-          budget, ad_count: adCount, date: dateStr, acc_id: accId,
-          source_name: firstRow['Campaign Name']||'',
-        });
-        const objective = csvObjectiveMap(firstRow['Campaign Objective']);
-        const bidStrategy = csvBidStrategyMap(firstRow['Campaign Bid Strategy']);
-        const specialAdCatsRaw = []; /* always empty — special ad categories block region targeting */
-        const specialAdCats = '[]';
-        addLog(ops.csvLog,'info',`[${accLabel}] creating campaign "${campaignName}"...`);
-        const campaign = await apiFetch(`/act_${accId}/campaigns`,{method:'POST',body:{
-          name: campaignName,
-          objective,
-          status: ops.csvCreateStatus,
-          special_ad_categories: specialAdCats,
-          buying_type: firstRow['Buying Type'] || 'AUCTION',
-          daily_budget: String(Math.round((+budget||50)*100)),
-          bid_strategy: bidStrategy,
-        }});
-        const campaignId = campaign.id;
-        addLog(ops.csvLog,'success',`[${accLabel}] ✓ campaign id=${campaignId}`);
-
-        // --- Ad Set ---
-        const adsetName = csvRenderTpl(ops.csvAdsetNameTpl, {
-          date: dateStr, acc_id: accId, source_name: firstRow['Ad Set Name']||'',
-          budget, ad_count: adCount, n: '01',
-        }) || firstRow['Ad Set Name'] || 'Ad Set 1';
-        const countriesRaw = String(firstRow['Countries']||'').split(',').map(s=>s.trim()).filter(Boolean);
-        const specialAdCountry = String(firstRow['Special Ad Category Country']||'').split(',').map(s=>s.trim()).filter(Boolean);
-
-        /* US state name → real FB region key (from FB Marketing API targeting search) */
-        const US_STATE_KEYS = {
-          'alabama':3847,'alaska':3848,'arizona':3849,'arkansas':3850,'california':3851,
-          'colorado':3852,'connecticut':3853,'delaware':3854,'florida':3855,'georgia':3856,
-          'hawaii':3857,'idaho':3858,'illinois':3859,'indiana':3860,'iowa':3861,
-          'kansas':3862,'kentucky':3863,'louisiana':3864,'maine':3865,'maryland':3866,
-          'massachusetts':3867,'michigan':3868,'minnesota':3869,'mississippi':3870,'missouri':3871,
-          'montana':3872,'nebraska':3873,'nevada':3874,'new hampshire':3875,'new jersey':3876,
-          'new mexico':3877,'new york':3878,'north carolina':3879,'north dakota':3880,'ohio':3881,
-          'oklahoma':3882,'oregon':3883,'pennsylvania':3884,'rhode island':3885,'south carolina':3886,
-          'south dakota':3887,'tennessee':3888,'texas':3889,'utah':3890,'vermont':3891,
-          'virginia':3892,'washington':3893,'west virginia':3894,'wisconsin':3895,'wyoming':3896,
-          'district of columbia':3853,'washington dc':3893,
-        };
-
-        /* Parse Regions col — "Alabama US, Arizona US, ..." → FB region objects
-           Key must come from FB Targeting Search API — we fetch missing ones live */
-        const regionsRaw = String(firstRow['Regions']||'');
-        const fbRegions = [];
-        if (regionsRaw.length) {
-          const stateNames = regionsRaw.split(',').map(s => s.trim().replace(/\s+US$/i,'').trim()).filter(Boolean);
-          /* fetch real keys from FB Targeting Search for all states at once */
-          try {
-            const searchUrl = `https://graph.facebook.com/v19.0/search?type=adgeolocation&location_types=["region"]&country_code=US&limit=100&access_token=${TOKEN||inv?.token||''}`;
-            const searchRes = await apiFetch('/search', {params:{type:'adgeolocation',location_types:'["region"]',country_code:'US',limit:200}});
-            const fbStateMap = {};
-            (searchRes?.data||[]).forEach(r => { fbStateMap[r.name.toLowerCase()] = r.key; });
-            stateNames.forEach(name => {
-              const key = fbStateMap[name.toLowerCase()] || US_STATE_KEYS[name.toLowerCase()];
-              if (key) fbRegions.push({ key: String(key), name, country: 'US' });
-              else addLog(ops.csvLog,'warning',`Region not found: "${name}" — skipped`);
-            });
-          } catch(_) {
-            /* fallback to static map if API search fails */
-            stateNames.forEach(name => {
-              const key = US_STATE_KEYS[name.toLowerCase()];
-              if (key) fbRegions.push({ key: String(key), name, country: 'US' });
-            });
-          }
-        }
-
-        /* countries: explicit col → Special Ad Category Country → extract from Regions → UI default */
-        const regionsCountries = [...new Set(regionsRaw.match(/\b([A-Z]{2})\b/g)||[])];
-        const countries = countriesRaw.length ? countriesRaw
-          : specialAdCountry.length ? specialAdCountry
-          : regionsCountries.length ? regionsCountries
-          : String(ops.csvDefaultCountries||'US').split(',').map(s=>s.trim()).filter(Boolean);
-        const ageMin = +firstRow['Age Min'] || 18;
-        const ageMax = +firstRow['Age Max'] || 65;
-        const gender = String(firstRow['Gender']||'').toLowerCase();
-        const genders = gender.includes('men') && !gender.includes('women') ? [1]
-                      : gender.includes('women') && !gender.includes('men') ? [2] : [1,2];
-        const publisherPlatforms = String(firstRow['Publisher Platforms']||'')
-          .split(',').map(s=>s.trim()).filter(Boolean);
-        const fbPositions = String(firstRow['Facebook Positions']||'').split(',').map(s=>s.trim()).filter(Boolean);
-        const igPositions = String(firstRow['Instagram Positions']||'').split(',').map(s=>s.trim()).filter(Boolean);
-        const devicePlatforms = String(firstRow['Device Platforms']||'').split(',').map(s=>s.trim()).filter(Boolean);
-        const pixelId = csvStripPrefix(firstRow['Optimized Conversion Tracking Pixels']);
-        const customEventType = firstRow['Optimized Event'] || 'PURCHASE';
-        const optGoal = firstRow['Optimization Goal'] || 'OFFSITE_CONVERSIONS';
-        const billingEvent = firstRow['Billing Event'] || 'IMPRESSIONS';
-
-        const geoLocations = { location_types: String(firstRow['Location Types']||'home,recent').split(',').map(s=>s.trim()).filter(Boolean) };
-        /* Special Ad Categories (Financial etc.) forbid region-level targeting — country only */
-        if (fbRegions.length && !specialAdCatsRaw.length) {
-          geoLocations.regions = fbRegions;
-        } else {
-          geoLocations.countries = countries;
-        }
-        const targeting = {
-          geo_locations: geoLocations,
-          age_min: ageMin, age_max: ageMax,
-          genders,
-          publisher_platforms: publisherPlatforms,
-          device_platforms: devicePlatforms,
-          targeting_automation: { advantage_audience: +(firstRow['Advantage Audience']||0) },
-        };
-        if (fbPositions.length) targeting.facebook_positions = fbPositions;
-        if (igPositions.length) targeting.instagram_positions = igPositions;
-
-        const promoted = { pixel_id: pixelId, custom_event_type: customEventType };
-
-        const bidAmountRaw = firstRow['Bid Amount'];
-        const bidNeedsCap = bidStrategy === 'COST_CAP' || bidStrategy === 'LOWEST_COST_WITH_BID_CAP';
-        const bidAmountCents = bidNeedsCap && bidAmountRaw && +bidAmountRaw > 0 ? String(Math.round(+bidAmountRaw * 100)) : null;
-        if (bidAmountCents) addLog(ops.csvLog,'info',`[${accLabel}] bid_amount=$${bidAmountRaw} (${bidStrategy})`);
-        addLog(ops.csvLog,'info',`[${accLabel}] creating adset...`);
-        const adsetBody = {
-          name: adsetName,
-          campaign_id: campaignId,
-          status: ops.csvCreateStatus,
-          optimization_goal: optGoal,
-          billing_event: billingEvent,
-          targeting: JSON.stringify(targeting),
-          promoted_object: JSON.stringify(promoted),
-          attribution_spec: firstRow['Attribution Spec'] || '[{"event_type":"CLICK_THROUGH","window_days":1}]',
-          ...(bidAmountCents ? { bid_amount: bidAmountCents } : {}),
-        };
-        const adset = await apiFetch(`/act_${accId}/adsets`,{method:'POST',body:adsetBody});
-        const adsetId = adset.id;
-        addLog(ops.csvLog,'success',`[${accLabel}] ✓ adset id=${adsetId}`);
-
-        // --- Ads ---
-        let adOk = 0, adErr = 0;
-        for (let i = 0; i < adRows.length; i++) {
-          const r = adRows[i];
-          const adName = r['Ad Name'] || `Ad ${i+1}`;
-          try {
-            const pageId = ops.csvPageIdOverride || (r['Link Object ID'] ? csvStripPrefix(r['Link Object ID']) : '');
-            const link = r['Link'] || '';
-            const videoId = r['Video ID'] ? csvStripPrefix(r['Video ID']) : '';
-            const imageHash = (r['Image Hash']||'').split(':').pop(); // strip "accid:hash"
-            const urlTagsRaw = r['URL Tags'] || '';
-            const urlTags = csvTransformUrlTags(urlTagsRaw, accId, ops.csvUrlTagParam, ops.csvUrlTagMode, ops.csvUrlTagCustom);
-            const cta = r['Call to Action'] || 'LEARN_MORE';
-            const adBody = r['Body'] || '';
-            const adTitle = r['Title'] || '';
-
-            const objectStorySpec = { page_id: pageId };
-            // Skip instagram_actor_id: FB will auto-use the IG linked to the Page in each account ("from Page").
-            if (videoId) {
-              // FB requires a thumbnail (image_url or image_hash) for video ads.
-              // Fetch auto-generated thumbnail from the video itself.
-              let thumbUrl = '';
-              try {
-                const vInfo = await apiFetch(`/${videoId}`, {params:{fields:'picture,thumbnails{uri,is_preferred}'}});
-                const prefThumb = vInfo?.thumbnails?.data?.find(t=>t.is_preferred)?.uri;
-                thumbUrl = prefThumb || vInfo?.thumbnails?.data?.[0]?.uri || vInfo?.picture || '';
-              } catch(_) {}
-              objectStorySpec.video_data = {
-                video_id: videoId,
-                call_to_action: { type: cta, value: { link } },
-              };
-              if (adBody) objectStorySpec.video_data.message = adBody;
-              if (adTitle) objectStorySpec.video_data.title = adTitle;
-              if (thumbUrl) objectStorySpec.video_data.image_url = thumbUrl;
-            } else if (imageHash) {
-              objectStorySpec.link_data = {
-                image_hash: imageHash,
-                link,
-                call_to_action: { type: cta, value: { link } },
-              };
-              if (adBody) objectStorySpec.link_data.message = adBody;
-              if (adTitle) objectStorySpec.link_data.name = adTitle;
-            }
-
-            const creativeBody = {
-              object_story_spec: JSON.stringify(objectStorySpec),
-            };
-            if (urlTags) creativeBody.url_tags = urlTags;
-
-            const creative = await apiFetch(`/act_${accId}/adcreatives`,{method:'POST',body:creativeBody});
-
-            await apiFetch(`/act_${accId}/ads`,{method:'POST',body:{
-              name: adName,
-              adset_id: adsetId,
-              creative: JSON.stringify({ creative_id: creative.id }),
-              status: ops.csvCreateStatus,
-            }});
-            adOk++;
-            addLog(ops.csvLog,'success',`[${accLabel}] ✓ ad "${adName}"`);
-          } catch(e) {
-            adErr++;
-            addLog(ops.csvLog,'error',`[${accLabel}] ✗ ad "${adName}": ${e.message}`);
-          }
-          await sleep(400);
-        }
-        addLog(ops.csvLog, adErr?'warning':'success', `[${accLabel}] done: ${adOk}/${adRows.length} ads`);
-      } catch(e) {
-        addLog(ops.csvLog,'error',`[${accLabel}] ✗ ${e.message}`);
-      }
-      ops.csvDone++;
-      render();
-      if (ops.csvDone < targets.length) await sleep(1500);
-    }
-    const ok = ops.csvLog.filter(l=>l.type==='success').length;
-    const err = ops.csvLog.filter(l=>l.type==='error').length;
-    setStatus(err?'error':'success',`Done. ${ok} ok / ${err} errors. All created as PAUSED.`);
-    ops.csvRunning = false; render();
   }
 
-  function renderCsvLaunch() {
-    const allAccounts = OPS_ACCOUNTS_CACHE;
-    const filterLc = ops.csvAccFilter.toLowerCase();
-    const visibleAccounts = filterLc ? allAccounts.filter(a=>a.name.toLowerCase().includes(filterLc)||a.id.includes(filterLc)) : allAccounts;
+  async function runBulkInvite() {
+    const emails = ops.invEmails.split('\n').map(e=>e.trim()).filter(e=>e.includes('@')&&e.includes('.'));
+    if (!emails.length) { ops.invResult={type:'error',msg:'No valid emails.'}; render(); return; }
+    if (!ops.invToken)  { ops.invResult={type:'error',msg:'Token not loaded — open Ads Manager / Business Manager in this tab.'}; render(); return; }
+    if (!ops.invBmId)   { ops.invResult={type:'error',msg:'BM ID not found — open Business Manager (URL must contain business_id=…).'}; render(); return; }
 
-    const accRows = visibleAccounts.map(a=>{
-      const stDot = a.status===1 ? '#22c55e' : (a.status===2||a.status===101) ? '#ef4444' : a.status ? '#f59e0b' : '#64748b';
-      const stTitle = ACC_STATUS[a.status] || (a.status ? 'Status '+a.status : '');
-      return `
-      <label style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:5px;cursor:pointer;font-size:12px;color:var(--txt);background:${ops.csvTargetAccIds.has(a.id)?'rgba(59,130,246,.1)':''}">
-        <input type="checkbox" data-csvacc="${esc(a.id)}" ${ops.csvTargetAccIds.has(a.id)?'checked':''} style="accent-color:var(--acc)">
-        <span style="width:7px;height:7px;border-radius:50%;background:${stDot};flex-shrink:0" title="${stTitle}"></span>
-        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(a.label)}</span>
-      </label>`;
-    }).join('') || (OPS_ACCOUNTS_LOADING
-      ? '<div style="font-size:12px;color:#64748b;padding:8px">⏳ Loading accounts…</div>'
-      : allAccounts.length
-        ? '<div style="font-size:12px;color:#64748b;padding:8px">No accounts match filter.</div>'
-        : '<div style="font-size:12px;color:#64748b;padding:8px">Click "↻ Reload" to load accounts.</div>');
+    ops.invRunning = true; ops.invLog = []; ops.invResult = null; render();
 
-    const preview = ops.csvRows.length ? (() => {
-      const r = ops.csvRows[0];
-      const adNames = [...new Set(ops.csvRows.map(x=>x['Ad Name']||x['Ad name']||'').filter(Boolean))];
-      return `
-        <div style="font-size:11px;color:#94a3b8;line-height:1.7;background:rgba(0,0,0,.15);padding:8px 12px;border-radius:6px;border:1px solid var(--bdr);margin-bottom:10px">
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 16px">
-            <span><b style="color:#cbd5e1">Ads:</b> ${ops.csvRows.length}</span>
-            <span><b style="color:#cbd5e1">Budget:</b> $${esc(r['Campaign Daily Budget']||'0')}/day</span>
-            <span><b style="color:#cbd5e1">Objective:</b> ${esc(r['Campaign Objective']||'—')}</span>
-            <span><b style="color:#cbd5e1">Event:</b> ${esc(r['Optimized Event']||'—')}</span>
-            <span><b style="color:#cbd5e1">Geo:</b> ${esc(r['Countries']||'—')}</span>
-            <span><b style="color:#cbd5e1">Age:</b> ${esc(r['Age Min']||'?')}–${esc(r['Age Max']||'?')} ${esc(r['Gender']||'')}</span>
-            <span style="grid-column:1/-1"><b style="color:#cbd5e1">Pixel:</b> ${esc(r['Optimized Conversion Tracking Pixels']||'—')}</span>
-            ${adNames.length?`<span style="grid-column:1/-1;color:#64748b">Ads: ${adNames.slice(0,3).map(n=>esc(n)).join(', ')}${adNames.length>3?` +${adNames.length-3} more`:''}</span>`:''}
-          </div>
-        </div>`;
-    })() : '';
+    const isAdmin = ops.invRole === 'admin';
+    const roles = isAdmin
+      ? '["DEFAULT","MANAGE","DEVELOPER","EMPLOYEE","ASSET_MANAGE","ASSET_VIEW","PEOPLE_MANAGE","PEOPLE_VIEW","PARTNERS_VIEW","PARTNERS_MANAGE","PROFILE_MANAGE"]'
+      : '["EMPLOYEE"]';
+    let ok = 0, fail = 0;
+    const inviteLog = (msg, t='info') => addLog(ops.invLog, t, msg);
+    inviteLog(`Starting: ${emails.length} invites as ${isAdmin?'Admin':'Employee'}`);
 
-    const progress = ops.csvTotal ? Math.round(ops.csvDone/ops.csvTotal*100) : 0;
-    const runDisabled = ops.csvRunning||!ops.csvRows.length||!ops.csvTargetAccIds.size;
+    for (let i = 0; i < emails.length; i++) {
+      const email = emails[i];
+      inviteLog(`[${i+1}/${emails.length}] → ${email}`);
+      try {
+        const url = `https://graph.facebook.com/v19.0/${ops.invBmId}/business_users?access_token=${ops.invToken}`;
+        const body = new URLSearchParams({
+          brandId: ops.invBmId, email,
+          invite_origin: 'BM_INVITE_USER_FLOW',
+          method: 'post', roles, suppress_http_code: '1',
+        });
+        const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body, credentials:'include'});
+        const json = await res.json();
+        const success = json && !json.error && !json.errors && (JSON.stringify(json).includes('PENDING') || json.id);
+        if (success) { inviteLog(`✓ Sent: ${email}`, 'success'); ok++; }
+        else {
+          const errMsg = json?.error?.message || json?.error?.error_user_msg || JSON.stringify(json).slice(0,120);
+          inviteLog(`✗ Failed: ${email} → ${errMsg}`, 'error');
+          fail++;
+        }
+      } catch(e) { inviteLog(`✗ Error: ${email} → ${e.message}`, 'error'); fail++; }
+      await sleep(1200 + Math.random() * 1200);
+    }
+
+    ops.invRunning = false;
+    ops.invResult = { type: ok >= fail ? 'success' : 'error', msg: `Done: ${ok} success / ${fail} failed` };
+    setStatus(fail?'warning':'success', `BM invites: ${ok} ok / ${fail} fail`);
+    render();
+  }
+
+  function renderBmInvite() {
+    /* lazy bootstrap on first render of this tab */
+    ensureInviteInited();
+    const svc = MAIL_SERVICES.find(s => s.id === ops.invMailService) || MAIL_SERVICES[0];
+    const svcRow = MAIL_SERVICES.map(s => `
+      <button class="ar-btn ${ops.invMailService===s.id?'ar-btn-primary':'ar-btn-ghost'}" data-opsact="inv-svc-${s.id}" style="flex:1;font-size:12px;padding:7px 10px">${esc(s.label)}</button>
+    `).join('');
+
+    const result = ops.invResult ? `
+      <div style="margin-top:12px;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:600;background:${ops.invResult.type==='success'?'rgba(34,197,94,.15)':'rgba(239,68,68,.15)'};color:${ops.invResult.type==='success'?'#22c55e':'#ef4444'};border:1px solid ${ops.invResult.type==='success'?'rgba(34,197,94,.3)':'rgba(239,68,68,.3)'}">
+        ${esc(ops.invResult.msg)}
+      </div>` : '';
+
+    const log = ops.invLog.length ? `
+      <div style="margin-top:10px;padding:8px 10px;border-radius:6px;background:rgba(0,0,0,.2);border:1px solid var(--bdr);max-height:200px;overflow-y:auto;font-family:monospace">${logHtml(ops.invLog)}</div>` : '';
+
+    const tokenColor = ops.invToken ? '#22c55e' : '#ef4444';
+    const bmColor    = ops.invBmId  ? '#22c55e' : '#ef4444';
 
     return `
-      <div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:11px;color:#cbd5e1;line-height:1.5">
-        ⚡ <b>CSV Launch:</b> загрузи FB Ads Manager export (UTF-16 LE) — создаст кампанию+адсет+объявления на каждом target аккаунте. Всё создаётся в <b>PAUSED</b>.<br>
-        <b>Видео/картинки</b> используются как есть (могут не работать на другом аккаунте — тогда ad failed, кампания и адсет создадутся).
-      </div>
-
-      <div style="margin-bottom:12px">
-        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">CSV file (FB Ads Manager export)</div>
-        <input type="file" id="csv-file" accept=".csv,.tsv,.txt" style="width:100%;padding:6px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px">
-      </div>
-
-      ${ops.csvFileName ? `<div style="font-size:11px;color:#22c55e;margin-bottom:8px">📄 ${esc(ops.csvFileName)}</div>` : ''}
-      ${preview}
-
-      <div style="margin:12px 0">
-        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Campaign Name Template — tokens: <code>{budget}</code> <code>{ad_count}</code> <code>{date}</code> <code>{acc_id}</code> <code>{source_name}</code></div>
-        <input type="text" id="csv-tpl" value="${esc(ops.csvCampaignNameTpl)}" style="width:100%;padding:7px 9px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;font-family:monospace">
-      </div>
-
-      <div style="margin:12px 0">
-        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Ad Set Name Template — tokens: <code>{date}</code> <code>{n}</code> <code>{acc_id}</code> <code>{source_name}</code></div>
-        <input type="text" id="csv-adset-tpl" value="${esc(ops.csvAdsetNameTpl)}" style="width:100%;padding:7px 9px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;font-family:monospace">
-      </div>
-
-      <div style="margin:12px 0">
-        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Default Geo — fallback если в CSV поле Countries пустое (коды через запятую)</div>
-        <input type="text" id="csv-default-countries" value="${esc(ops.csvDefaultCountries)}" placeholder="US" style="width:100%;padding:7px 9px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;font-family:monospace">
-      </div>
-
-      <div style="margin:12px 0">
-        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Override Page ID — заменяет page_id из CSV во всех адах (нужно если target аккаунт использует другую страницу)</div>
-        <input type="text" id="csv-page-id-override" value="${esc(ops.csvPageIdOverride)}" placeholder="оставь пустым — взять из CSV" style="width:100%;padding:7px 9px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;font-family:monospace">
-      </div>
-
-      <div style="margin:12px 0">
-        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">URL Tag — выбери параметр и режим замены</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-          <input type="text" id="csv-urltag-param" value="${esc(ops.csvUrlTagParam)}" placeholder="sub2" style="width:90px;padding:6px 8px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;font-family:monospace">
-          <span style="color:#64748b;font-size:12px">=</span>
-          <select id="csv-urltag-mode" style="padding:6px 8px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px">
-            <option value="acc_id" ${ops.csvUrlTagMode==='acc_id'?'selected':''}>target account ID</option>
-            <option value="keep"   ${ops.csvUrlTagMode==='keep'  ?'selected':''}>keep as in CSV</option>
-            <option value="empty"  ${ops.csvUrlTagMode==='empty' ?'selected':''}>empty</option>
-            <option value="custom" ${ops.csvUrlTagMode==='custom'?'selected':''}>custom value…</option>
-          </select>
-          ${ops.csvUrlTagMode==='custom'?`<input type="text" id="csv-urltag-custom" value="${esc(ops.csvUrlTagCustom)}" placeholder="custom value" style="flex:1;min-width:120px;padding:6px 8px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px">`:''}
-        </div>
-        <div style="font-size:10px;color:#64748b;margin-top:4px">Примеры: <code>sub1</code>, <code>sub2</code>, <code>sub3</code>, <code>keyword</code>… Пусто — отключить замену.</div>
-      </div>
-
-      <div style="margin-top:12px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <div style="font-size:12px;color:var(--txt);font-weight:600">Target Accounts <span style="color:#64748b;font-weight:normal">${ops.csvTargetAccIds.size} selected${allAccounts.length?` / ${allAccounts.length}`:''}</span></div>
-          <div style="display:flex;gap:5px">
-            <button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="csv-load-accounts" ${OPS_ACCOUNTS_LOADING?'disabled':''}>${OPS_ACCOUNTS_LOADING?'Loading…':'↻ Reload'}</button>
-            <button class="ar-btn" data-opsact="csv-sel-all" style="padding:3px 8px;font-size:11px">All</button>
-            <button class="ar-btn" data-opsact="csv-sel-none" style="padding:3px 8px;font-size:11px">None</button>
+      <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap">
+        <div style="flex:1;min-width:320px">
+          <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+            <span style="background:${tokenColor};color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600">Token: ${ops.invToken?'Valid':'Not loaded'}</span>
+            <span style="background:${bmColor};color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600">BM: ${esc(ops.invBmId||'Not found')}</span>
           </div>
+
+          <label class="ar-label">📮 Mail service</label>
+          <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">${svcRow}</div>
+
+          <label class="ar-label">📧 Emails (one per line)</label>
+          <textarea id="inv-emails" placeholder="email1@${esc(svc.domain)}\nemail2@${esc(svc.domain)}\n..." style="width:100%;min-height:140px;padding:9px 11px;border:2px solid var(--bdr);border-radius:8px;font-size:13px;background:var(--surf);color:var(--txt);box-sizing:border-box;resize:vertical;margin-bottom:8px;font-family:monospace">${esc(ops.invEmails)}</textarea>
+
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+            <button class="ar-btn" data-opsact="inv-random">🎲 Generate 8 random</button>
+            <button class="ar-btn" data-opsact="inv-clear">Clear</button>
+            <button class="ar-btn" data-opsact="inv-inboxes">🌐 Open inboxes</button>
+          </div>
+
+          <label class="ar-label">👤 Role</label>
+          <select id="inv-role" style="width:100%;padding:9px 11px;border:2px solid var(--bdr);border-radius:8px;font-size:13px;background:var(--surf);color:var(--txt);margin-bottom:14px">
+            <option value="admin"    ${ops.invRole==='admin'?'selected':''}>Admin</option>
+            <option value="employee" ${ops.invRole==='employee'?'selected':''}>Employee</option>
+          </select>
+
+          <button class="ar-btn ar-btn-primary" data-opsact="inv-send" ${ops.invRunning||!ops.invToken||!ops.invBmId?'disabled':''} style="width:100%;padding:12px;font-size:14px;font-weight:700">
+            ${ops.invRunning?'Sending...':'📨 Send Bulk Invites'}
+          </button>
+
+          ${result}
+          ${log}
         </div>
-        <input type="text" id="csv-acc-filter" placeholder="Filter accounts…" value="${esc(ops.csvAccFilter)}" style="width:100%;padding:6px 8px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;margin-bottom:6px;box-sizing:border-box">
-        <div style="max-height:200px;overflow-y:auto;border:1px solid var(--bdr);border-radius:6px;padding:4px;background:var(--bg)">${accRows}</div>
-      </div>
 
-      <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
-        <button class="ar-btn primary" data-opsact="csv-run" ${runDisabled?'disabled':''} style="flex:1">${ops.csvRunning?`Running ${ops.csvDone}/${ops.csvTotal}…`:`🚀 Launch to ${ops.csvTargetAccIds.size} accounts`}</button>
+        <div style="flex:0 0 220px;background:var(--surf);border:1px solid var(--bdr);border-radius:10px;padding:14px;font-size:12px;color:var(--muted);line-height:1.5">
+          <div style="font-weight:700;color:var(--txt);margin-bottom:8px">ℹ️ Notes</div>
+          - Paste emails one per line<br>
+          - FB limit: ~20-50 invites/day per BM<br>
+          - Invites stay "Pending" until accepted<br>
+          - Active: <b style="color:var(--txt)">${esc(svc.label)}</b><br><br>
+          <div style="font-weight:700;color:var(--txt);margin-bottom:6px">⚡ Quick flow</div>
+          1. Generate random emails<br>
+          2. Send invites (Admin role)<br>
+          3. Click "Open inboxes"<br>
+          4. Accept from each inbox
+        </div>
       </div>
-      ${ops.csvTotal?`<div style="margin-top:8px;height:5px;border-radius:3px;background:var(--bdr);overflow:hidden"><div style="width:${progress}%;height:100%;background:var(--acc);transition:width .3s"></div></div>`:''}
-
-      ${ops.csvLog.length?`<div style="margin-top:12px;padding:8px 10px;border-radius:6px;background:rgba(0,0,0,.2);border:1px solid var(--bdr);max-height:220px;overflow-y:auto;font-family:monospace">${logHtml(ops.csvLog)}</div>`:''}
     `;
   }
 
@@ -5910,7 +5588,7 @@ function mountOperations(container) {
 
   /* ==================== RENDER ==================== */
   const TABS = [
-    {id:'csv',      label:'📥 CSV Launch'},
+    {id:'bm-invite',label:'✉️ BM Bulk Invite'},
     {id:'pause',    label:'⏸ Bulk Pause/Resume'},
     {id:'zombies',  label:'🧟 Zombie Campaigns'},
     {id:'audiences',label:'👥 Custom Audiences'},
@@ -5920,7 +5598,7 @@ function mountOperations(container) {
     const tabBar = TABS.map(t=>`<button class="ar-tab ${ops.tab===t.id?'active':''}" data-opstab="${t.id}">${t.label}</button>`).join('');
 
     let content = '';
-    if (ops.tab==='csv')       content = renderCsvLaunch();
+    if (ops.tab==='bm-invite') content = renderBmInvite();
     if (ops.tab==='pause')     content = renderBulkPause();
     if (ops.tab==='zombies')   content = renderZombies();
     if (ops.tab==='audiences') content = renderAudiences();
@@ -5942,32 +5620,33 @@ function mountOperations(container) {
 
     const sa = (id, fn) => { const el=container.querySelector(`[data-opsact="${id}"]`); if(el) el.addEventListener('click', fn); };
 
-    /* csv launch actions */
-    sa('csv-load-accounts', ()=>loadOpsAccounts(true));
-    sa('csv-run', runCsvLaunch);
-    sa('csv-sel-all', ()=>{ OPS_ACCOUNTS_CACHE.forEach(a=>ops.csvTargetAccIds.add(a.id)); render(); });
-    sa('csv-sel-none', ()=>{ ops.csvTargetAccIds.clear(); render(); });
-    const csvFile = container.querySelector('#csv-file');
-    if (csvFile) csvFile.addEventListener('change', (e)=>{ const f=e.target.files?.[0]; if(f) onCsvFile(f); });
-    const csvTpl = container.querySelector('#csv-tpl');
-    if (csvTpl) csvTpl.addEventListener('input', ()=>{ ops.csvCampaignNameTpl = csvTpl.value; });
-    const csvAdsetTpl = container.querySelector('#csv-adset-tpl');
-    if (csvAdsetTpl) csvAdsetTpl.addEventListener('input', ()=>{ ops.csvAdsetNameTpl = csvAdsetTpl.value; });
-    const csvDefaultCountries = container.querySelector('#csv-default-countries');
-    if (csvDefaultCountries) csvDefaultCountries.addEventListener('input', ()=>{ ops.csvDefaultCountries = csvDefaultCountries.value; });
-    const csvPageIdOverride = container.querySelector('#csv-page-id-override');
-    if (csvPageIdOverride) csvPageIdOverride.addEventListener('input', ()=>{ ops.csvPageIdOverride = csvPageIdOverride.value.trim(); });
-    const csvUrlParam = container.querySelector('#csv-urltag-param');
-    if (csvUrlParam) csvUrlParam.addEventListener('input', ()=>{ ops.csvUrlTagParam = csvUrlParam.value; });
-    const csvUrlMode = container.querySelector('#csv-urltag-mode');
-    if (csvUrlMode) csvUrlMode.addEventListener('change', ()=>{ ops.csvUrlTagMode = csvUrlMode.value; render(); });
-    const csvUrlCustom = container.querySelector('#csv-urltag-custom');
-    if (csvUrlCustom) csvUrlCustom.addEventListener('input', ()=>{ ops.csvUrlTagCustom = csvUrlCustom.value; });
-    const csvAccFilter = container.querySelector('#csv-acc-filter');
-    if (csvAccFilter) csvAccFilter.addEventListener('input', ()=>{ ops.csvAccFilter=csvAccFilter.value; render(); });
-    container.querySelectorAll('[data-csvacc]').forEach(el=>{
-      el.addEventListener('change', ()=>{ const id=el.getAttribute('data-csvacc'); el.checked?ops.csvTargetAccIds.add(id):ops.csvTargetAccIds.delete(id); render(); });
+    /* bm bulk invite actions */
+    MAIL_SERVICES.forEach(s => sa(`inv-svc-${s.id}`, () => { ops.invMailService = s.id; render(); }));
+    sa('inv-random', () => {
+      const svc = MAIL_SERVICES.find(s => s.id === ops.invMailService) || MAIL_SERVICES[0];
+      const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+      const list = [];
+      for (let i = 0; i < 8; i++) {
+        let s = '';
+        for (let j = 0; j < 10; j++) s += chars[Math.floor(Math.random()*chars.length)];
+        list.push(s + '@' + svc.domain);
+      }
+      ops.invEmails = list.join('\n');
+      render();
     });
+    sa('inv-clear', () => { ops.invEmails = ''; render(); });
+    sa('inv-inboxes', () => {
+      const svc = MAIL_SERVICES.find(s => s.id === ops.invMailService) || MAIL_SERVICES[0];
+      const emails = ops.invEmails.split('\n').map(e=>e.trim()).filter(e=>e.includes('@')&&e.includes('.'));
+      if (!emails.length) { alert('No valid emails.'); return; }
+      if (!confirm(`Open ${emails.length} inbox tabs on ${svc.label}?`)) return;
+      emails.forEach((e, i) => setTimeout(() => window.open(svc.inboxUrl(e), '_blank'), i * 800));
+    });
+    sa('inv-send', runBulkInvite);
+    const invEmails = container.querySelector('#inv-emails');
+    if (invEmails) invEmails.addEventListener('input', () => { ops.invEmails = invEmails.value; });
+    const invRole = container.querySelector('#inv-role');
+    if (invRole) invRole.addEventListener('change', () => { ops.invRole = invRole.value; });
 
     /* pause actions */
     sa('pause-load-accounts', ()=>loadOpsAccounts(true));
@@ -6006,8 +5685,8 @@ function mountOperations(container) {
   }
 
   render();
-  /* auto-load accounts in background — render() will re-fire when done */
-  loadOpsAccounts();
+  /* auto-load accounts in background only when we have a token (BM Invite works without one) */
+  if (TOKEN) loadOpsAccounts();
 }
 
 /* -------------------- UI: AUTORULES -------------------- */
@@ -6049,314 +5728,6 @@ function mountAutorules(container) {
   genDiv.style.display = 'block';
   mgrDiv.style.display = 'none';
   renderArTabs();
-}
-
-/* -------------------- UI: BUG FIXES -------------------- */
-function mountBugFixes(container) {
-  container.innerHTML = '';
-
-  /* ---- helpers ---- */
-  function esc(v) { return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
-  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-  async function getToken() {
-    if (TOKEN) return TOKEN;
-    try {
-      const res = await fetch('https://business.facebook.com/ajax/bootloader-endpoint/?modules=AdsCanvasComposerDialog.react&__a=1', {credentials:'include'});
-      const txt = await res.text();
-      return txt.match(/"access_token":"(EAAI[^"]+)"/)?.[1] || '';
-    } catch { return ''; }
-  }
-
-  function getBizId() {
-    try {
-      const ctx = require('BusinessUnifiedNavigationContext');
-      if (ctx.businessID) return String(ctx.businessID);
-    } catch {}
-    const m = String(window.location.href).match(/[?&#]business_id=(\d+)/);
-    return m ? m[1] : '';
-  }
-
-  /* ---- Mail services ---- */
-  const MAIL_SERVICES = [
-    {
-      id: 'smvmail',
-      label: 'smvmail.com',
-      domain: 'smvmail.com',
-      inboxUrl: e => `https://smvmail.com/email/inbox?email=${encodeURIComponent(e)}`,
-    },
-    {
-      id: 'dropinbox',
-      label: 'fviadropinbox.com',
-      domain: 'fviadropinbox.com',
-      inboxUrl: e => `https://fviadropinbox.com/inbox/${encodeURIComponent(e.split('@')[0])}`,
-    },
-  ];
-
-  /* ---- BM Invite Tool state ---- */
-  const inv = {
-    token: '',
-    bmId: '',
-    emails: '',
-    role: 'admin',
-    mailService: 'smvmail',
-    running: false,
-    log: [],
-    result: null,
-  };
-
-  /* ---- Tool cards list ---- */
-  const tools = [
-    { id: 'bm-invite', label: '✉️ BM Bulk Invite', desc: 'Send bulk invitations to Business Manager' },
-  ];
-  let activeTool = 'bm-invite';
-
-  function render() {
-    container.innerHTML = '';
-
-    /* top: tool selector pills */
-    const pills = document.createElement('div');
-    pills.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--bdr)';
-    tools.forEach(t => {
-      const btn = document.createElement('button');
-      btn.className = 'ar-tab' + (activeTool === t.id ? ' active' : '');
-      btn.textContent = t.label;
-      btn.title = t.desc;
-      btn.addEventListener('click', () => { activeTool = t.id; render(); });
-      pills.appendChild(btn);
-    });
-    container.appendChild(pills);
-
-    if (activeTool === 'bm-invite') renderBmInvite();
-  }
-
-  function renderBmInvite() {
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap';
-
-    /* ---- left: main form ---- */
-    const left = document.createElement('div');
-    left.style.cssText = 'flex:1;min-width:320px';
-
-    /* status badges */
-    const statusRow = document.createElement('div');
-    statusRow.style.cssText = 'display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap';
-    const tokBadge = document.createElement('span');
-    tokBadge.className = 'ar-badge';
-    tokBadge.style.cssText = `background:${inv.token?'#22c55e':'#ef4444'};color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600`;
-    tokBadge.textContent = `Token: ${inv.token?'Valid':'Loading...'}`;
-    const bmBadge = document.createElement('span');
-    bmBadge.className = 'ar-badge';
-    bmBadge.style.cssText = `background:${inv.bmId?'#22c55e':'#ef4444'};color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600`;
-    bmBadge.textContent = `BM: ${inv.bmId||'Not found'}`;
-    statusRow.appendChild(tokBadge);
-    statusRow.appendChild(bmBadge);
-    left.appendChild(statusRow);
-
-    /* emails textarea */
-    /* mail service selector */
-    const lblSvc = document.createElement('label');
-    lblSvc.className = 'ar-label';
-    lblSvc.textContent = '📮 Mail service';
-    left.appendChild(lblSvc);
-
-    const svcRow = document.createElement('div');
-    svcRow.style.cssText = 'display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap';
-    MAIL_SERVICES.forEach(svc => {
-      const btn = document.createElement('button');
-      btn.className = 'ar-btn' + (inv.mailService === svc.id ? ' ar-btn-primary' : ' ar-btn-ghost');
-      btn.style.cssText = 'flex:1;font-size:12px;padding:7px 10px';
-      btn.textContent = svc.label;
-      btn.addEventListener('click', () => { inv.mailService = svc.id; render(); });
-      svcRow.appendChild(btn);
-    });
-    left.appendChild(svcRow);
-
-    const activeSvc = MAIL_SERVICES.find(s => s.id === inv.mailService) || MAIL_SERVICES[0];
-
-    const lblEmails = document.createElement('label');
-    lblEmails.className = 'ar-label';
-    lblEmails.textContent = '📧 Emails (one per line)';
-    left.appendChild(lblEmails);
-
-    const ta = document.createElement('textarea');
-    ta.value = inv.emails;
-    ta.placeholder = `email1@${activeSvc.domain}\nemail2@${activeSvc.domain}\n...`;
-    ta.style.cssText = 'width:100%;min-height:140px;padding:9px 11px;border:2px solid var(--bdr);border-radius:8px;font-size:13px;background:var(--surf);color:var(--txt);box-sizing:border-box;resize:vertical;margin-bottom:8px';
-    ta.addEventListener('input', () => { inv.emails = ta.value; });
-    left.appendChild(ta);
-
-    /* email action buttons */
-    const emailBtns = document.createElement('div');
-    emailBtns.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px';
-
-    const btnRandom = document.createElement('button');
-    btnRandom.className = 'ar-btn';
-    btnRandom.textContent = '🎲 Generate 8 random';
-    btnRandom.addEventListener('click', () => {
-      const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-      const list = [];
-      for (let i = 0; i < 8; i++) {
-        let s = '';
-        for (let j = 0; j < 10; j++) s += chars[Math.floor(Math.random()*chars.length)];
-        list.push(s + '@' + activeSvc.domain);
-      }
-      inv.emails = list.join('\n');
-      render();
-    });
-
-    const btnClear = document.createElement('button');
-    btnClear.className = 'ar-btn';
-    btnClear.textContent = 'Clear';
-    btnClear.addEventListener('click', () => { inv.emails = ''; render(); });
-
-    const btnInboxes = document.createElement('button');
-    btnInboxes.className = 'ar-btn';
-    btnInboxes.textContent = '🌐 Open inboxes';
-    btnInboxes.addEventListener('click', () => {
-      const emails = inv.emails.split('\n').map(e=>e.trim()).filter(e=>e.includes('@')&&e.includes('.'));
-      if (!emails.length) { alert('No valid emails.'); return; }
-      if (!confirm(`Open ${emails.length} inbox tabs on ${activeSvc.label}?`)) return;
-      emails.forEach((e, i) => setTimeout(() => window.open(activeSvc.inboxUrl(e), '_blank'), i * 800));
-    });
-
-    emailBtns.appendChild(btnRandom);
-    emailBtns.appendChild(btnClear);
-    emailBtns.appendChild(btnInboxes);
-    left.appendChild(emailBtns);
-
-    /* role select */
-    const lblRole = document.createElement('label');
-    lblRole.className = 'ar-label';
-    lblRole.textContent = '👤 Role';
-    left.appendChild(lblRole);
-
-    const selRole = document.createElement('select');
-    selRole.style.cssText = 'width:100%;padding:9px 11px;border:2px solid var(--bdr);border-radius:8px;font-size:13px;background:var(--surf);color:var(--txt);margin-bottom:14px';
-    [['admin','Admin'],['employee','Employee']].forEach(([v,l]) => {
-      const opt = document.createElement('option');
-      opt.value = v; opt.textContent = l; if (inv.role === v) opt.selected = true;
-      selRole.appendChild(opt);
-    });
-    selRole.addEventListener('change', () => { inv.role = selRole.value; });
-    left.appendChild(selRole);
-
-    /* send button */
-    const btnSend = document.createElement('button');
-    btnSend.className = 'ar-btn ar-btn-primary';
-    btnSend.style.cssText = 'width:100%;padding:12px;font-size:14px;font-weight:700';
-    btnSend.textContent = inv.running ? 'Sending...' : '📨 Send Bulk Invites';
-    btnSend.disabled = inv.running || !inv.token || !inv.bmId;
-    btnSend.addEventListener('click', runBulkInvite);
-    left.appendChild(btnSend);
-
-    /* result */
-    if (inv.result) {
-      const res = document.createElement('div');
-      const isOk = inv.result.type === 'success';
-      res.style.cssText = `margin-top:12px;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:600;background:${isOk?'#d4edda':'#f8d7da'};color:${isOk?'#155724':'#721c24'};border:1px solid ${isOk?'#c3e6cb':'#f5c6cb'}`;
-      res.textContent = inv.result.msg;
-      left.appendChild(res);
-    }
-
-    /* log */
-    if (inv.log.length) {
-      const logEl = document.createElement('div');
-      logEl.style.cssText = 'margin-top:10px;max-height:180px;overflow-y:auto;font-size:11px;line-height:1.45;padding:8px;background:var(--surf);border:1px solid var(--bdr);border-radius:6px';
-      logEl.innerHTML = inv.log.slice(-60).map(l =>
-        `<div style="color:${l.t==='s'?'#22c55e':l.t==='e'?'#ef4444':'var(--muted)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span style="opacity:.5">${esc(l.ts)}</span> ${esc(l.msg)}</div>`
-      ).join('');
-      logEl.scrollTop = logEl.scrollHeight;
-      left.appendChild(logEl);
-    }
-
-    wrap.appendChild(left);
-
-    /* ---- right: info panel ---- */
-    const right = document.createElement('div');
-    right.style.cssText = 'flex:0 0 220px;background:var(--surf);border:1px solid var(--bdr);border-radius:10px;padding:14px;font-size:12px;color:var(--muted);line-height:1.5';
-    right.innerHTML = `
-      <div style="font-weight:700;color:var(--txt);margin-bottom:8px">ℹ️ Notes</div>
-      - Paste emails one per line<br>
-      - FB limit: ~20-50 invites/day per BM<br>
-      - Invites stay "Pending" until accepted<br>
-      - Active: <b style="color:var(--txt)">${activeSvc.label}</b><br><br>
-      <div style="font-weight:700;color:var(--txt);margin-bottom:6px">⚡ Quick flow</div>
-      1. Generate random emails<br>
-      2. Send invites (Admin role)<br>
-      3. Click "Open inboxes"<br>
-      4. Accept from each inbox
-    `;
-    wrap.appendChild(right);
-
-    container.appendChild(wrap);
-  }
-
-  async function runBulkInvite() {
-    const emails = inv.emails.split('\n').map(e=>e.trim()).filter(e=>e.includes('@')&&e.includes('.'));
-    if (!emails.length) { inv.result={type:'error',msg:'No valid emails.'}; render(); return; }
-    if (!inv.token)     { inv.result={type:'error',msg:'Token not loaded — refresh page.'}; render(); return; }
-    if (!inv.bmId)      { inv.result={type:'error',msg:'BM ID not found — open Business Manager.'}; render(); return; }
-
-    inv.running = true; inv.log = []; inv.result = null; render();
-
-    const isAdmin = inv.role === 'admin';
-    const roles = isAdmin
-      ? '["DEFAULT","MANAGE","DEVELOPER","EMPLOYEE","ASSET_MANAGE","ASSET_VIEW","PEOPLE_MANAGE","PEOPLE_VIEW","PARTNERS_VIEW","PARTNERS_MANAGE","PROFILE_MANAGE"]'
-      : '["EMPLOYEE"]';
-
-    let ok = 0, fail = 0;
-
-    const addLog = (msg, t='i') => {
-      inv.log.push({msg, t, ts: new Date().toLocaleTimeString()});
-      render();
-    };
-
-    addLog(`Starting: ${emails.length} invites as ${isAdmin?'Admin':'Employee'}`);
-
-    for (let i = 0; i < emails.length; i++) {
-      const email = emails[i];
-      addLog(`[${i+1}/${emails.length}] → ${email}`);
-      try {
-        const url = `https://graph.facebook.com/v19.0/${inv.bmId}/business_users?access_token=${inv.token}`;
-        const body = new URLSearchParams({
-          brandId: inv.bmId,
-          email,
-          invite_origin: 'BM_INVITE_USER_FLOW',
-          method: 'post',
-          roles,
-          suppress_http_code: '1',
-        });
-        const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body, credentials:'include'});
-        const json = await res.json();
-        const success = json && !json.error && !json.errors && (JSON.stringify(json).includes('PENDING') || json.id);
-        if (success) {
-          addLog(`✓ Sent: ${email}`, 's');
-          ok++;
-        } else {
-          const errMsg = json?.error?.message || json?.error?.error_user_msg || JSON.stringify(json).slice(0,120);
-          addLog(`✗ Failed: ${email} → ${errMsg}`, 'e');
-          fail++;
-        }
-      } catch(e) {
-        addLog(`✗ Error: ${email} → ${e.message}`, 'e');
-        fail++;
-      }
-      await sleep(1200 + Math.random() * 1200);
-    }
-
-    inv.running = false;
-    inv.result = { type: ok >= fail ? 'success' : 'error', msg: `Done: ${ok} success / ${fail} failed` };
-    render();
-  }
-
-  /* init: load token + BM */
-  render();
-  (async () => {
-    inv.token = await getToken();
-    inv.bmId  = getBizId();
-    render();
-  })();
 }
 
 /* -------------------- UI: QUICK LINKS -------------------- */
@@ -6471,7 +5842,8 @@ function mountQuickLinks(container) {
 /* -------------------- BOOT -------------------- */
 (function boot() {
   const ui = makeModal();
-  mountBugFixes(ui.fix);
+  /* Ops mounts always — BM Bulk Invite tab works without a global TOKEN (it loads its own from bootloader). */
+  mountOperations(ui.ops);
   mountQuickLinks(ui.links);
 
   if (TOKEN) {
@@ -6480,7 +5852,6 @@ function mountQuickLinks(container) {
     mountAnalytics(ui.anl);
     mountInspector(ui.insp);
     mountPixelManager(ui.px);
-    mountOperations(ui.ops);
     ui.setTab('ar');
   } else {
     const notice = `<div style="padding:40px;text-align:center;color:var(--muted)">
@@ -6489,8 +5860,8 @@ function mountQuickLinks(container) {
       <div style="font-size:12px;line-height:1.6">This tab requires a Facebook access token.<br>
       Open <a href="https://adsmanager.facebook.com/adsmanager" target="_blank" style="color:var(--acc)">Ads Manager</a> and run the bookmarklet there.</div>
     </div>`;
-    [ui.ar, ui.col, ui.anl, ui.insp, ui.px, ui.ops].forEach(el => { el.innerHTML = notice; });
-    ui.setTab('fix');
+    [ui.ar, ui.col, ui.anl, ui.insp, ui.px].forEach(el => { el.innerHTML = notice; });
+    ui.setTab('ops');
   }
 })();
 
