@@ -1007,6 +1007,51 @@
     return loadIgForAccount(accId || state.targetAccIds[0] || '', pageId);
   }
 
+  // v0.6.5: full list of IG actor IDs promotable in an account. Used to pre-validate
+  // a user-supplied IG (CSV column or override) before the launch loop starts, so we
+  // don't pay a rejection round-trip on every single ad.
+  async function loadAccountIgIds(accId) {
+    if (!accId) return new Set();
+    const cacheKey = `__set__${accId}`;
+    if (state.pageIgMap[cacheKey]?.set) return state.pageIgMap[cacheKey].set;
+    try {
+      const r = await apiFetch(`/act_${accId}/instagram_accounts`, { params: { fields: 'id', limit: 50 } });
+      const ids = new Set((r?.data || []).map(x => String(x.id)));
+      state.pageIgMap[cacheKey] = { set: ids };
+      return ids;
+    } catch (e) {
+      addLog('warning', `Could not list IG actors for acc ${accId}: ${e.message}`);
+      return new Set();
+    }
+  }
+
+  // v0.6.5: decide which IG actor (if any) to use for the whole launch in this account.
+  // Priority: UI override > CSV first-row value > account's first IG.
+  // Whichever we pick is verified against the account's actual IG list — if it isn't
+  // there we either swap to a valid one or omit instagram_user_id entirely.
+  async function resolveAccountIg(accId, pageId) {
+    const csvIg = stripPfx(state.rows[0]?.['Instagram Account ID'] || '');
+    const desired = state.instagramOverride || csvIg;
+    const validIds = await loadAccountIgIds(accId);
+    if (desired && validIds.has(desired)) {
+      return { igId: desired, source: 'desired-valid' };
+    }
+    if (desired && validIds.size === 0) {
+      // Can't verify (no access / empty list). Trust the user-supplied value — the
+      // per-ad safety net will catch it if FB rejects.
+      return { igId: desired, source: 'desired-unverified' };
+    }
+    if (desired && !validIds.has(desired)) {
+      // The user/CSV value isn't promotable here. Pick something that is, or skip.
+      const fallback = await loadIgForAccount(accId, pageId);
+      if (fallback) return { igId: fallback, source: 'fallback', wantedButRejected: desired };
+      return { igId: '', source: 'omitted-cannot-use', wantedButRejected: desired };
+    }
+    // No desired value at all — try account's first IG (auto-detect).
+    const auto = await loadIgForAccount(accId, pageId);
+    return { igId: auto, source: auto ? 'auto' : 'none' };
+  }
+
   // ─── CSV PARSER (auto-detect tab vs comma) ──────────────────────────────
   function parseCsv(buf) {
     let text;
@@ -1553,6 +1598,27 @@
     addLog('info', `[${accLabel}] Launching ${plan.adsetCount} adsets × ${plan.adCount} ads (${budgetLabel})${sacLabel}`);
     render();
 
+    // v0.6.5: resolve the Instagram actor ONCE for the whole launch in this account.
+    // Pre-validating against /act_<id>/instagram_accounts means the per-ad loop just
+    // uses this value verbatim — no more retry-per-ad when CSV's IG doesn't fit.
+    const probePage = state.pageIdOverride || stripPfx(firstRow?.['Link Object ID'] || '');
+    const igResolution = await resolveAccountIg(accId, probePage);
+    let resolvedIg = igResolution.igId;
+    if (igResolution.source === 'desired-valid') {
+      addLog('info', `[${accLabel}] 🔗 IG actor ${resolvedIg} validated for this account`);
+    } else if (igResolution.source === 'desired-unverified') {
+      addLog('info', `[${accLabel}] 🔗 IG actor ${resolvedIg} from CSV/override (no list permission to verify)`);
+    } else if (igResolution.source === 'fallback') {
+      addLog('warning', `[${accLabel}] 🔗 IG ${igResolution.wantedButRejected} not promotable here → using account actor ${resolvedIg} instead`);
+    } else if (igResolution.source === 'omitted-cannot-use') {
+      addLog('warning', `[${accLabel}] 🔗 IG ${igResolution.wantedButRejected} not promotable here and no account actor available → instagram_user_id omitted (FB default)`);
+    } else if (igResolution.source === 'auto') {
+      addLog('info', `[${accLabel}] 🔗 IG actor auto-detected: ${resolvedIg}`);
+    } else {
+      addLog('info', `[${accLabel}] 🔗 no IG actor — FB will use default`);
+    }
+    render();
+
     let campaignId;
     try {
       // ── Campaign ──
@@ -1796,14 +1862,11 @@
           const adBody  = itemBody  || state.bodyOverride  || r['Body']  || '';
           const cta     = itemCta   || state.ctaOverride   || r['Call to Action'] || 'LEARN_MORE';
 
-          // Instagram actor priority: UI override > CSV column > auto-detected from page.
-          // The auto-detected value was cached when the user picked the page (or is
-          // fetched here on demand for whatever page this ad ends up using).
-          const csvIg = stripPfx(r['Instagram Account ID'] || '');
-          let igId = state.instagramOverride || csvIg;
-          if (!igId && pageId) igId = await loadIgForPage(pageId, accId);
+          // v0.6.5: use the IG actor resolved once for this account (above the adset loop).
+          // Per-ad lookup was removing all the value of caching when CSV had its own IG
+          // column, so we just trust the pre-validated value here.
           const objectStorySpec = { page_id: pageId };
-          if (igId) objectStorySpec.instagram_user_id = igId;
+          if (resolvedIg) objectStorySpec.instagram_user_id = resolvedIg;
           if (videoId) {
             // Thumbnail priority: per-item thumbnailHash (from upload pairing or JSON) > FB auto-thumbnail
             let itemThumb = adInfo.forcedItem?.thumbnailHash || null;
@@ -1845,24 +1908,22 @@
           const creativeBody = { object_story_spec: JSON.stringify(objectStorySpec) };
           if (urlTags) creativeBody.url_tags = urlTags;
 
-          // v0.6.4: safety net — if FB rejects the creative because instagram_user_id
-          // isn't promotable in this account, drop the field and retry once. Lets the
-          // launch finish (FB falls back to its default actor) instead of killing every ad.
+          // v0.6.4 safety net — if FB still rejects the creative, drop the IG and
+          // retry once. v0.6.5: also clear `resolvedIg` so the rest of the adset/
+          // launch loop skips the field instead of paying a rejection per ad.
           let creative;
           try {
             creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: creativeBody });
           } catch (e) {
             const msg = String(e.message || '');
             if (msg.includes('instagram_user_id') && objectStorySpec.instagram_user_id) {
-              addLog('warning', `[${accLabel}] IG actor ${objectStorySpec.instagram_user_id} not promotable here — retrying "${adName}" without instagram_user_id`);
+              addLog('warning', `[${accLabel}] FB rejected IG ${objectStorySpec.instagram_user_id} — retrying "${adName}" without it, and skipping IG for remaining ads in this account`);
               const retrySpec = { ...objectStorySpec };
               delete retrySpec.instagram_user_id;
               const retryBody = { object_story_spec: JSON.stringify(retrySpec) };
               if (urlTags) retryBody.url_tags = urlTags;
               creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: retryBody });
-              // Burn this account's IG cache entry so the rest of the loop doesn't keep retrying.
-              const cacheKey = `${accId}__${pageId}`;
-              if (state.pageIgMap[cacheKey]) state.pageIgMap[cacheKey] = { ...state.pageIgMap[cacheKey], igId: '', source: 'rejected' };
+              resolvedIg = '';  // future iterations in this account skip IG
             } else {
               throw e;
             }
@@ -2073,7 +2134,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.6.4
+      <h2>🚀 FB Launcher v0.6.5
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
