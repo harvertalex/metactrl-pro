@@ -953,7 +953,17 @@
     let pageName = '';
     try {
       if (pageId) {
-        try { const r = await apiFetch(`/${pageId}`, { params: { fields: 'name' } }); pageName = r?.name || ''; } catch {}
+        try {
+          const r = await apiFetch(`/${pageId}`, { params: { fields: 'name' } });
+          pageName = r?.name || '';
+          // v0.6.6: auto-fill DSA Beneficiary from the Page name if the user hasn't
+          // set one. FB now requires dsa_beneficiary for almost all ad sets, not
+          // just EU targeting, so we lean on the page identity to keep launches moving.
+          if (pageName && !state.dsaBeneficiary) {
+            state.dsaBeneficiary = pageName;
+            addLog('info', `🔖 Auto-filled DSA Beneficiary from page: "${pageName}"`);
+          }
+        } catch {}
       }
 
       // 1) Actors promotable in THIS account — these are guaranteed to work.
@@ -1501,9 +1511,12 @@
     const plan = analyzePlan();
     if (!plan) { setStatus('error', 'Cannot analyze plan from CSV.'); return; }
 
-    // Pre-flight: EU DSA compliance — beneficiary required when targeting any EU country
-    if (hasEuTargeting(state.rows) && !state.dsaBeneficiary) {
-      setStatus('error', '⚠ EU targeting detected. DSA Beneficiary required (step 5). Type your business name or page name.');
+    // Pre-flight: DSA Beneficiary required. FB used to enforce this only for EU
+    // targeting, but in 2026 they expanded the rule to almost all ad sets — error
+    // [100/3858079] "Specify a person or organization..." now hits non-EU launches
+    // too. Always require the field; auto-fill keeps it painless.
+    if (!state.dsaBeneficiary) {
+      setStatus('error', '⚠ DSA Advertiser (step 5) required. FB rejects ad sets without it. Type your business name or page name (or pick a Page in step 3 to auto-fill).');
       return;
     }
 
@@ -2121,7 +2134,7 @@
     else if (state.pageIdOverride && !/^\d{10,20}$/.test(state.pageIdOverride)) blockReason = `⚠ Page ID "${state.pageIdOverride}" invalid (10-20 digits)`;
     else if (state.pageIdOverride && state.pagesList.length && !state.pagesList.find(p => p.id === state.pageIdOverride)) blockReason = `⚠ Page ${state.pageIdOverride} not in primary account`;
     else if (!effPixel) blockReason = '⬆ Set Pixel (step 4)';
-    else if (hasEuTargeting(state.rows) && !state.dsaBeneficiary) blockReason = '⚠ EU targeting — set DSA Beneficiary (step 5)';
+    else if (!state.dsaBeneficiary) blockReason = '⚠ Set DSA Advertiser (step 5) — FB requires it for almost all ads now';
     else if (!pixelValid) blockReason = `⚠ Pixel "${effPixel}" invalid format (8-20 digits)`;
     else if (state.pixelsList.length && !pixelInAccount) blockReason = `⚠ Pixel ${effPixel} not in primary account`;
     const runDisabled = !!blockReason;
@@ -2134,7 +2147,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.6.5
+      <h2>🚀 FB Launcher v0.6.6
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -2268,8 +2281,8 @@
         </select>
       </div>
 
-      <div class="field" ${hasEuTargeting(state.rows) && !state.dsaBeneficiary ? 'style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:6px;padding:8px 10px"' : ''}>
-        <label>5. DSA Advertiser (EU-required) ${hasEuTargeting(state.rows) ? '<span style="color:#fbbf24">⚠ EU targeting detected</span>' : '<span style="color:#6e7681">— only needed for EU ads</span>'}</label>
+      <div class="field" ${!state.dsaBeneficiary ? 'style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:6px;padding:8px 10px"' : ''}>
+        <label>5. DSA Advertiser <span style="color:${state.dsaBeneficiary ? '#22c55e' : '#fbbf24'}">${state.dsaBeneficiary ? '✓ set' : '⚠ required — FB rejects ad sets without it'}</span>${hasEuTargeting(state.rows) ? ' <span style="color:#fbbf24">· EU targeting detected</span>' : ''}</label>
         <input type="text" id="fbl-dsa-beneficiary" value="${esc(state.dsaBeneficiary)}" placeholder="Beneficiary (person or org being advertised) — e.g. your business or page name" style="margin-bottom:5px">
         <input type="text" id="fbl-dsa-payer" value="${esc(state.dsaPayer)}" placeholder="Payer (optional — defaults to beneficiary)">
       </div>
