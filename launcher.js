@@ -35,7 +35,7 @@
     rows: [],
     fileName: '',
     accFilter: '',
-    targetAccId: '',
+    targetAccIds: [],         // v0.6: array of selected account IDs (1+ for multi-account launch)
     pageIdOverride: '',
     linkOverride: '',         // v0.2: replaces CSV Link column (with token substitution)
     urlTagsOverride: '',      // v0.2: replaces CSV URL Tags column (with token substitution)
@@ -44,10 +44,14 @@
     ctaOverride: '',          // v0.2.2: replaces CSV Call to Action for all ads (e.g. GET_QUOTE)
     pixelOverride: '',        // v0.2.3: forces pixel_id (skips CSV "Pixel"/"Optimized Conversion Tracking Pixels")
     customEventOverride: '',  // v0.2.3: forces custom_event_type (PURCHASE/LEAD/etc)
-    pixelsList: [],           // v0.2.3: pixels fetched for selected account ([{id, name}])
+    pixelsList: [],           // v0.2.3: legacy — kept for backward refs; in v0.6 we read from pixelsByAccount per account
     pixelsLoading: false,
-    pagesList: [],            // v0.2.5: pages fetched for selected account ([{id, name}])
+    pagesList: [],            // v0.2.5: legacy — kept for backward refs; in v0.6 we read from pagesByAccount per account
     pagesLoading: false,
+    pixelsByAccount: {},      // v0.6: { accId: [{id,name}] } — pixels fetched per selected account
+    pagesByAccount: {},       // v0.6: { accId: [{id,name}] } — pages fetched per selected account
+    accountsLoadingMap: {},   // v0.6: { accId: true } while pixel/page lookup is in flight
+    showAccountPicker: false, // v0.6: expanded state of multi-account picker dropdown
     dsaBeneficiary: '',       // v0.2.6: EU DSA — name of person/org being advertised
     dsaPayer: '',             // v0.2.6: EU DSA — name of who pays (optional, defaults to beneficiary)
     campNamePrefix: '',       // v0.3: user's prefix; launcher appends "| CBO $X/d | Nads | MMDDYY | acc_id"
@@ -593,18 +597,90 @@
     reader.readAsText(file);
   }
 
-  // ─── PIXEL LOADER (for selected account) ────────────────────────────────
+  // ─── MULTI-ACCOUNT HELPERS (v0.6) ───────────────────────────────────────
+  // Toggle an account in/out of the selected set; loads its pixels+pages on add.
+  function toggleAccount(accId) {
+    if (!accId) return;
+    const i = state.targetAccIds.indexOf(accId);
+    if (i >= 0) {
+      state.targetAccIds.splice(i, 1);
+      // If we removed the primary, mirror the next one (or clear).
+      const newPrimary = state.targetAccIds[0];
+      if (newPrimary) {
+        state.pixelsList = state.pixelsByAccount[newPrimary] || [];
+        state.pagesList = state.pagesByAccount[newPrimary] || [];
+      } else {
+        state.pixelsList = [];
+        state.pagesList = [];
+      }
+    } else {
+      state.targetAccIds.push(accId);
+      // Auto-load pixels+pages for the newly selected account.
+      loadPixelsForAccount(accId);
+      loadPagesForAccount(accId);
+    }
+    render();
+  }
+
+  // Resolve user-supplied pixel reference for a specific account.
+  // Accepts: numeric ID (used as-is if it lives in this account), or a name
+  // / partial name (matched case-insensitively against pixelsByAccount[accId]).
+  function resolvePixelForAccount(accId, ref) {
+    const list = state.pixelsByAccount[accId] || [];
+    if (!ref) return '';
+    const s = String(ref).trim();
+    if (!s) return '';
+    if (/^\d{8,20}$/.test(s)) {
+      // Numeric ID — confirm membership only if we have the list; otherwise pass through.
+      if (!list.length) return s;
+      return list.find(p => p.id === s) ? s : '';
+    }
+    // Treat as name pattern.
+    const needle = s.toLowerCase();
+    const exact = list.find(p => (p.name || '').toLowerCase() === needle);
+    if (exact) return exact.id;
+    const partial = list.find(p => (p.name || '').toLowerCase().includes(needle));
+    return partial ? partial.id : '';
+  }
+
+  function resolvePageForAccount(accId, ref) {
+    const list = state.pagesByAccount[accId] || [];
+    if (!ref) return '';
+    const s = String(ref).trim();
+    if (!s) return '';
+    if (/^\d{10,20}$/.test(s)) {
+      if (!list.length) return s;
+      return list.find(p => p.id === s) ? s : '';
+    }
+    const needle = s.toLowerCase();
+    const exact = list.find(p => (p.name || '').toLowerCase() === needle);
+    if (exact) return exact.id;
+    const partial = list.find(p => (p.name || '').toLowerCase().includes(needle));
+    return partial ? partial.id : '';
+  }
+
+  // ─── PIXEL LOADER (v0.6: per-account, cached) ───────────────────────────
+  // Caches into state.pixelsByAccount[accId]; also mirrors the primary account
+  // into legacy state.pixelsList for code that still reads it.
   async function loadPixelsForAccount(accId) {
-    if (!accId) { state.pixelsList = []; render(); return; }
+    if (!accId) return;
+    if (state.pixelsByAccount[accId]) {
+      state.pixelsList = state.pixelsByAccount[accId];
+      render();
+      return;
+    }
     state.pixelsLoading = true;
-    state.pixelsList = [];
     render();
     try {
       const items = await apiAll(`/act_${accId}/adspixels`, { fields: 'id,name', limit: 100 });
-      state.pixelsList = items.map(p => ({ id: String(p.id), name: p.name || 'Untitled' }));
-      addLog('info', `Pixels for ${accId}: ${state.pixelsList.length} found`);
+      const list = items.map(p => ({ id: String(p.id), name: p.name || 'Untitled' }));
+      state.pixelsByAccount[accId] = list;
+      // Mirror to legacy single-account list when this is the primary account.
+      if (state.targetAccIds[0] === accId) state.pixelsList = list;
+      addLog('info', `Pixels for ${accId}: ${list.length} found`);
     } catch (e) {
-      addLog('warning', `Pixel fetch failed: ${e.message}`);
+      addLog('warning', `Pixel fetch failed (${accId}): ${e.message}`);
+      state.pixelsByAccount[accId] = [];
     } finally {
       state.pixelsLoading = false;
       render();
@@ -696,14 +772,20 @@
     throw new CUError('Video processing timeout (>6 min)', { stage: 'process', videoId });
   }
 
+  // v0.6: each upload entry holds per-account results so the launch loop can
+  // pick the right hash / videoId for whichever account it's working on.
+  // u.perAccount[accId] = { status, hash?, videoId?, error?, errorDetails?, processingStatus? }
   async function runUploads(files) {
-    if (!state.targetAccId) { setStatus('error', 'Select target account first.'); return; }
+    const accIds = state.targetAccIds.slice();
+    if (!accIds.length) { setStatus('error', 'Select at least one target account first.'); return; }
     if (!files.length) return;
     state.uploading = true;
     state.uploads = Array.from(files).map(f => ({
       name: f.name,
       size: f.size,
       type: (f.type.startsWith('video/') || /\.(mp4|mov|avi|webm|mkv|m4v)$/i.test(f.name)) ? 'video' : 'image',
+      perAccount: Object.fromEntries(accIds.map(a => [a, { status: 'pending' }])),
+      // Aggregated status for the legacy UI row — done if all done, error if any fails, etc.
       status: 'pending',
       processingStatus: '',
       error: '',
@@ -712,49 +794,76 @@
     }));
     render();
 
-    const results = [];
+    // Pick the BASELINE account whose upload result goes into the creatives JSON.
+    // For single-account launches this is just that one. For multi-account this is
+    // the first one — the launch loop uses u.perAccount[accId] per iteration anyway.
+    const primaryAcc = accIds[0];
+    const primaryResults = [];
+
     for (let i = 0; i < files.length; i++) {
       const u = state.uploads[i];
-      u.status = 'uploading';
-      u.error = '';
-      u.errorDetails = null;
-      render();
-      try {
-        const baseName = files[i].name.replace(/\.[^.]+$/, '');
-        if (u.type === 'video') {
-          const vidId = await uploadVideo(state.targetAccId, files[i]);
-          u.videoId = vidId;
-          u.status = 'processing';
-          u.processingStatus = 'processing';
-          render();
-          await waitForVideoReady(vidId, (vs) => {
-            u.processingStatus = vs;
+      const baseName = files[i].name.replace(/\.[^.]+$/, '');
+      let anyOk = false;
+      let anyErr = false;
+
+      for (const accId of accIds) {
+        const pa = u.perAccount[accId];
+        pa.status = 'uploading';
+        u.status = accIds.length > 1 ? `uploading (${accId})` : 'uploading';
+        render();
+        try {
+          if (u.type === 'video') {
+            const vidId = await uploadVideo(accId, files[i]);
+            pa.videoId = vidId;
+            pa.status = 'processing';
+            pa.processingStatus = 'processing';
+            u.processingStatus = `processing (${accId})`;
             render();
-          });
-          u.status = 'done';
-          results.push({ name: baseName, videoId: vidId });
-          addLog('success', `↑ video "${baseName}" → ${vidId}`);
-        } else {
-          const hash = await uploadImage(state.targetAccId, files[i]);
-          u.imageHash = hash;
-          u.status = 'done';
-          results.push({ name: baseName, imageHash: hash });
-          addLog('success', `↑ image "${baseName}" → ${hash.slice(0, 16)}…`);
+            await waitForVideoReady(vidId, (vs) => {
+              pa.processingStatus = vs;
+              u.processingStatus = accIds.length > 1 ? `${vs} (${accId})` : vs;
+              render();
+            });
+            pa.status = 'done';
+            addLog('success', `↑ video "${baseName}" → ${accId} :: ${vidId}`);
+            if (accId === primaryAcc) {
+              u.videoId = vidId;  // legacy mirror
+              primaryResults.push({ name: baseName, videoId: vidId });
+            }
+          } else {
+            const hash = await uploadImage(accId, files[i]);
+            pa.hash = hash;
+            pa.status = 'done';
+            addLog('success', `↑ image "${baseName}" → ${accId} :: ${hash.slice(0, 16)}…`);
+            if (accId === primaryAcc) {
+              u.imageHash = hash;  // legacy mirror
+              primaryResults.push({ name: baseName, imageHash: hash });
+            }
+          }
+          anyOk = true;
+        } catch (e) {
+          pa.status = 'error';
+          pa.error = e.message;
+          pa.errorDetails = (e instanceof CUError) ? e.details : { message: e.message };
+          if (accId === primaryAcc) {
+            u.error = e.message;
+            u.errorDetails = pa.errorDetails;
+          }
+          addLog('error', `↑ FAIL "${files[i].name}" → ${accId}: ${e.message}`);
+          anyErr = true;
         }
-      } catch (e) {
-        u.status = 'error';
-        u.error = e.message;
-        u.errorDetails = (e instanceof CUError) ? e.details : { message: e.message };
-        addLog('error', `↑ FAIL "${files[i].name}": ${e.message}`);
+        await sleep(200);
       }
+      // Aggregate row status: prefer most informative state.
+      u.status = anyErr && !anyOk ? 'error' : anyErr ? 'partial' : 'done';
       render();
-      await sleep(200);
     }
 
-    // Auto-pair: videos + images with same base name → image becomes thumbnail, image removed as standalone ad
+    // Auto-pair videos + images with same base name (uses primary account's results — the
+    // launch loop maps thumbnail by base name on each account from perAccount).
     let pairedCount = 0;
-    const videos = results.filter(r => r.videoId);
-    const images = results.filter(r => r.imageHash);
+    const videos = primaryResults.filter(r => r.videoId);
+    const images = primaryResults.filter(r => r.imageHash);
     const consumedImageNames = new Set();
     for (const v of videos) {
       const match = images.find(img => img.name === v.name && !consumedImageNames.has(img.name));
@@ -765,26 +874,33 @@
         addLog('info', `🔗 paired: ${v.name}.mp4 ← ${v.name}.jpg as thumbnail`);
       }
     }
-    const finalResults = results.filter(r => !(r.imageHash && consumedImageNames.has(r.name)));
+    const finalResults = primaryResults.filter(r => !(r.imageHash && consumedImageNames.has(r.name)));
 
-    // Merge into creatives textarea
     if (finalResults.length) {
       const json = JSON.stringify(finalResults, null, 2);
       state.creativesInput = json;
       state.creativesParsed = parseCreatives(json);
     }
     state.uploading = false;
+    const okCount = state.uploads.filter(u => u.status === 'done').length;
+    const partialCount = state.uploads.filter(u => u.status === 'partial').length;
     const pairedSuffix = pairedCount ? ` · ${pairedCount} thumbnail${pairedCount > 1 ? 's' : ''} paired` : '';
-    setStatus(finalResults.length ? 'success' : 'warning',
-      `Upload done: ${results.length}/${files.length} successful${pairedSuffix}. ${finalResults.length ? 'Creatives auto-populated.' : ''}`);
+    const accSuffix = accIds.length > 1 ? ` across ${accIds.length} accounts` : '';
+    const partialSuffix = partialCount ? ` · ${partialCount} partial` : '';
+    setStatus(okCount ? (partialCount ? 'warning' : 'success') : 'error',
+      `Upload done: ${okCount}/${files.length} fully successful${partialSuffix}${accSuffix}${pairedSuffix}.`);
     render();
   }
 
-  // ─── PAGES LOADER (for selected account) ────────────────────────────────
+  // ─── PAGES LOADER (v0.6: per-account, cached) ───────────────────────────
   async function loadPagesForAccount(accId) {
-    if (!accId) { state.pagesList = []; render(); return; }
+    if (!accId) return;
+    if (state.pagesByAccount[accId]) {
+      state.pagesList = state.pagesByAccount[accId];
+      render();
+      return;
+    }
     state.pagesLoading = true;
-    state.pagesList = [];
     render();
     const found = new Map();
     // Primary: pages connected to this ad account (most accurate)
@@ -793,9 +909,9 @@
       items.forEach(p => found.set(String(p.id), p.name || 'Untitled'));
       if (items.length) addLog('info', `Pages (promote_pages): ${items.length} for ${accId}`);
     } catch (e) {
-      addLog('warning', `promote_pages failed: ${e.message}`);
+      addLog('warning', `promote_pages failed (${accId}): ${e.message}`);
     }
-    // Fallback: pages owned by user (broader pool, may include some not connected)
+    // Fallback: pages owned by user (broader pool; only used if no account-bound pages found).
     if (!found.size) {
       try {
         const items = await apiAll('/me/accounts', { fields: 'id,name', limit: 100 });
@@ -805,7 +921,9 @@
         addLog('warning', `/me/accounts failed: ${e.message}`);
       }
     }
-    state.pagesList = [...found.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+    const list = [...found.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+    state.pagesByAccount[accId] = list;
+    if (state.targetAccIds[0] === accId) state.pagesList = list;
     state.pagesLoading = false;
     render();
   }
@@ -1134,6 +1252,33 @@
     return { imageHash: csvImage, videoId: csvVideo };
   }
 
+  // v0.6: remap a creative reference (which always points to the PRIMARY account's
+  // upload result) to the equivalent hash/videoId in another account. For single-
+  // account launches or when no uploads exist this is a passthrough — important so
+  // legacy flows where the user pastes raw hashes still work.
+  // Returns { imageHash, videoId, remapFailed?: <uploadName> } — remapFailed means
+  // we found a matching upload entry but its per-account result isn't ready, so
+  // the launch loop should skip the ad and log it instead of sending a bad hash.
+  function remapCreativeForAccount(imageHash, videoId, accId) {
+    if (!accId || state.targetAccIds.length <= 1 || state.targetAccIds[0] === accId) {
+      return { imageHash, videoId };
+    }
+    if (!state.uploads?.length) return { imageHash, videoId };
+    const u = state.uploads.find(u =>
+      (imageHash && u.imageHash === imageHash) ||
+      (videoId && u.videoId === videoId)
+    );
+    if (!u) return { imageHash, videoId };  // pasted ref unrelated to any upload → leave it
+    const pa = u.perAccount?.[accId];
+    if (!pa || pa.status !== 'done') {
+      return { imageHash: '', videoId: '', remapFailed: u.name };
+    }
+    return {
+      imageHash: imageHash && pa.hash ? pa.hash : '',
+      videoId: videoId && pa.videoId ? pa.videoId : '',
+    };
+  }
+
   function transformUrlTags(raw, accId, adName) {
     if (!raw) return raw;
     const target = String(state.urlTagParam || '').trim();
@@ -1219,9 +1364,12 @@
   }
 
   // ─── LAUNCHER ───────────────────────────────────────────────────────────
+  // v0.6: orchestrator — pre-flight CSV-wide checks once, then run the per-account
+  // pipeline for each selected account sequentially. For single-account this still
+  // produces exactly one campaign; for N accounts it produces N independent campaigns.
   async function runLaunch() {
     if (!state.rows.length) { setStatus('error', 'Load a CSV first.'); return; }
-    if (!state.targetAccId) { setStatus('error', 'Select a target ad account.'); return; }
+    if (!state.targetAccIds.length) { setStatus('error', 'Select at least one target ad account.'); return; }
     const plan = analyzePlan();
     if (!plan) { setStatus('error', 'Cannot analyze plan from CSV.'); return; }
 
@@ -1231,7 +1379,7 @@
       return;
     }
 
-    // Pre-flight: validate Page ID
+    // Pre-flight: validate Page ID (against PRIMARY account's list — same value sent to every account)
     if (state.pageIdOverride) {
       if (!/^\d{10,20}$/.test(state.pageIdOverride)) {
         setStatus('error', `Invalid Page ID "${state.pageIdOverride}". Must be 10-20 digits. Pick from dropdown in step 3.`);
@@ -1239,9 +1387,9 @@
       }
       if (state.pagesList.length && !state.pagesList.find(p => p.id === state.pageIdOverride)) {
         const ok = confirm(
-          `Page ${state.pageIdOverride} is NOT in this account's page list.\n\n` +
+          `Page ${state.pageIdOverride} is NOT in the primary account's page list.\n\n` +
           `Available pages:\n${state.pagesList.slice(0, 5).map(p => `  ${p.id} — ${p.name}`).join('\n')}\n\n` +
-          `Launch anyway? (FB may reject all ads with subcode 1815813)`
+          `Launch anyway? (FB may reject ads with subcode 1815813)`
         );
         if (!ok) { setStatus('warning', 'Launch cancelled. Pick a page from the dropdown in step 3.'); return; }
       }
@@ -1259,29 +1407,63 @@
       setStatus('error', `Invalid pixel ID "${effectivePixel}". Must be 8-20 digits (e.g. 1451350725476785). Got placeholder or wrong format. Set override in step 4.`);
       return;
     }
-    // Sanity check: pixel should be in account's pixel list if list was loaded
     if (state.pixelsList.length && !state.pixelsList.find(p => p.id === effectivePixel)) {
       const ok = confirm(
-        `Pixel ${effectivePixel} is NOT in this account's pixel list.\n\n` +
+        `Pixel ${effectivePixel} is NOT in the primary account's pixel list.\n\n` +
         `Available pixels:\n${state.pixelsList.slice(0, 5).map(p => `  ${p.id} — ${p.name}`).join('\n')}\n\n` +
-        `Launch anyway? (FB may reject all adsets with subcode 1487429)`
+        `Launch anyway? (FB may reject adsets with subcode 1487429)`
       );
       if (!ok) { setStatus('warning', 'Launch cancelled. Pick a pixel from the dropdown in step 4.'); return; }
     }
 
-    const accId = state.targetAccId;
-    const acc = ACCOUNTS.find(a => a.id === accId);
-    const accLabel = acc?.name || accId;
     const now = new Date();
     const dateStr = String(now.getMonth() + 1).padStart(2, '0')
       + String(now.getDate()).padStart(2, '0')
       + String(now.getFullYear()).slice(-2);
-    const firstRow = state.rows[0];
-    const totalUnits = 1 + plan.adsetCount + plan.adCount;
+    const accIds = state.targetAccIds.slice();
+    // Total units = N accounts × (campaign + adsets + ads)
+    const perAccountUnits = 1 + plan.adsetCount + plan.adCount;
+    const totalUnits = perAccountUnits * accIds.length;
 
     state.running = true;
     state.log = [];
     state.progress = { done: 0, total: totalUnits };
+    render();
+
+    if (accIds.length > 1) {
+      addLog('info', `🌐 Multi-account launch: ${accIds.length} accounts × ${plan.adsetCount} adsets × ${plan.adCount} ads = ${totalUnits} ops`);
+    }
+
+    let okAccounts = 0, errAccounts = 0;
+    for (const accId of accIds) {
+      try {
+        const ok = await runLaunchForAccount(accId, plan, dateStr);
+        if (ok) okAccounts++; else errAccounts++;
+      } catch (e) {
+        errAccounts++;
+        addLog('error', `[${accId}] launch failed: ${e.message}`);
+      }
+    }
+
+    state.running = false;
+    if (accIds.length > 1) {
+      const summary = errAccounts
+        ? `Multi-account done: ${okAccounts}/${accIds.length} accounts succeeded, ${errAccounts} failed.`
+        : `🎉 Multi-account done: all ${okAccounts} accounts launched successfully.`;
+      setStatus(errAccounts ? 'warning' : 'success', summary);
+    }
+    // v0.5.3: auto-save preset only when EVERY account succeeded.
+    if (state.autoSavePreset && !errAccounts && okAccounts > 0) autoSavePresetSilent();
+    render();
+  }
+
+  // v0.6: extracted per-account pipeline. Same logic that runLaunch had before,
+  // now keyed off the accId param instead of state.targetAccId. Returns true on
+  // full success, false on any ad-level error inside this account.
+  async function runLaunchForAccount(accId, plan, dateStr) {
+    const acc = ACCOUNTS.find(a => a.id === accId);
+    const accLabel = acc?.name || accId;
+    const firstRow = state.rows[0];
 
     const sacLabel = plan.sacList.length ? ` SAC:${plan.sacList[0]}` : '';
     const budgetLabel = plan.isCBO ? `CBO $${plan.cboBudget}/d` : `ABO $${plan.aboTotal}/d total`;
@@ -1328,9 +1510,9 @@
       addLog('success', `[${accLabel}] ✓ campaign id=${campaignId}`);
     } catch (e) {
       addLog('error', `[${accLabel}] ✗ campaign failed: ${e.message}`);
-      state.running = false;
-      setStatus('error', `Launch failed at campaign step. See log.`);
-      return;
+      // Don't stop multi-account run on one campaign failure; the orchestrator
+      // aggregates per-account results and reports them at the end.
+      return false;
     }
 
     // ── Adsets + Ads (loop) ──
@@ -1511,6 +1693,17 @@
             imageHash = resolved.imageHash;
             videoId = resolved.videoId;
           }
+          // v0.6: remap to per-account hash/videoId for multi-account launches.
+          const remap = remapCreativeForAccount(imageHash, videoId, accId);
+          if (remap.remapFailed) {
+            totalAdErr++;
+            state.progress.done++;
+            addLog('error', `[${accLabel}] ✗ ad "${adName}": creative "${remap.remapFailed}" not uploaded to this account, skipped`);
+            adGlobalIdx++;
+            continue;
+          }
+          imageHash = remap.imageHash;
+          videoId = remap.videoId;
 
           // Resolve copy text — priority: per-item (ads-mode JSON) > UI override > CSV row
           const itemTitle = adInfo.forcedItem?.title || null;
@@ -1523,7 +1716,12 @@
           const objectStorySpec = { page_id: pageId };
           if (videoId) {
             // Thumbnail priority: per-item thumbnailHash (from upload pairing or JSON) > FB auto-thumbnail
-            const itemThumb = adInfo.forcedItem?.thumbnailHash || null;
+            let itemThumb = adInfo.forcedItem?.thumbnailHash || null;
+            // v0.6: remap thumbnail hash for non-primary accounts.
+            if (itemThumb) {
+              const thumbRemap = remapCreativeForAccount(itemThumb, '', accId);
+              itemThumb = thumbRemap.remapFailed ? null : (thumbRemap.imageHash || itemThumb);
+            }
             objectStorySpec.video_data = {
               video_id: videoId,
               call_to_action: { type: cta, value: { link } },
@@ -1583,13 +1781,21 @@
       }
     }
 
-    state.running = false;
     const okMsg = totalAdErr
-      ? `Done with errors: ${totalAdOk}/${plan.adCount} ads succeeded, ${totalAdErr} failed.`
-      : `Done. ${totalAdOk}/${plan.adCount} ads created. All ${state.createStatus}.`;
-    setStatus(totalAdErr ? 'warning' : 'success', okMsg);
-    if (state.autoSavePreset && !totalAdErr && totalAdOk > 0) autoSavePresetSilent();
+      ? `[${accLabel}] Done with errors: ${totalAdOk}/${plan.adCount} ads succeeded, ${totalAdErr} failed.`
+      : `[${accLabel}] ✓ ${totalAdOk}/${plan.adCount} ads created (${state.createStatus}).`;
+    // For single-account launches we mirror status here so existing UX feels the same;
+    // multi-account aggregates a single status message after the loop.
+    if (state.targetAccIds.length === 1) {
+      setStatus(totalAdErr ? 'warning' : 'success', okMsg);
+      // v0.5.3 auto-save lives here only for single-account; multi-account version
+      // is handled inside the orchestrator so it triggers exactly once.
+      if (state.autoSavePreset && !totalAdErr && totalAdOk > 0) autoSavePresetSilent();
+    } else {
+      addLog(totalAdErr ? 'warning' : 'success', okMsg);
+    }
     render();
+    return !totalAdErr;
   }
 
   // ─── UI PANEL ───────────────────────────────────────────────────────────
@@ -1714,11 +1920,10 @@
       ? ACCOUNTS.filter(a => a.name.toLowerCase().includes(accFilter) || a.id.includes(accFilter) || a.bm.toLowerCase().includes(accFilter))
       : ACCOUNTS;
 
-    const accOptions = visibleAccs.length
-      ? ['<option value="">— select account —</option>',
-         ...visibleAccs.map(a => `<option value="${a.id}" ${state.targetAccId === a.id ? 'selected' : ''}>${esc(a.bm)} · ${esc(a.label)}</option>`)
-        ].join('')
-      : '<option value="">No accounts loaded</option>';
+    const selectedAccs = state.targetAccIds.map(id => ACCOUNTS.find(a => a.id === id)).filter(Boolean);
+    const hasAccounts = state.targetAccIds.length > 0;
+    const isMulti = state.targetAccIds.length > 1;
+    const primaryAcc = state.targetAccIds[0];
 
     // Effective pixel: override > CSV
     const effPixel = state.pixelOverride || plan?.pixel || '';
@@ -1739,20 +1944,25 @@
     let blockReason = '';
     if (state.running) blockReason = `Running ${state.progress.done}/${state.progress.total}...`;
     else if (!state.rows.length) blockReason = '⬆ Load CSV first (step 1)';
-    else if (!state.targetAccId) blockReason = '⬆ Select target account (step 2)';
+    else if (!hasAccounts) blockReason = '⬆ Select at least one target account (step 2)';
     else if (!state.pageIdOverride && !state.rows.some(r => r['Link Object ID'])) blockReason = '⬆ Set Page ID (step 3)';
     else if (state.pageIdOverride && !/^\d{10,20}$/.test(state.pageIdOverride)) blockReason = `⚠ Page ID "${state.pageIdOverride}" invalid (10-20 digits)`;
-    else if (state.pageIdOverride && state.pagesList.length && !state.pagesList.find(p => p.id === state.pageIdOverride)) blockReason = `⚠ Page ${state.pageIdOverride} not in this account`;
+    else if (state.pageIdOverride && state.pagesList.length && !state.pagesList.find(p => p.id === state.pageIdOverride)) blockReason = `⚠ Page ${state.pageIdOverride} not in primary account`;
     else if (!effPixel) blockReason = '⬆ Set Pixel (step 4)';
     else if (hasEuTargeting(state.rows) && !state.dsaBeneficiary) blockReason = '⚠ EU targeting — set DSA Beneficiary (step 5)';
     else if (!pixelValid) blockReason = `⚠ Pixel "${effPixel}" invalid format (8-20 digits)`;
-    else if (state.pixelsList.length && !pixelInAccount) blockReason = `⚠ Pixel ${effPixel} not in this account`;
+    else if (state.pixelsList.length && !pixelInAccount) blockReason = `⚠ Pixel ${effPixel} not in primary account`;
     const runDisabled = !!blockReason;
-    const buttonLabel = blockReason || `🚀 Launch ${plan?.adCount || 0} ads to ${esc(ACCOUNTS.find(a => a.id === state.targetAccId)?.name || 'account')}`;
+    const totalAds = plan?.adCount || 0;
+    const buttonLabel = blockReason
+      ? blockReason
+      : isMulti
+        ? `🚀 Launch ${totalAds} ads × ${state.targetAccIds.length} accounts (${totalAds * state.targetAccIds.length} ops)`
+        : `🚀 Launch ${totalAds} ads to ${esc(selectedAccs[0]?.name || 'account')}`;
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.5.3
+      <h2>🚀 FB Launcher v0.6.0
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -1795,19 +2005,38 @@
         <div style="margin-top:8px">
           <div style="font-size:11px;color:#94a3b8;margin-bottom:3px">Campaign name prefix (optional) <span style="color:#6e7681">— launcher appends "| ${plan?.isCBO ? 'CBO' : 'ABO'} $X/d | Nas Mads | MMDDYY | acc_id"</span></div>
           <input type="text" id="fbl-camp-prefix" value="${esc(state.campNamePrefix)}" placeholder="e.g. VERT | Multi | COLD TEST">
-          ${state.campNamePrefix && plan ? `<div style="font-size:10px;color:#22c55e;margin-top:3px;font-family:ui-monospace,monospace;word-break:break-all">Preview: ${esc(state.campNamePrefix)} | ${plan.isCBO ? 'CBO' : 'ABO'} $${plan.isCBO ? plan.cboBudget : plan.aboTotal}/d | ${plan.adsetCount}as${plan.adCount}ads | ${(() => { const n = new Date(); return String(n.getMonth()+1).padStart(2,'0') + String(n.getDate()).padStart(2,'0') + String(n.getFullYear()).slice(-2); })()} | ${esc(state.targetAccId || '<acc_id>')}</div>` : ''}
+          ${state.campNamePrefix && plan ? `<div style="font-size:10px;color:#22c55e;margin-top:3px;font-family:ui-monospace,monospace;word-break:break-all">Preview: ${esc(state.campNamePrefix)} | ${plan.isCBO ? 'CBO' : 'ABO'} $${plan.isCBO ? plan.cboBudget : plan.aboTotal}/d | ${plan.adsetCount}as${plan.adCount}ads | ${(() => { const n = new Date(); return String(n.getMonth()+1).padStart(2,'0') + String(n.getDate()).padStart(2,'0') + String(n.getFullYear()).slice(-2); })()} | ${esc(isMulti ? '<acc_id>' : (primaryAcc || '<acc_id>'))}</div>` : ''}
         </div>
       </div>
 
       ${previewHtml}
 
       <div class="field">
-        <label>2. Target account</label>
+        <label>2. Target accounts <span style="color:#6e7681">— ${hasAccounts ? `<b style="color:#22c55e">${state.targetAccIds.length} selected</b>` : 'pick one or more'}</span></label>
         <div class="row">
           <input type="text" id="fbl-acc-filter" placeholder="Filter by name, ID, BM..." value="${esc(state.accFilter)}" style="flex:2">
           <button id="fbl-reload-acc" ${accountsLoading ? 'disabled' : ''}>${accountsLoading ? '⏳' : '↻'}</button>
+          <button id="fbl-acc-toggle" title="Show/hide accounts list">${state.showAccountPicker ? '▼' : '▶'} List</button>
         </div>
-        <select id="fbl-acc-select" style="margin-top:5px">${accOptions}</select>
+        ${selectedAccs.length ? `
+        <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">
+          ${selectedAccs.map(a => `
+            <span style="background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.35);border-radius:12px;padding:2px 8px;font-size:11px;color:#d1fae5;display:inline-flex;align-items:center;gap:5px" title="${esc(a.id)} · BM: ${esc(a.bm)}">
+              ${esc(a.label)}
+              <button class="fbl-acc-remove" data-acc="${esc(a.id)}" style="background:none;border:none;color:#fca5a5;padding:0 2px;cursor:pointer;font-size:13px;line-height:1" title="Remove">✕</button>
+            </span>
+          `).join('')}
+        </div>` : ''}
+        ${state.showAccountPicker ? `
+        <div id="fbl-acc-list" style="margin-top:6px;max-height:240px;overflow:auto;border:1px solid #334155;border-radius:5px;background:#1e293b">
+          ${visibleAccs.length ? visibleAccs.map(a => {
+            const isSel = state.targetAccIds.includes(a.id);
+            return `<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;font-size:12px;${isSel ? 'background:rgba(34,197,94,.08)' : ''};border-bottom:1px solid #0f172a">
+              <input type="checkbox" class="fbl-acc-cb" data-acc="${esc(a.id)}" ${isSel ? 'checked' : ''}>
+              <span style="flex:1;color:#cbd5e1"><span style="color:#94a3b8">${esc(a.bm)}</span> · ${esc(a.label)} <span style="color:#64748b;font-size:10px">${esc(a.id)}</span></span>
+            </label>`;
+          }).join('') : '<div style="padding:8px 10px;color:#64748b;font-size:11px">No accounts match filter</div>'}
+        </div>` : ''}
       </div>
 
       <div class="field">
@@ -1853,13 +2082,14 @@
         <label>6. Creatives — upload files OR paste hashes/JSON <span style="color:#6e7681">— overrides CSV Image Hash &amp; Video ID</span></label>
         <div style="margin-bottom:8px">
           <div style="font-size:10px;color:#6e7681;margin-bottom:5px">💡 Upload <code>video1.mp4</code> + <code>video1.jpg</code> (same base name) → auto-pairs as video + thumbnail</div>
-          ${!state.targetAccId ? '<div style="font-size:11px;color:#fbbf24;padding:6px 8px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:5px;margin-bottom:5px">⚠ Select target account (step 3) before uploading</div>' : ''}
-          <div id="fbl-drop" style="border:2px dashed #334155;border-radius:8px;padding:20px 12px;text-align:center;cursor:${state.targetAccId && !state.uploading ? 'pointer' : 'not-allowed'};color:#475569;font-size:12px;user-select:none;transition:border-color .15s,background .15s;${state.targetAccId && !state.uploading ? '' : 'opacity:.5'}">
+          ${!hasAccounts ? '<div style="font-size:11px;color:#fbbf24;padding:6px 8px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:5px;margin-bottom:5px">⚠ Select at least one target account (step 2) before uploading</div>' : ''}
+          ${isMulti ? `<div style="font-size:11px;color:#22c55e;padding:6px 8px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);border-radius:5px;margin-bottom:5px">🌐 Multi-account: each file will be uploaded into all ${state.targetAccIds.length} selected accounts (sequential)</div>` : ''}
+          <div id="fbl-drop" style="border:2px dashed #334155;border-radius:8px;padding:20px 12px;text-align:center;cursor:${hasAccounts && !state.uploading ? 'pointer' : 'not-allowed'};color:#475569;font-size:12px;user-select:none;transition:border-color .15s,background .15s;${hasAccounts && !state.uploading ? '' : 'opacity:.5'}">
             <div style="font-size:13px;font-weight:600;letter-spacing:2px;margin-bottom:4px;color:#475569">[ DROP ZONE ]</div>
             Drop images or videos here<br>
             <span style="font-size:10px;color:#334155">PNG / JPG / MP4 / MOV — or click to browse</span>
           </div>
-          <input type="file" id="fbl-upload-files" multiple accept="image/*,video/*" ${!state.targetAccId || state.uploading ? 'disabled' : ''} style="display:none">
+          <input type="file" id="fbl-upload-files" multiple accept="image/*,video/*" ${!hasAccounts || state.uploading ? 'disabled' : ''} style="display:none">
           ${state.uploads.length ? `<div style="margin-top:8px;display:flex;flex-direction:column;gap:4px">${state.uploads.map((u, idx) => {
             const fmtSize = (b) => b < 1024 ? b + 'B' : b < 1048576 ? (b/1024).toFixed(0)+'KB' : (b/1048576).toFixed(1)+'MB';
             const iconBg = u.type === 'video' ? '#c084fc' : '#60a5fa';
@@ -2190,18 +2420,19 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       e.target.value = '';
     });
     if (dropZone) {
+      const accReady = () => state.targetAccIds.length > 0;
       dropZone.addEventListener('click', () => {
-        if (state.targetAccId && !state.uploading) uploadInput?.click();
+        if (accReady() && !state.uploading) uploadInput?.click();
       });
       dropZone.addEventListener('dragover', e => {
         e.preventDefault();
-        if (state.targetAccId && !state.uploading) dropZone.classList.add('over');
+        if (accReady() && !state.uploading) dropZone.classList.add('over');
       });
       dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
       dropZone.addEventListener('drop', e => {
         e.preventDefault();
         dropZone.classList.remove('over');
-        if (!state.targetAccId || state.uploading) return;
+        if (!accReady() || state.uploading) return;
         const files = Array.from(e.dataTransfer?.files || []);
         if (files.length) runUploads(files);
       });
@@ -2221,17 +2452,22 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       state.accFilter = e.target.value;
       render();
     });
-    document.getElementById('fbl-acc-select')?.addEventListener('change', e => {
-      state.targetAccId = e.target.value;
-      state.pixelsList = [];
-      state.pixelOverride = '';
-      state.pagesList = [];
-      state.pageIdOverride = '';
+    // v0.6: multi-select account picker.
+    document.getElementById('fbl-acc-toggle')?.addEventListener('click', () => {
+      state.showAccountPicker = !state.showAccountPicker;
       render();
-      if (state.targetAccId) {
-        loadPixelsForAccount(state.targetAccId);
-        loadPagesForAccount(state.targetAccId);
-      }
+    });
+    panel.querySelectorAll('.fbl-acc-cb').forEach(cb => {
+      cb.addEventListener('change', e => {
+        const accId = e.target.dataset.acc;
+        toggleAccount(accId);
+      });
+    });
+    panel.querySelectorAll('.fbl-acc-remove').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        toggleAccount(btn.dataset.acc);
+      });
     });
     document.getElementById('fbl-page-select')?.addEventListener('change', e => {
       state.pageIdOverride = e.target.value;
