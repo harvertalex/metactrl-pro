@@ -79,6 +79,33 @@
   }[m]));
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const stripPfx = v => String(v || '').replace(/^[a-z]+:/, '');
+
+  // v0.5.2: locale-aware numeric parse — handles EU "520,99" / "1.234,56" alongside US "520.99" / "1,234.56".
+  // Power Editor exports use the OS locale of whoever clicked Export, so a single launcher
+  // sees both flavors. JS `+"520,99"` returns NaN and we silently treated it as 0 → budgets dropped.
+  function parseNum(v) {
+    if (v == null) return NaN;
+    let s = String(v).trim();
+    if (!s) return NaN;
+    // Strip currency symbols / whitespace / non-numeric prefixes that may leak from the source
+    s = s.replace(/[^\d.,\-]/g, '');
+    if (!s) return NaN;
+    const lastDot = s.lastIndexOf('.');
+    const lastComma = s.lastIndexOf(',');
+    if (lastDot >= 0 && lastComma >= 0) {
+      // Both present → rightmost is decimal separator, the other is thousands.
+      if (lastComma > lastDot) return +s.replace(/\./g, '').replace(',', '.');
+      return +s.replace(/,/g, '');
+    }
+    if (lastComma >= 0) {
+      // Only comma. If exactly 3 digits follow it (e.g. "1,234") treat as US thousands;
+      // otherwise it's an EU decimal ("520,99" / "5,5").
+      const after = s.length - lastComma - 1;
+      if (after === 3 && !/^,/.test(s)) return +s.replace(/,/g, '');
+      return +s.replace(',', '.');
+    }
+    return +s;
+  }
   const SC = { info:'#3b82f6', success:'#22c55e', error:'#ef4444', warning:'#f59e0b' };
 
   function setStatus(type, text) { state.status = { type, text }; render(); }
@@ -842,8 +869,9 @@
     // Budget mode
     const campBudgetRaw = String(first['Campaign Daily Budget'] || '').trim();
     const adsetBudgetRaw = String(first['Ad Set Daily Budget'] || '').trim();
-    const isCBO = !!campBudgetRaw && campBudgetRaw.toUpperCase() !== 'UNDEFINED' && +campBudgetRaw > 0;
-    const cboBudget = isCBO ? +campBudgetRaw : 0;
+    const campBudgetNum = parseNum(campBudgetRaw);
+    const isCBO = !!campBudgetRaw && campBudgetRaw.toUpperCase() !== 'UNDEFINED' && campBudgetNum > 0;
+    const cboBudget = isCBO ? campBudgetNum : 0;
 
     // SAC
     const sacRaw = String(first['Special Ad Categories'] || 'NONE').trim().toUpperCase();
@@ -862,7 +890,7 @@
     if (!isCBO) {
       for (const [, gr] of groups) {
         const ab = String(gr[0]['Ad Set Daily Budget'] || '').trim();
-        const n = (ab && ab.toUpperCase() !== 'UNDEFINED') ? +ab : 0;
+        const n = (ab && ab.toUpperCase() !== 'UNDEFINED') ? parseNum(ab) : 0;
         if (n > 0) aboTotal += n;
       }
     }
@@ -1266,9 +1294,13 @@
         status: state.createStatus,
         special_ad_categories: JSON.stringify(plan.sacList),
         buying_type: firstRow['Buying Type'] || 'AUCTION',
-        bid_strategy: mapBidStrategy(firstRow['Campaign Bid Strategy']),
       };
-      if (plan.isCBO) campBody.daily_budget = String(Math.round(plan.cboBudget * 100));
+      // v0.5.1: bid_strategy only on CBO campaign-level. For ABO it lives on adset-level —
+      // sending it on a budget-less campaign trips FB error [100/1885737] "campaign budget not set".
+      if (plan.isCBO) {
+        campBody.daily_budget = String(Math.round(plan.cboBudget * 100));
+        campBody.bid_strategy = mapBidStrategy(firstRow['Campaign Bid Strategy']);
+      }
 
       addLog('info', `[${accLabel}] creating campaign "${campName}"...`);
       const camp = await apiFetch(`/act_${accId}/campaigns`, { method: 'POST', body: campBody });
@@ -1371,9 +1403,10 @@
       const promoted = { pixel_id: pixelId, custom_event_type: customEventType };
 
       const bidAmountRaw = aFirst['Bid Amount'];
+      const bidAmountNum = parseNum(bidAmountRaw);
       const bidNeedsCap = bidStrategy === 'COST_CAP' || bidStrategy === 'LOWEST_COST_WITH_BID_CAP';
-      const bidAmountCents = bidNeedsCap && bidAmountRaw && +bidAmountRaw > 0
-        ? String(Math.round(+bidAmountRaw * 100)) : null;
+      const bidAmountCents = bidNeedsCap && bidAmountNum > 0
+        ? String(Math.round(bidAmountNum * 100)) : null;
 
       const adsetBody = {
         name: adsetName,
@@ -1392,8 +1425,10 @@
       }
       if (!plan.isCBO) {
         const ab = String(aFirst['Ad Set Daily Budget'] || '').trim();
-        const abNum = (ab && ab.toUpperCase() !== 'UNDEFINED') ? +ab : 0;
+        const abNum = (ab && ab.toUpperCase() !== 'UNDEFINED') ? parseNum(ab) : 0;
         if (abNum > 0) adsetBody.daily_budget = String(Math.round(abNum * 100));
+        // v0.5.1: bid_strategy belongs on the adset for ABO. CBO inherits it from campaign.
+        adsetBody.bid_strategy = bidStrategy;
       }
       if (bidAmountCents) adsetBody.bid_amount = bidAmountCents;
 
@@ -1698,7 +1733,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.5.0
+      <h2>🚀 FB Launcher v0.5.2
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
