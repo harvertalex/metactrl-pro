@@ -58,6 +58,7 @@
     autoSavePreset: false,    // v0.5: when true, success launch creates a timestamped preset
     adsetAssignments: {},     // v0.4: { adsetName: [creativeIndex, ...] } — empty = all creatives go to all adsets
     showAssignments: false,   // v0.4: collapse state for per-adset assignment UI
+    matrixPaintValue: null,   // v0.5.3: paint-drag value (true=set, false=unset) while mouse button held over cells
     creativesInput: '',       // v0.2: raw user input (textarea)
     creativesParsed: null,    // v0.2: { mode: 'list'|'map'|'single', list?, map?, value? }
     creativesError: '',
@@ -461,6 +462,24 @@
     state.uploads = [];
     setStatus('success', `Loaded preset "${preset.name}". Upload fresh creatives and launch.`);
     render();
+  }
+
+  // v0.5.3: shared assignment mutator used by checkbox click, paint-drag, shift-click bulk,
+  // and the Clear/Fill buttons. `checked=true` adds the creative idx, `false` removes it.
+  // Maintains the "empty array = all selected" invariant of state.adsetAssignments.
+  function setAssignment(adsetName, idx, checked, totalCreatives) {
+    let arr = state.adsetAssignments[adsetName];
+    if (!arr) {
+      // First customization for this adset: start from the implicit "all" state.
+      arr = [];
+      for (let i = 0; i < totalCreatives; i++) arr.push(i);
+      state.adsetAssignments[adsetName] = arr;
+    }
+    const pos = arr.indexOf(idx);
+    if (checked && pos === -1) arr.push(idx);
+    else if (!checked && pos !== -1) arr.splice(pos, 1);
+    // Renormalize: if all checked again, drop the per-adset entry (back to default).
+    if (arr.length === totalCreatives) delete state.adsetAssignments[adsetName];
   }
 
   function deletePreset() {
@@ -1733,7 +1752,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.5.2
+      <h2>🚀 FB Launcher v0.5.3
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -1901,13 +1920,15 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
           <span style="color:#6e7681">— ${Object.keys(state.adsetAssignments).length ? `${Object.keys(state.adsetAssignments).length} adset(s) customized` : 'all creatives → all adsets'}</span>
         </label>
         ${state.showAssignments ? `
-        <div style="margin-top:8px;font-size:11px;color:#94a3b8">Check which creatives to use per adset. Uncheck all = use all creatives (default).</div>
-        <div id="fbl-matrix-scroll" style="margin-top:6px;max-height:280px;overflow:auto;border:1px solid #334155;border-radius:5px">
+        <div style="margin-top:8px;font-size:11px;color:#94a3b8">
+          Click+drag to paint cells · Shift+click column/row header to toggle whole column/row · Use buttons below for bulk actions.
+        </div>
+        <div id="fbl-matrix-scroll" style="margin-top:6px;max-height:280px;overflow:auto;border:1px solid #334155;border-radius:5px;user-select:none">
           <table style="border-collapse:collapse;font-size:11px;min-width:100%">
             <thead style="position:sticky;top:0;background:#1e293b;z-index:2">
               <tr>
-                <th style="text-align:left;padding:5px 8px;border-bottom:1px solid #334155;color:#94a3b8;font-weight:600;position:sticky;left:0;background:#1e293b;z-index:3;min-width:180px">Adset</th>
-                ${plan.adsModeItems.map((it, i) => `<th style="padding:5px 6px;border-bottom:1px solid #334155;border-left:1px solid #334155;color:${it.videoId ? '#c084fc' : '#60a5fa'};font-weight:600;font-size:10px;text-align:center;white-space:nowrap" title="${esc(it.name)}">${esc(it.name.length > 14 ? it.name.slice(0, 14) + '…' : it.name)}</th>`).join('')}
+                <th style="text-align:left;padding:5px 8px;border-bottom:1px solid #334155;color:#94a3b8;font-weight:600;position:sticky;left:0;background:#1e293b;z-index:3;min-width:180px">Adset <span style="color:#64748b;font-weight:400">(shift+click = whole row)</span></th>
+                ${plan.adsModeItems.map((it, i) => `<th class="fbl-col-header" data-col="${i}" style="padding:5px 6px;border-bottom:1px solid #334155;border-left:1px solid #334155;color:${it.videoId ? '#c084fc' : '#60a5fa'};font-weight:600;font-size:10px;text-align:center;white-space:nowrap;cursor:pointer" title="Shift+click to toggle whole column: ${esc(it.name)}">${esc(it.name.length > 14 ? it.name.slice(0, 14) + '…' : it.name)}</th>`).join('')}
               </tr>
             </thead>
             <tbody>
@@ -1915,18 +1936,20 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
                 const assigned = state.adsetAssignments[adsetName] || [];
                 const allChecked = assigned.length === 0; // empty = all
                 return `<tr>
-                  <td style="padding:5px 8px;border-bottom:1px solid #1e293b;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:sticky;left:0;background:#0f172a;z-index:1;max-width:220px" title="${esc(adsetName)}">${esc(adsetName)}</td>
+                  <td class="fbl-row-header" data-adset="${esc(adsetName)}" style="padding:5px 8px;border-bottom:1px solid #1e293b;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:sticky;left:0;background:#0f172a;z-index:1;max-width:220px;cursor:pointer" title="Shift+click to toggle whole row: ${esc(adsetName)}">${esc(adsetName)}</td>
                   ${plan.adsModeItems.map((_, i) => {
                     const checked = allChecked || assigned.includes(i);
-                    return `<td style="padding:3px 6px;border-bottom:1px solid #1e293b;border-left:1px solid #1e293b;text-align:center"><input type="checkbox" class="fbl-assign-cb" data-adset="${esc(adsetName)}" data-idx="${i}" ${checked ? 'checked' : ''} style="cursor:pointer"></td>`;
+                    return `<td class="fbl-assign-cell" data-adset="${esc(adsetName)}" data-idx="${i}" style="padding:3px 6px;border-bottom:1px solid #1e293b;border-left:1px solid #1e293b;text-align:center;cursor:pointer;background:${checked ? 'rgba(34,197,94,.12)' : 'transparent'}"><input type="checkbox" class="fbl-assign-cb" data-adset="${esc(adsetName)}" data-idx="${i}" ${checked ? 'checked' : ''} style="pointer-events:none"></td>`;
                   }).join('')}
                 </tr>`;
               }).join('')}
             </tbody>
           </table>
         </div>
-        <div style="margin-top:6px;display:flex;gap:5px">
-          <button id="fbl-assign-reset" style="font-size:11px;padding:3px 8px">Reset (all → all)</button>
+        <div style="margin-top:6px;display:flex;gap:5px;flex-wrap:wrap">
+          <button id="fbl-assign-fill" style="font-size:11px;padding:3px 8px">✓ Fill all</button>
+          <button id="fbl-assign-clear" style="font-size:11px;padding:3px 8px">○ Clear all</button>
+          <button id="fbl-assign-reset" style="font-size:11px;padding:3px 8px" title="Drops all per-adset customization → defaults to 'all creatives to all adsets'">↺ Reset to default</button>
         </div>
         ` : ''}
       </div>` : ''}
@@ -2051,7 +2074,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       if (f) importPresets(f);
       e.target.value = '';  // allow re-import same file
     });
-    // Per-adset assignment
+    // Per-adset assignment (v0.5.3: paint-drag + shift+click + bulk buttons)
     document.getElementById('fbl-assign-toggle')?.addEventListener('click', () => {
       state.showAssignments = !state.showAssignments;
       render();
@@ -2060,27 +2083,99 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       state.adsetAssignments = {};
       render();
     });
-    panel.querySelectorAll('.fbl-assign-cb').forEach(cb => {
-      cb.addEventListener('change', e => {
-        const adsetName = e.target.dataset.adset;
-        const idx = +e.target.dataset.idx;
-        if (!state.adsetAssignments[adsetName]) {
-          // First customization: initialize with all currently checked indices (which is all minus this one if unchecking)
-          const plan = analyzePlan();
-          if (plan?.adsMode) {
-            state.adsetAssignments[adsetName] = plan.adsModeItems.map((_, i) => i);
-          }
+
+    // Bulk Clear / Fill — operate on every adset in plan.
+    const bulkApply = (allOn) => {
+      const p = analyzePlan();
+      if (!p?.adsMode) return;
+      const total = p.adsModeItems.length;
+      const adsets = [...p.groups.keys()];
+      for (const adsetName of adsets) {
+        if (allOn) {
+          delete state.adsetAssignments[adsetName];  // empty = all
+        } else {
+          state.adsetAssignments[adsetName] = [];  // explicit empty = none
         }
-        const arr = state.adsetAssignments[adsetName];
-        const pos = arr.indexOf(idx);
-        if (e.target.checked && pos === -1) arr.push(idx);
-        else if (!e.target.checked && pos !== -1) arr.splice(pos, 1);
-        // If all checked now match the full list length, clear (=default "all")
-        const plan2 = analyzePlan();
-        if (plan2 && arr.length === plan2.adsModeItems.length) {
-          delete state.adsetAssignments[adsetName];
-        }
+      }
+      // If clearing, we keep [] entries so the user can see they're customized.
+      // If filling, we drop entries so state stays clean.
+      render();
+    };
+    document.getElementById('fbl-assign-fill')?.addEventListener('click', () => bulkApply(true));
+    document.getElementById('fbl-assign-clear')?.addEventListener('click', () => bulkApply(false));
+
+    // Helper: is a cell currently checked? Reads state directly so paint-drag sees fresh values.
+    const isCellChecked = (adsetName, idx, total) => {
+      const arr = state.adsetAssignments[adsetName];
+      if (!arr) return true;       // implicit "all"
+      return arr.includes(idx);
+    };
+
+    // Shift+click on column header → toggle whole column. Determines new value from the first row.
+    panel.querySelectorAll('.fbl-col-header').forEach(th => {
+      th.addEventListener('click', e => {
+        if (!e.shiftKey) return;
+        const p = analyzePlan();
+        if (!p?.adsMode) return;
+        const idx = +th.dataset.col;
+        const total = p.adsModeItems.length;
+        const adsets = [...p.groups.keys()];
+        const anyChecked = adsets.some(a => isCellChecked(a, idx, total));
+        const newVal = !anyChecked;  // if all unchecked → check all, otherwise uncheck all
+        for (const a of adsets) setAssignment(a, idx, newVal, total);
         render();
+      });
+    });
+
+    // Shift+click on row header → toggle whole row.
+    panel.querySelectorAll('.fbl-row-header').forEach(td => {
+      td.addEventListener('click', e => {
+        if (!e.shiftKey) return;
+        const p = analyzePlan();
+        if (!p?.adsMode) return;
+        const adsetName = td.dataset.adset;
+        const total = p.adsModeItems.length;
+        const anyChecked = Array.from({ length: total }, (_, i) => isCellChecked(adsetName, i, total)).some(Boolean);
+        const newVal = !anyChecked;
+        for (let i = 0; i < total; i++) setAssignment(adsetName, i, newVal, total);
+        render();
+      });
+    });
+
+    // Paint-drag: mousedown sets the paint value (= opposite of current cell),
+    // mouseenter on other cells while button held applies the same value.
+    // During the drag we update DOM in-place (no full render) to keep it snappy —
+    // a synchronizing render() runs on mouseup. Excel-style; most intuitive at 5×5+.
+    const paintTotal = () => {
+      const p = analyzePlan();
+      return p?.adsMode ? p.adsModeItems.length : 0;
+    };
+    const paintCellInPlace = (td, checked) => {
+      td.style.background = checked ? 'rgba(34,197,94,.12)' : 'transparent';
+      const cb = td.querySelector('input.fbl-assign-cb');
+      if (cb) cb.checked = checked;
+    };
+    panel.querySelectorAll('.fbl-assign-cell').forEach(td => {
+      td.addEventListener('mousedown', e => {
+        e.preventDefault();
+        const total = paintTotal();
+        if (!total) return;
+        const adsetName = td.dataset.adset;
+        const idx = +td.dataset.idx;
+        const wasChecked = isCellChecked(adsetName, idx, total);
+        state.matrixPaintValue = !wasChecked;
+        setAssignment(adsetName, idx, state.matrixPaintValue, total);
+        paintCellInPlace(td, state.matrixPaintValue);
+      });
+      td.addEventListener('mouseenter', () => {
+        if (state.matrixPaintValue === null) return;
+        const total = paintTotal();
+        if (!total) return;
+        const adsetName = td.dataset.adset;
+        const idx = +td.dataset.idx;
+        if (isCellChecked(adsetName, idx, total) === state.matrixPaintValue) return;
+        setAssignment(adsetName, idx, state.matrixPaintValue, total);
+        paintCellInPlace(td, state.matrixPaintValue);
       });
     });
     document.getElementById('fbl-camp-prefix')?.addEventListener('input', e => {
@@ -2210,6 +2305,15 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
   createPanel();
   loadPresets();
   render();
+
+  // v0.5.3: end paint-drag on mouseup anywhere. One window-level listener that survives
+  // the panel's innerHTML rewrites in render(), so we don't re-attach it every time.
+  window.addEventListener('mouseup', () => {
+    if (state.matrixPaintValue !== null) {
+      state.matrixPaintValue = null;
+      render();  // sync UI (badges, preset state, etc.) after drag finishes
+    }
+  });
 
   TOKEN = await getToken();
   if (!TOKEN) {
