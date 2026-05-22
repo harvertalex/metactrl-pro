@@ -934,33 +934,63 @@
     render();
   }
 
-  // v0.6.2: fetch the Instagram actor connected to a Page. Used to auto-fill
-  // instagram_user_id when the user hasn't set an override and the CSV row's
-  // "Instagram Account ID" column is empty. Result is cached per page.
-  async function loadIgForPage(pageId) {
+  // v0.6.3: fetch the Instagram ACTOR ID (page-backed, used as instagram_user_id in ads API).
+  //
+  // History: v0.6.2 used /<page>?fields=connected_instagram_account.id which returns the
+  // IG Business Account ID (newer 178…-prefixed format). FB Marketing API's
+  // instagram_user_id field rejects that with code 100 "must be a valid Instagram
+  // account id" — it wants the legacy actor ID (the same value Power Editor exports
+  // with the "x:" prefix). The fix is to query endpoints that return ACTORS:
+  //   1. /<page_id>/instagram_accounts — IG actors connected to the page
+  //   2. /act_<account_id>/instagram_accounts — IG actors available in this ad account
+  // Both return items whose `id` is the actor format compatible with instagram_user_id.
+  async function loadIgForPage(pageId, accId) {
     if (!pageId) return '';
     if (pageId in state.pageIgMap) return state.pageIgMap[pageId]?.igId || '';
     if (state.pageIgLoading[pageId]) return '';
     state.pageIgLoading[pageId] = true;
+    let pageName = '';
     try {
-      // Try both fields — different BMs expose different ones.
-      const r = await apiFetch(`/${pageId}`, {
-        params: { fields: 'name,connected_instagram_account{id,username},instagram_business_account{id,username}' },
-      });
-      const ig = r?.connected_instagram_account || r?.instagram_business_account || null;
-      const entry = ig
-        ? { igId: String(ig.id), igName: ig.username || '', pageName: r?.name || '' }
-        : { igId: '', igName: '', pageName: r?.name || '' };
-      state.pageIgMap[pageId] = entry;
-      if (entry.igId) {
-        addLog('info', `🔗 IG for page ${pageId} (${entry.pageName}): ${entry.igId}${entry.igName ? ' @' + entry.igName : ''}`);
-      } else {
-        addLog('warning', `Page ${pageId} (${entry.pageName}) has no connected Instagram — FB will use default actor`);
+      try {
+        const r0 = await apiFetch(`/${pageId}`, { params: { fields: 'name' } });
+        pageName = r0?.name || '';
+      } catch {}
+
+      // 1) Actors connected to this page (correct format).
+      try {
+        const r = await apiFetch(`/${pageId}/instagram_accounts`, { params: { fields: 'id,username', limit: 5 } });
+        const item = r?.data?.[0];
+        if (item?.id) {
+          const entry = { igId: String(item.id), igName: item.username || '', pageName, source: 'page' };
+          state.pageIgMap[pageId] = entry;
+          addLog('info', `🔗 IG actor for page ${pageId} (${pageName}): ${entry.igId}${entry.igName ? ' @' + entry.igName : ''}`);
+          return entry.igId;
+        }
+      } catch (e) {
+        addLog('warning', `Page /instagram_accounts lookup failed: ${e.message}`);
       }
-      return entry.igId;
-    } catch (e) {
-      addLog('warning', `Could not fetch IG for page ${pageId}: ${e.message}`);
-      state.pageIgMap[pageId] = { igId: '', igName: '', pageName: '' };
+
+      // 2) Fallback: IG actors usable in the chosen ad account.
+      const fallbackAcc = accId || state.targetAccIds[0] || '';
+      if (fallbackAcc) {
+        try {
+          const r = await apiFetch(`/act_${fallbackAcc}/instagram_accounts`, { params: { fields: 'id,username', limit: 5 } });
+          const item = r?.data?.[0];
+          if (item?.id) {
+            const entry = { igId: String(item.id), igName: item.username || '', pageName, source: 'account' };
+            state.pageIgMap[pageId] = entry;
+            addLog('info', `🔗 IG actor from account ${fallbackAcc} (no actor on page): ${entry.igId}${entry.igName ? ' @' + entry.igName : ''}`);
+            return entry.igId;
+          }
+        } catch (e) {
+          addLog('warning', `Account /instagram_accounts lookup failed: ${e.message}`);
+        }
+      }
+
+      // 3) Nothing usable — leave field empty so we don't send a bad ID. FB will
+      // fall back to its default actor (matches pre-v0.6.1 behavior).
+      state.pageIgMap[pageId] = { igId: '', igName: '', pageName, source: 'none' };
+      addLog('warning', `No IG actor found for page ${pageId} (${pageName}) — instagram_user_id will be omitted, FB picks default`);
       return '';
     } finally {
       state.pageIgLoading[pageId] = false;
@@ -1762,7 +1792,7 @@
           // fetched here on demand for whatever page this ad ends up using).
           const csvIg = stripPfx(r['Instagram Account ID'] || '');
           let igId = state.instagramOverride || csvIg;
-          if (!igId && pageId) igId = await loadIgForPage(pageId);
+          if (!igId && pageId) igId = await loadIgForPage(pageId, accId);
           const objectStorySpec = { page_id: pageId };
           if (igId) objectStorySpec.instagram_user_id = igId;
           if (videoId) {
@@ -2013,7 +2043,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.6.2
+      <h2>🚀 FB Launcher v0.6.3
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -2113,9 +2143,10 @@
             return `<div style="font-size:11px;color:#6e7681;margin-top:4px">Override active — auto-detected (${esc(ig.igId || 'none')}) ignored</div>`;
           }
           if (ig.igId) {
-            return `<div style="font-size:11px;color:#22c55e;margin-top:4px">🔗 Auto-detected: <b>${esc(ig.igId)}</b>${ig.igName ? ` @${esc(ig.igName)}` : ''}${ig.pageName ? ` (Page: ${esc(ig.pageName)})` : ''} — used when CSV column is empty</div>`;
+            const srcLabel = ig.source === 'page' ? 'page actor' : ig.source === 'account' ? 'account actor' : 'detected';
+            return `<div style="font-size:11px;color:#22c55e;margin-top:4px">🔗 Auto-detected (${srcLabel}): <b>${esc(ig.igId)}</b>${ig.igName ? ` @${esc(ig.igName)}` : ''}${ig.pageName ? ` (Page: ${esc(ig.pageName)})` : ''} — used when CSV column is empty</div>`;
           }
-          return `<div style="font-size:11px;color:#fbbf24;margin-top:4px">⚠ Page ${esc(probePage)}${ig.pageName ? ` "${esc(ig.pageName)}"` : ''} has no connected Instagram — paste an IG ID above or FB will use its default actor</div>`;
+          return `<div style="font-size:11px;color:#fbbf24;margin-top:4px">⚠ No IG actor found for page ${esc(probePage)}${ig.pageName ? ` "${esc(ig.pageName)}"` : ''} — instagram_user_id will be omitted (FB uses default)</div>`;
         })()}
       </div>
 
