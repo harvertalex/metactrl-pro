@@ -55,6 +55,7 @@
     uploading: false,         // v0.3: true while batch upload in progress
     presets: [],              // v0.4: [{id, name, createdAt, csvText, fileName, settings:{...}}]
     selectedPresetId: '',     // v0.4: currently loaded preset
+    autoSavePreset: false,    // v0.5: when true, success launch creates a timestamped preset
     adsetAssignments: {},     // v0.4: { adsetName: [creativeIndex, ...] } — empty = all creatives go to all adsets
     showAssignments: false,   // v0.4: collapse state for per-adset assignment UI
     creativesInput: '',       // v0.2: raw user input (textarea)
@@ -445,6 +446,105 @@
     savePresetsToStorage();
     setStatus('info', `Preset "${preset.name}" deleted.`);
     render();
+  }
+
+  // v0.5: auto-save current state as preset after a successful launch.
+  // Name: "<prefix or fileName> | DD MMM HH:MM". Silent (no prompt, no render).
+  function autoSavePresetSilent() {
+    if (!state.rows.length) return;
+    const base = (state.campNamePrefix || state.fileName.replace(/\.[^.]+$/, '') || 'Launch').trim();
+    const d = new Date();
+    const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
+    const stamp = `${String(d.getDate()).padStart(2,'0')} ${mon} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    const name = `${base} | ${stamp}`;
+    const preset = {
+      id: 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+      name,
+      createdAt: d.toISOString(),
+      fileName: state.fileName,
+      csvText: JSON.stringify(state.rows),
+      auto: true,
+      settings: {
+        campNamePrefix: state.campNamePrefix,
+        linkOverride: state.linkOverride,
+        urlTagsOverride: state.urlTagsOverride,
+        titleOverride: state.titleOverride,
+        bodyOverride: state.bodyOverride,
+        ctaOverride: state.ctaOverride,
+        pixelOverride: state.pixelOverride,
+        customEventOverride: state.customEventOverride,
+        pageIdOverride: state.pageIdOverride,
+        dsaBeneficiary: state.dsaBeneficiary,
+        dsaPayer: state.dsaPayer,
+        urlTagParam: state.urlTagParam,
+        urlTagMode: state.urlTagMode,
+        urlTagCustom: state.urlTagCustom,
+        adsetAssignments: state.adsetAssignments,
+      },
+    };
+    state.presets.unshift(preset);
+    savePresetsToStorage();
+    addLog('info', `💾 Auto-saved preset "${name}"`);
+  }
+
+  // v0.5: export all presets to a JSON file the user can stash/share.
+  function exportPresets() {
+    if (!state.presets.length) { setStatus('warning', 'No presets to export.'); return; }
+    const payload = {
+      kind: 'fb-launcher-presets',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      count: state.presets.length,
+      presets: state.presets,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const d = new Date();
+    const stamp = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}_${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}`;
+    a.href = url;
+    a.download = `fb-launcher-presets_${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setStatus('success', `Exported ${state.presets.length} preset(s).`);
+  }
+
+  // v0.5: import presets from JSON. Merges by id; duplicates → renamed "(imported)".
+  function importPresets(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const data = JSON.parse(e.target.result);
+        const incoming = Array.isArray(data) ? data : (data && Array.isArray(data.presets) ? data.presets : null);
+        if (!incoming) throw new Error('JSON must be { presets: [...] } or [ ... ]');
+        const existingIds = new Set(state.presets.map(p => p.id));
+        const existingNames = new Set(state.presets.map(p => p.name));
+        let added = 0, skipped = 0, renamed = 0;
+        for (const p of incoming) {
+          if (!p || !p.id || !p.name || !p.settings) { skipped++; continue; }
+          if (existingIds.has(p.id)) { skipped++; continue; }
+          const clone = { ...p };
+          if (existingNames.has(clone.name)) { clone.name = `${clone.name} (imported)`; renamed++; }
+          state.presets.unshift(clone);
+          existingIds.add(clone.id);
+          existingNames.add(clone.name);
+          added++;
+        }
+        savePresetsToStorage();
+        const parts = [`+${added} added`];
+        if (renamed) parts.push(`${renamed} renamed`);
+        if (skipped) parts.push(`${skipped} skipped`);
+        setStatus(added ? 'success' : 'warning', `Import done: ${parts.join(', ')}.`);
+        render();
+      } catch (err) {
+        setStatus('error', `Import failed: ${err.message}`);
+      }
+    };
+    reader.onerror = () => setStatus('error', 'Could not read file.');
+    reader.readAsText(file);
   }
 
   // ─── PIXEL LOADER (for selected account) ────────────────────────────────
@@ -1434,6 +1534,7 @@
       ? `Done with errors: ${totalAdOk}/${plan.adCount} ads succeeded, ${totalAdErr} failed.`
       : `Done. ${totalAdOk}/${plan.adCount} ads created. All ${state.createStatus}.`;
     setStatus(totalAdErr ? 'warning' : 'success', okMsg);
+    if (state.autoSavePreset && !totalAdErr && totalAdOk > 0) autoSavePresetSilent();
     render();
   }
 
@@ -1597,7 +1698,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.4.5
+      <h2>🚀 FB Launcher v0.5.0
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -1613,11 +1714,22 @@
             ${state.presets.map(p => {
               const dt = new Date(p.createdAt);
               const dStr = `${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')}`;
-              return `<option value="${esc(p.id)}" ${state.selectedPresetId === p.id ? 'selected' : ''}>${esc(p.name)} · ${dStr}</option>`;
+              const tag = p.auto ? ' 🤖' : '';
+              return `<option value="${esc(p.id)}" ${state.selectedPresetId === p.id ? 'selected' : ''}>${esc(p.name)} · ${dStr}${tag}</option>`;
             }).join('')}
           </select>
           <button id="fbl-preset-save" ${!state.rows.length ? 'disabled' : ''} title="Save current CSV + settings as preset">💾</button>
           <button id="fbl-preset-delete" ${!state.selectedPresetId ? 'disabled' : ''} title="Delete selected preset">🗑</button>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:4px;margin:0;cursor:pointer;font-size:11px;color:#cbd5e1">
+            <input type="checkbox" id="fbl-auto-save" ${state.autoSavePreset ? 'checked' : ''} style="width:auto;margin:0">
+            🤖 Auto-save preset on successful launch
+          </label>
+          <span style="flex:1"></span>
+          <button id="fbl-preset-export" ${!state.presets.length ? 'disabled' : ''} title="Download all presets as JSON" style="padding:4px 8px;font-size:11px">📤 Export</button>
+          <button id="fbl-preset-import-btn" title="Load presets from JSON" style="padding:4px 8px;font-size:11px">📥 Import</button>
+          <input type="file" id="fbl-preset-import" accept=".json,application/json" style="display:none">
         </div>
         <div style="font-size:10px;color:#6e7681;margin-top:4px">Saves: CSV, all overrides, prefix, DSA, assignments. Excludes: creatives, account.</div>
       </div>` : ''}
@@ -1896,6 +2008,14 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     });
     document.getElementById('fbl-preset-save')?.addEventListener('click', savePreset);
     document.getElementById('fbl-preset-delete')?.addEventListener('click', deletePreset);
+    document.getElementById('fbl-auto-save')?.addEventListener('change', e => { state.autoSavePreset = e.target.checked; });
+    document.getElementById('fbl-preset-export')?.addEventListener('click', exportPresets);
+    document.getElementById('fbl-preset-import-btn')?.addEventListener('click', () => document.getElementById('fbl-preset-import')?.click());
+    document.getElementById('fbl-preset-import')?.addEventListener('change', e => {
+      const f = e.target.files && e.target.files[0];
+      if (f) importPresets(f);
+      e.target.value = '';  // allow re-import same file
+    });
     // Per-adset assignment
     document.getElementById('fbl-assign-toggle')?.addEventListener('click', () => {
       state.showAssignments = !state.showAssignments;
