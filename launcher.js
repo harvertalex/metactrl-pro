@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.6.8 — Bookmarklet
+ * FB Launcher v0.6.9 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -1003,33 +1003,10 @@
       }
 
       // 3) v0.6.7: Final fallback — Page-Backed Instagram Account (PBIA).
-      // FB auto-creates a PBIA per Page; it's what "Use Facebook Page" identity in
-      // Ads Manager UI actually puts under the hood. GET returns existing PBIA,
-      // POST creates one on the fly if the page never had one. Always promotable
-      // for that page's creatives — no cross-BM mismatch.
-      if (pageId) {
-        try {
-          let pbia = null;
-          const g = await apiFetch(`/${pageId}/page_backed_instagram_accounts`, { params: { fields: 'id,username', limit: 1 } });
-          pbia = g?.data?.[0] || null;
-          if (!pbia?.id) {
-            // No PBIA yet — create one. POST returns {id, username}.
-            try {
-              const c = await apiFetch(`/${pageId}/page_backed_instagram_accounts`, { method: 'POST' });
-              if (c?.id) pbia = c;
-            } catch (e) {
-              addLog('warning', `Page ${pageId} PBIA create failed: ${e.message}`);
-            }
-          }
-          if (pbia?.id) {
-            const entry = { igId: String(pbia.id), igName: pbia.username || '', pageName, source: 'pbia' };
-            state.pageIgMap[key] = entry;
-            addLog('info', `🔗 Using Page-Backed IG (PBIA) for page "${pageName || pageId}": ${entry.igId}${entry.igName ? ' @' + entry.igName : ''}`);
-            return entry.igId;
-          }
-        } catch (e) {
-          addLog('warning', `Page ${pageId} PBIA lookup failed: ${e.message}`);
-        }
+      const pbia = await loadPbiaForPage(pageId, pageName);
+      if (pbia?.igId) {
+        state.pageIgMap[key] = { ...pbia, source: 'pbia' };
+        return pbia.igId;
       }
 
       state.pageIgMap[key] = { igId: '', igName: '', pageName, source: 'none' };
@@ -1039,6 +1016,43 @@
       state.pageIgLoading[key] = false;
       render();
     }
+  }
+
+  // v0.6.9: PBIA (Page-Backed Instagram Account) helper, separate from
+  // loadIgForAccount so the per-ad rejection safety net can call it directly.
+  // PBIA is what "Use Facebook Page" identity in Ads Manager UI uses under the
+  // hood — auto-created stub IG tied to the Page, always promotable for that
+  // page's creatives. GET returns existing PBIA, POST creates one on the fly.
+  // Cache key is `__pbia__<pageId>` since PBIA is per-page, not per-account.
+  async function loadPbiaForPage(pageId, pageName = '') {
+    if (!pageId) return null;
+    const cacheKey = `__pbia__${pageId}`;
+    if (state.pageIgMap[cacheKey] !== undefined) {
+      return state.pageIgMap[cacheKey] || null;
+    }
+    try {
+      let pbia = null;
+      const g = await apiFetch(`/${pageId}/page_backed_instagram_accounts`, { params: { fields: 'id,username', limit: 1 } });
+      pbia = g?.data?.[0] || null;
+      if (!pbia?.id) {
+        try {
+          const c = await apiFetch(`/${pageId}/page_backed_instagram_accounts`, { method: 'POST' });
+          if (c?.id) pbia = c;
+        } catch (e) {
+          addLog('warning', `Page ${pageId} PBIA create failed: ${e.message}`);
+        }
+      }
+      if (pbia?.id) {
+        const entry = { igId: String(pbia.id), igName: pbia.username || '', pageName };
+        state.pageIgMap[cacheKey] = entry;
+        addLog('info', `🔗 Using Page-Backed IG (PBIA) for page "${pageName || pageId}": ${entry.igId}${entry.igName ? ' @' + entry.igName : ''}`);
+        return entry;
+      }
+    } catch (e) {
+      addLog('warning', `Page ${pageId} PBIA lookup failed: ${e.message}`);
+    }
+    state.pageIgMap[cacheKey] = null;
+    return null;
   }
 
   // v0.6.3 compatibility shim: older callers pass just pageId. Resolve via primary
@@ -1955,22 +1969,47 @@
           const creativeBody = { object_story_spec: JSON.stringify(objectStorySpec) };
           if (urlTags) creativeBody.url_tags = urlTags;
 
-          // v0.6.4 safety net — if FB still rejects the creative, drop the IG and
-          // retry once. v0.6.5: also clear `resolvedIg` so the rest of the adset/
-          // launch loop skips the field instead of paying a rejection per ad.
+          // v0.6.4 safety net — if FB rejects the creative because of IG, we
+          // used to just drop instagram_user_id and lose IG placements for the
+          // rest of the launch. v0.6.9: try PBIA (Page-Backed Instagram Account)
+          // first — that's the proper "Use Facebook Page" identity. If PBIA also
+          // fails (rare: no page or token missing pages_manage_ads), fall back
+          // to omitting IG as before.
           let creative;
           try {
             creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: creativeBody });
           } catch (e) {
             const msg = String(e.message || '');
             if (msg.includes('instagram_user_id') && objectStorySpec.instagram_user_id) {
-              addLog('warning', `[${accLabel}] FB rejected IG ${objectStorySpec.instagram_user_id} — retrying "${adName}" without it, and skipping IG for remaining ads in this account`);
-              const retrySpec = { ...objectStorySpec };
-              delete retrySpec.instagram_user_id;
-              const retryBody = { object_story_spec: JSON.stringify(retrySpec) };
-              if (urlTags) retryBody.url_tags = urlTags;
-              creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: retryBody });
-              resolvedIg = '';  // future iterations in this account skip IG
+              const rejectedIg = objectStorySpec.instagram_user_id;
+              // First try PBIA swap (keeps IG placements alive under page identity).
+              const pbia = await loadPbiaForPage(pageId);
+              if (pbia?.igId && pbia.igId !== rejectedIg) {
+                addLog('warning', `[${accLabel}] FB rejected IG ${rejectedIg} — retrying "${adName}" with PBIA ${pbia.igId}, using PBIA for remaining ads`);
+                const retrySpec = { ...objectStorySpec, instagram_user_id: pbia.igId };
+                const retryBody = { object_story_spec: JSON.stringify(retrySpec) };
+                if (urlTags) retryBody.url_tags = urlTags;
+                try {
+                  creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: retryBody });
+                  resolvedIg = pbia.igId;  // remaining ads use PBIA
+                } catch (e2) {
+                  addLog('warning', `[${accLabel}] PBIA retry also failed: ${e2.message} — dropping IG entirely for remaining ads`);
+                  const noIgSpec = { ...objectStorySpec };
+                  delete noIgSpec.instagram_user_id;
+                  const noIgBody = { object_story_spec: JSON.stringify(noIgSpec) };
+                  if (urlTags) noIgBody.url_tags = urlTags;
+                  creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: noIgBody });
+                  resolvedIg = '';
+                }
+              } else {
+                addLog('warning', `[${accLabel}] FB rejected IG ${rejectedIg} and no PBIA available — retrying "${adName}" without IG, and skipping IG for remaining ads in this account`);
+                const retrySpec = { ...objectStorySpec };
+                delete retrySpec.instagram_user_id;
+                const retryBody = { object_story_spec: JSON.stringify(retrySpec) };
+                if (urlTags) retryBody.url_tags = urlTags;
+                creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: retryBody });
+                resolvedIg = '';
+              }
             } else {
               throw e;
             }
@@ -2181,7 +2220,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.6.8
+      <h2>🚀 FB Launcher v0.6.9
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
