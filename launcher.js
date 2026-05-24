@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.6.10 — Bookmarklet
+ * FB Launcher v0.6.11 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -984,21 +984,49 @@
         }
       }
 
-      // 2) Fallback: actors connected to the Page. May not be promotable in this
-      // account (cross-BM mismatch), but worth a try — if the creative POST fails
-      // with code 100 the launch loop retries without instagram_user_id anyway.
+      // 2) v0.6.11: Page-level IG lookup. Three approaches in order:
+      //    a) Modern field `connected_instagram_account` — IG linked via Page
+      //       Settings (this is the one Ads Manager UI dropdown actually shows).
+      //    b) `instagram_business_account` — IG Business Account linked to page.
+      //    c) Legacy edge `/page/instagram_accounts` — older, often returns
+      //       "nonexisting field" if user lacks page admin role, but free try.
+      // Any one of these will let us pass instagram_user_id and have it show
+      // properly in the Ads Manager UI for review.
       if (pageId) {
+        try {
+          const pf = await apiFetch(`/${pageId}`, {
+            params: { fields: 'connected_instagram_account{id,username},instagram_business_account{id,username}' },
+          });
+          const candidates = [
+            { obj: pf?.connected_instagram_account, label: 'connected_instagram_account' },
+            { obj: pf?.instagram_business_account, label: 'instagram_business_account' },
+          ];
+          for (const c of candidates) {
+            if (c.obj?.id) {
+              const entry = { igId: String(c.obj.id), igName: c.obj.username || '', pageName, source: c.label };
+              state.pageIgMap[key] = entry;
+              addLog('info', `🔗 Found IG via page.${c.label}: ${entry.igId}${entry.igName ? ' @' + entry.igName : ''}`);
+              return entry.igId;
+            }
+          }
+        } catch (e) {
+          addLog('warning', `Page ${pageId} connected/business IG lookup failed: ${e.message}`);
+        }
         try {
           const r = await apiFetch(`/${pageId}/instagram_accounts`, { params: { fields: 'id,username', limit: 5 } });
           const item = r?.data?.[0];
           if (item?.id) {
             const entry = { igId: String(item.id), igName: item.username || '', pageName, source: 'page' };
             state.pageIgMap[key] = entry;
-            addLog('warning', `🔗 No account-level IG, using page actor (may not be promotable here): ${entry.igId}${entry.igName ? ' @' + entry.igName : ''}`);
+            addLog('info', `🔗 Found IG via legacy /page/instagram_accounts: ${entry.igId}${entry.igName ? ' @' + entry.igName : ''}`);
             return entry.igId;
           }
         } catch (e) {
-          addLog('warning', `Page ${pageId} /instagram_accounts lookup failed: ${e.message}`);
+          // Common: "nonexisting field" when user token lacks page admin role.
+          // Quietly drop to PBIA — we'll surface actionable guidance later if all paths fail.
+          if (!/nonexisting field/i.test(String(e.message || ''))) {
+            addLog('warning', `Page ${pageId} /instagram_accounts lookup failed: ${e.message}`);
+          }
         }
       }
 
@@ -1010,7 +1038,8 @@
       }
 
       state.pageIgMap[key] = { igId: '', igName: '', pageName, source: 'none' };
-      addLog('warning', `No IG actor available for acc=${accId || '?'} page=${pageId || '?'} — instagram_user_id omitted (FB uses default)`);
+      // v0.6.11: actionable guidance instead of just "no IG available".
+      addLog('warning', `⚠ Page "${pageName || pageId}" has no Instagram identity linked (no connected IG, no Business IG, no admin rights for PBIA). Ads will run on Facebook only. To fix: link an Instagram account in Page Settings (https://business.facebook.com/settings/instagram-accounts), then re-launch. Or paste a promotable IG actor ID in step 3.`);
       return '';
     } finally {
       state.pageIgLoading[key] = false;
@@ -2248,7 +2277,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.6.10
+      <h2>🚀 FB Launcher v0.6.11
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
