@@ -1,6 +1,11 @@
 (() => {
 /* =========================================================
-   FB Autorules — PRO Rules Generator + Rules Manager (2026-03, v24.0)
+   FB Autorules — PRO Rules Generator + Rules Manager (2026-05, v24.1)
+   v24.1 — Analytics CSV Export overhaul:
+   ▸ fetchInsightsPaginated — pagination + retry on rate-limit (17/4/613/32)
+   ▸ Status filter (Active / Active+Paused / All) via campaign|adset|ad.effective_status
+   ▸ Custom date range, breakdowns (×7), attribution window selector
+   ▸ Hide spend=0 rows, settings persisted in localStorage
    Fixes vs v23:
    ▸ Dark UI theme throughout (consistent with Status Center)
    ▸ Collapsible sections + rule cards with descriptions
@@ -17,7 +22,7 @@
 /* -------------------- CONFIG -------------------- */
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v23.1',
+  APP_VERSION: 'v24.1',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
