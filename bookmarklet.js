@@ -3260,21 +3260,78 @@ function mountAnalytics(container) {
     { label: '📆 This month',   preset: 'this_month', defaultOn: false },
     { label: '🗓️ Last month',  preset: 'last_month', defaultOn: false },
   ];
+  const BREAKDOWNS = [
+    { id: 'country',            label: '🌍 Country' },
+    { id: 'region',             label: '📍 Region' },
+    { id: 'age',                label: '🎂 Age' },
+    { id: 'gender',             label: '⚧ Gender' },
+    { id: 'publisher_platform', label: '📱 Platform (FB/IG/AN)' },
+    { id: 'platform_position',  label: '📐 Placement position' },
+    { id: 'impression_device',  label: '💻 Device' },
+  ];
+  const ATTR_WINDOWS = [
+    { id: 'default',  label: 'Default (FB: 7d click + 1d view)' },
+    { id: '1d_click', label: '1d click only' },
+    { id: '7d_click', label: '7d click only' },
+    { id: '28d_click',label: '28d click only' },
+  ];
+  const STATUS_FILTERS = [
+    { id: 'active_paused', label: 'Active + Paused (default)' },
+    { id: 'active',        label: 'Active only' },
+    { id: 'all',           label: 'All (incl. archived)' },
+  ];
+  const SETTINGS_KEY = 'metactrl_anl_export_v2';
 
-  /* ---- layout ---- */
-  const grid = document.createElement('div');
-  grid.style.cssText = 'display:grid;grid-template-columns:280px 1fr;gap:16px;align-items:start;';
+  /* ---- load saved settings ---- */
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch {}
 
-  /* ---- left: settings ---- */
-  const left = document.createElement('div');
-  left.style.cssText = 'background:var(--card);border:1px solid var(--bdr);border-radius:10px;padding:16px;';
-
+  /* ---- small UI helpers ---- */
   function sectionLabel(text) {
     const d = document.createElement('div');
     d.style.cssText = 'font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin:12px 0 5px;';
     d.textContent = text;
     return d;
   }
+  function radioGroup(name, options, defaultVal) {
+    const wrap = document.createElement('div');
+    options.forEach(([val, lbl], i) => {
+      const label = document.createElement('label');
+      label.style.cssText = 'display:block;padding:2px 0;cursor:pointer;font-size:12px;color:var(--txt);line-height:1.8;';
+      const rb = document.createElement('input');
+      rb.type='radio'; rb.name=name; rb.value=val;
+      rb.checked = (defaultVal !== undefined ? val === defaultVal : i === 0);
+      rb.style.cssText = 'accent-color:var(--acc);margin-right:7px;cursor:pointer;vertical-align:middle;';
+      label.appendChild(rb);
+      label.appendChild(document.createTextNode(lbl));
+      wrap.appendChild(label);
+    });
+    return wrap;
+  }
+  function checkGroup(items, defaultSel, valKey) {
+    const key = valKey || 'id';
+    const wrap = document.createElement('div');
+    items.forEach(it => {
+      const label = document.createElement('label');
+      label.style.cssText = 'display:block;padding:2px 0;cursor:pointer;font-size:12px;color:var(--txt);line-height:1.8;';
+      const cb = document.createElement('input');
+      cb.type='checkbox'; cb.value = it[key];
+      cb.checked = defaultSel ? defaultSel.includes(cb.value) : !!it.defaultOn;
+      cb.style.cssText = 'accent-color:var(--acc);margin-right:7px;cursor:pointer;vertical-align:middle;';
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(it.label));
+      wrap.appendChild(label);
+    });
+    return wrap;
+  }
+
+  /* ---- layout ---- */
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:300px 1fr;gap:16px;align-items:start;';
+
+  /* ---- left: settings ---- */
+  const left = document.createElement('div');
+  left.style.cssText = 'background:var(--card);border:1px solid var(--bdr);border-radius:10px;padding:16px;max-height:620px;overflow:auto;';
 
   const title = document.createElement('div');
   title.style.cssText = 'font-size:13px;font-weight:700;color:var(--txt);margin-bottom:4px;';
@@ -3283,52 +3340,32 @@ function mountAnalytics(container) {
 
   /* scope */
   left.appendChild(sectionLabel('Account scope'));
-  const scopeWrap = document.createElement('div');
-  [['current','Current account'],['all','All accounts (BM)']].forEach(([val, lbl], i) => {
-    const label = document.createElement('label');
-    label.style.cssText = 'display:block;padding:2px 0;cursor:pointer;font-size:12px;color:var(--txt);line-height:1.8;';
-    const rb = document.createElement('input');
-    rb.type='radio'; rb.name='anl-scope'; rb.value=val; if(i===0) rb.checked=true;
-    rb.style.cssText = 'accent-color:var(--acc);margin-right:7px;cursor:pointer;vertical-align:middle;';
-    label.appendChild(rb);
-    label.appendChild(document.createTextNode(lbl));
-    scopeWrap.appendChild(label);
-  });
+  const scopeWrap = radioGroup('anl-scope', [['current','Current account'],['all','All accounts (BM)']], saved.scope || 'current');
   left.appendChild(scopeWrap);
 
   /* level */
   left.appendChild(sectionLabel('Data level'));
-  const levelWrap = document.createElement('div');
-  [['account','Account total'],['campaign','Per campaign'],['adset','Per adset'],['ad','Per ad (full hierarchy)']].forEach(([val, lbl], i) => {
-    const label = document.createElement('label');
-    label.style.cssText = 'display:block;padding:2px 0;cursor:pointer;font-size:12px;color:var(--txt);line-height:1.8;';
-    const rb = document.createElement('input');
-    rb.type='radio'; rb.name='anl-level'; rb.value=val; if(i===0) rb.checked=true;
-    rb.style.cssText = 'accent-color:var(--acc);margin-right:7px;cursor:pointer;vertical-align:middle;';
-    label.appendChild(rb);
-    label.appendChild(document.createTextNode(lbl));
-    levelWrap.appendChild(label);
-  });
+  const levelWrap = radioGroup('anl-level', [
+    ['account', 'Account total'],
+    ['campaign','Per campaign'],
+    ['adset',   'Per adset'],
+    ['ad',      'Per ad (full hierarchy)'],
+  ], saved.level || 'account');
   left.appendChild(levelWrap);
+
+  /* status filter */
+  left.appendChild(sectionLabel('Status filter (skipped for Account level)'));
+  const statusWrap = radioGroup('anl-status', STATUS_FILTERS.map(s => [s.id, s.label]), saved.status || 'active_paused');
+  left.appendChild(statusWrap);
 
   /* periods */
   left.appendChild(sectionLabel('Time periods'));
-  const periodsWrap = document.createElement('div');
-  PERIODS.forEach(p => {
-    const label = document.createElement('label');
-    label.style.cssText = 'display:block;padding:2px 0;cursor:pointer;font-size:12px;color:var(--txt);line-height:1.8;';
-    const cb = document.createElement('input');
-    cb.type='checkbox'; cb.value=p.preset; cb.checked=p.defaultOn;
-    cb.style.cssText = 'accent-color:var(--acc);margin-right:7px;cursor:pointer;vertical-align:middle;';
-    label.appendChild(cb);
-    label.appendChild(document.createTextNode(p.label));
-    periodsWrap.appendChild(label);
-  });
+  const periodsWrap = checkGroup(PERIODS, saved.periods, 'preset');
   left.appendChild(periodsWrap);
 
   /* select all / none */
   const selRow = document.createElement('div');
-  selRow.style.cssText = 'display:flex;gap:6px;margin:8px 0 14px;';
+  selRow.style.cssText = 'display:flex;gap:6px;margin:8px 0 4px;';
   ['Select All','Deselect All'].forEach((txt, i) => {
     const btn = document.createElement('button');
     btn.className = 'ar-btn ar-btn-ghost ar-btn-sm'; btn.textContent = txt;
@@ -3337,10 +3374,54 @@ function mountAnalytics(container) {
   });
   left.appendChild(selRow);
 
+  /* custom date range */
+  left.appendChild(sectionLabel('Custom range (overrides periods when both filled)'));
+  const dateWrap = document.createElement('div');
+  dateWrap.style.cssText = 'display:flex;gap:6px;align-items:center;';
+  const dFrom = document.createElement('input');
+  dFrom.type = 'date'; dFrom.value = saved.dateFrom || '';
+  dFrom.style.cssText = 'flex:1;background:var(--card);border:1px solid var(--bdr);border-radius:6px;padding:4px 6px;font-size:11px;color:var(--txt);';
+  const dTo = document.createElement('input');
+  dTo.type = 'date'; dTo.value = saved.dateTo || '';
+  dTo.style.cssText = 'flex:1;background:var(--card);border:1px solid var(--bdr);border-radius:6px;padding:4px 6px;font-size:11px;color:var(--txt);';
+  const dSep = document.createElement('span'); dSep.textContent = '–';
+  dSep.style.cssText = 'color:#64748b;font-size:11px;';
+  dateWrap.appendChild(dFrom); dateWrap.appendChild(dSep); dateWrap.appendChild(dTo);
+  left.appendChild(dateWrap);
+
+  /* breakdowns */
+  left.appendChild(sectionLabel('Breakdowns (each ✓ = one extra fetch per acc×period)'));
+  const bdWrap = checkGroup(BREAKDOWNS, saved.breakdowns || []);
+  left.appendChild(bdWrap);
+
+  /* attribution window */
+  left.appendChild(sectionLabel('Attribution window'));
+  const attrSelect = document.createElement('select');
+  attrSelect.style.cssText = 'width:100%;background:var(--card);border:1px solid var(--bdr);border-radius:6px;padding:5px 8px;font-size:12px;color:var(--txt);cursor:pointer;';
+  ATTR_WINDOWS.forEach(a => {
+    const opt = document.createElement('option');
+    opt.value = a.id; opt.textContent = a.label;
+    if ((saved.attrWindow || 'default') === a.id) opt.selected = true;
+    attrSelect.appendChild(opt);
+  });
+  left.appendChild(attrSelect);
+
+  /* output options */
+  left.appendChild(sectionLabel('Output options'));
+  const hideZeroLbl = document.createElement('label');
+  hideZeroLbl.style.cssText = 'display:block;padding:2px 0;cursor:pointer;font-size:12px;color:var(--txt);line-height:1.8;';
+  const hideZeroCb = document.createElement('input');
+  hideZeroCb.type='checkbox';
+  hideZeroCb.checked = saved.hideZero !== false; /* default ON */
+  hideZeroCb.style.cssText = 'accent-color:var(--acc);margin-right:7px;cursor:pointer;vertical-align:middle;';
+  hideZeroLbl.appendChild(hideZeroCb);
+  hideZeroLbl.appendChild(document.createTextNode('Hide rows with spend = 0'));
+  left.appendChild(hideZeroLbl);
+
   /* fetch button */
   const fetchBtn = document.createElement('button');
   fetchBtn.className = 'ar-btn ar-btn-primary';
-  fetchBtn.style.cssText = 'width:100%;font-size:13px;padding:10px;';
+  fetchBtn.style.cssText = 'width:100%;font-size:13px;padding:10px;margin-top:12px;';
   fetchBtn.textContent = '📊 Fetch & Export CSV';
   left.appendChild(fetchBtn);
 
@@ -3352,18 +3433,18 @@ function mountAnalytics(container) {
   rightTitle.textContent = '📋 Progress';
   right.appendChild(rightTitle);
   const logEl = document.createElement('div');
-  logEl.style.cssText = 'background:var(--bg);border:1px solid var(--bdr);border-radius:6px;padding:8px 10px;height:320px;overflow:auto;font:11px/1.5 ui-monospace,monospace;color:var(--txt);';
+  logEl.style.cssText = 'background:var(--bg);border:1px solid var(--bdr);border-radius:6px;padding:8px 10px;height:560px;overflow:auto;font:11px/1.5 ui-monospace,monospace;color:var(--txt);';
   right.appendChild(logEl);
 
   grid.appendChild(left);
   grid.appendChild(right);
   c.appendChild(grid);
 
-  /* ---- helpers ---- */
-  function log(msg, type='info') {
+  /* ---- log + action helpers ---- */
+  function log(msg, type) {
     const colors = {info:'var(--txt)',success:'#22c55e',warning:'#f59e0b',error:'#ef4444'};
     const line = document.createElement('div');
-    line.style.color = colors[type] || colors.info;
+    line.style.color = colors[type || 'info'] || colors.info;
     line.textContent = new Date().toLocaleTimeString() + ' ' + msg;
     logEl.appendChild(line); logEl.scrollTop = logEl.scrollHeight;
   }
@@ -3381,9 +3462,59 @@ function mountAnalytics(container) {
     if (!Array.isArray(arr) || !arr.length) return '';
     return parseFloat(arr[0].value).toFixed(3);
   }
-  function n(v, dec=2) { return v != null && v !== '' ? parseFloat(v).toFixed(dec) : ''; }
+  function n(v, dec) { return v != null && v !== '' ? parseFloat(v).toFixed(dec == null ? 2 : dec) : ''; }
 
-  function buildRow(preset, d, level) {
+  /* status → filtering payload per level. null if not applicable. */
+  function buildStatusFilter(level, status) {
+    if (level === 'account' || status === 'all') return null;
+    const field = level + '.effective_status';
+    const value = status === 'active'
+      ? ['ACTIVE']
+      : ['ACTIVE','PAUSED','CAMPAIGN_PAUSED','ADSET_PAUSED','IN_PROCESS'];
+    return [{ field, operator: 'IN', value }];
+  }
+
+  /* paginated insights fetch with rate-limit backoff (codes 17, 4, 613, 32) */
+  async function fetchInsightsPaginated(accId, params, logFn) {
+    let items = [];
+    let path = `act_${accId}/insights`;
+    let qs = params;
+    let attempt = 0;
+    const MAX_RETRIES = 4;
+    while (true) {
+      let page;
+      try {
+        page = path.startsWith('http') ? await API.get(path) : await API.get(path, qs);
+      } catch (e) {
+        if (attempt < MAX_RETRIES) {
+          attempt++;
+          const wait = 3000 * attempt;
+          logFn(`  ⚠ network: ${e.message} — retry ${attempt}/${MAX_RETRIES} in ${wait/1000}s`, 'warning');
+          await sleep(wait); continue;
+        }
+        throw e;
+      }
+      if (page && page.error) {
+        const code = page.error.code;
+        if ([17, 4, 613, 32].includes(code) && attempt < MAX_RETRIES) {
+          attempt++;
+          const wait = 5000 * Math.pow(2, attempt - 1);
+          logFn(`  ⏳ rate-limit (code ${code}) — wait ${wait/1000}s, retry ${attempt}/${MAX_RETRIES}`, 'warning');
+          await sleep(wait); continue;
+        }
+        throw new Error(page.error.message || `API error (code ${code})`);
+      }
+      attempt = 0;
+      items = items.concat((page && page.data) || []);
+      const next = page && page.paging && page.paging.next;
+      if (!next) break;
+      path = next; qs = {};
+      await sleep(250);
+    }
+    return items;
+  }
+
+  function buildRow(preset, d, level, breakdownName) {
     const acts  = d.actions || [];
     const cpa   = d.cost_per_action_type || [];
     const wctr  = d.website_ctr || [];
@@ -3430,6 +3561,9 @@ function mountAnalytics(container) {
       row['Ad ID']  = d.ad_id   || '';
       row['Ad']     = d.ad_name || '';
     }
+    /* breakdown columns — always present so CSV header is stable across passes */
+    row['Breakdown']       = breakdownName || '';
+    row['Breakdown Value'] = breakdownName ? (d[breakdownName] || '') : '';
     Object.assign(row, {
       'Date Start':         d.date_start  || '',
       'Date Stop':          d.date_stop   || '',
@@ -3483,16 +3617,19 @@ function mountAnalytics(container) {
   /* ---- CSV generator (UTF-8 BOM — Excel opens without issues on any OS) ---- */
   function generateCSV(rows) {
     if (!rows.length) return '';
-    const headers = Object.keys(rows[0]);
+    /* union of all keys across all rows — breakdown variants keep their columns */
+    const headerSet = new Set();
+    rows.forEach(r => Object.keys(r).forEach(k => headerSet.add(k)));
+    const headers = [...headerSet];
     const escCell = v => {
-      const s = String(v ?? '');
+      const s = String(v == null ? '' : v);
       // Wrap in quotes if value contains comma, quote, or newline
       return (s.includes(',') || s.includes('"') || s.includes('\n'))
         ? '"' + s.replace(/"/g, '""') + '"'
         : s;
     };
     const lines = [headers.map(escCell).join(',')];
-    rows.forEach(row => lines.push(headers.map(h => escCell(row[h] ?? '')).join(',')));
+    rows.forEach(row => lines.push(headers.map(h => escCell(row[h] == null ? '' : row[h])).join(',')));
     // UTF-8 BOM (\uFEFF) ensures Excel reads Cyrillic/Unicode correctly
     return '\uFEFF' + lines.join('\r\n');
   }
@@ -3506,16 +3643,41 @@ function mountAnalytics(container) {
 
   /* ---- main fetch ---- */
   fetchBtn.onclick = async () => {
-    const periods = [...periodsWrap.querySelectorAll('input:checked')].map(cb => cb.value);
-    if (!periods.length) { log('Select at least one time period', 'warning'); return; }
-    const scope = left.querySelector('input[name="anl-scope"]:checked').value;
-    const level = left.querySelector('input[name="anl-level"]:checked').value;
+    const scope      = left.querySelector('input[name="anl-scope"]:checked').value;
+    const level      = left.querySelector('input[name="anl-level"]:checked').value;
+    const status     = left.querySelector('input[name="anl-status"]:checked').value;
+    const periods    = [...periodsWrap.querySelectorAll('input:checked')].map(cb => cb.value);
+    const dateFrom   = dFrom.value || '';
+    const dateTo     = dTo.value   || '';
+    const breakdowns = [...bdWrap.querySelectorAll('input:checked')].map(cb => cb.value);
+    const attrWindow = attrSelect.value;
+    const hideZero   = hideZeroCb.checked;
+
+    /* validate */
+    const useCustom = !!(dateFrom && dateTo);
+    if (!useCustom && !periods.length) {
+      log('Select at least one time period or fill a custom date range', 'warning');
+      return;
+    }
+    if (useCustom && dateFrom > dateTo) {
+      log('Custom date "from" must be ≤ "to"', 'error');
+      return;
+    }
+
+    /* persist settings */
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+        scope, level, status, periods, dateFrom, dateTo, breakdowns, attrWindow, hideZero,
+      }));
+    } catch (_) {}
 
     fetchBtn.disabled = true; fetchBtn.textContent = '⏳ Fetching…';
     logEl.innerHTML = '';
     const allRows = [];
+    let kept = 0, dropped = 0;
 
     try {
+      /* accounts */
       let accountIds = [];
       if (scope === 'all') {
         log('Collecting all account IDs from BM…');
@@ -3528,6 +3690,7 @@ function mountAnalytics(container) {
         log(`Using current account: act_${id}`);
       }
 
+      /* fields */
       const hierarchyFields = {
         account:  [],
         campaign: ['campaign_id','campaign_name'],
@@ -3558,26 +3721,72 @@ function mountAnalytics(container) {
         'video_thruplay_watched_actions','video_avg_time_watched_actions',
       ].join(',');
 
+      /* filter info */
+      const filter = buildStatusFilter(level, status);
+      if (filter) log(`Status filter: ${status} → ${filter[0].field} IN (${filter[0].value.join(', ')})`);
+      else if (status !== 'all' && level === 'account') log('Status filter ignored on Account level', 'warning');
+      if (attrWindow !== 'default') log(`Attribution window: ${attrWindow}`);
+
+      /* period dimensions */
+      const periodDims = useCustom
+        ? [{ key: `${dateFrom}_to_${dateTo}`, params: { time_range: JSON.stringify({ since: dateFrom, until: dateTo }) } }]
+        : periods.map(p => ({ key: p, params: { date_preset: p } }));
+
+      /* breakdown loop: '' = no-breakdown pass when nothing selected */
+      const bdLoop = breakdowns.length ? breakdowns : [''];
+
+      const totalCalls = accountIds.length * periodDims.length * bdLoop.length;
+      let callIdx = 0;
+      log(`Plan: ${accountIds.length} acc × ${periodDims.length} period × ${bdLoop.length} breakdown = ${totalCalls} API call(s)`);
+
       for (const accId of accountIds) {
-        for (const preset of periods) {
-          try {
-            const js = await API.get(`act_${accId}/insights`, { fields, date_preset: preset, level });
-            if (js?.error) { log(`⚠ act_${accId}/${preset}: ${js.error.message}`, 'warning'); continue; }
-            const data = js?.data || [];
-            if (!data.length) { log(`act_${accId}/${preset}: no data`); continue; }
-            data.forEach(d => allRows.push(buildRow(preset, d, level)));
-            log(`✓ act_${accId} / ${preset} — ${data.length} row(s)`, 'success');
-          } catch(e) { log(`✗ act_${accId}/${preset}: ${e.message}`, 'error'); }
-          await sleep(300);
+        for (const pd of periodDims) {
+          for (const bd of bdLoop) {
+            callIdx++;
+            const params = {
+              fields, level,
+              limit: 500,
+              ...pd.params,
+            };
+            if (bd) params.breakdowns = bd;
+            if (filter) params.filtering = JSON.stringify(filter);
+            if (attrWindow !== 'default') params.action_attribution_windows = JSON.stringify([attrWindow]);
+
+            const tag = `[${callIdx}/${totalCalls}] act_${accId} / ${pd.key}${bd ? ' / ' + bd : ''}`;
+            try {
+              const data = await fetchInsightsPaginated(accId, params, log);
+              if (!data.length) { log(`${tag} — no data`); continue; }
+              let rowsAdded = 0;
+              data.forEach(d => {
+                if (hideZero && (!d.spend || parseFloat(d.spend) === 0)) { dropped++; return; }
+                allRows.push(buildRow(pd.key, d, level, bd));
+                rowsAdded++; kept++;
+              });
+              log(`✓ ${tag} — ${data.length} fetched, ${rowsAdded} kept`, 'success');
+            } catch(e) {
+              log(`✗ ${tag}: ${e.message}`, 'error');
+            }
+            await sleep(300);
+          }
         }
       }
 
-      if (!allRows.length) { log('No data collected — nothing to export', 'warning'); return; }
-      log(`Total: ${allRows.length} row(s). Generating Excel file…`);
+      if (!allRows.length) {
+        log(`No data collected — nothing to export (${dropped} zero-spend rows dropped)`, 'warning');
+        return;
+      }
+      log(`Total: ${kept} row(s) kept, ${dropped} dropped (spend=0). Generating CSV…`);
       const csv = generateCSV(allRows);
       const date = new Date().toISOString().slice(0,10);
-      downloadCSV(csv, `fb_stats_${date}.csv`);
-      log(`✅ Downloaded: fb_stats_${date}.csv`, 'success');
+      const tagParts = [
+        scope === 'all' ? 'all' : 'single',
+        level,
+        useCustom ? `${dateFrom}_${dateTo}` : (periods.length === 1 ? periods[0] : `${periods.length}periods`),
+        breakdowns.length ? `bd${breakdowns.length}` : '',
+      ].filter(Boolean);
+      const fname = `fb_stats_${tagParts.join('_')}_${date}.csv`;
+      downloadCSV(csv, fname);
+      log(`✅ Downloaded: ${fname}`, 'success');
     } catch(e) {
       log(`Fatal: ${e.message}`, 'error');
     } finally {
