@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.4.5.0 — Bookmarklet
+ * FB Launcher v0.6.7 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -1820,10 +1820,11 @@
           if (!pageId) throw new Error('No page_id (provide override or fill "Link Object ID" in CSV)');
 
           // Build token context for Link/URL Tags substitution
-          const rowPixelId = stripPfx(r['Optimized Conversion Tracking Pixels'] || r['Pixel'] || '') || plan.pixel || '';
+          // Reuse `pixelId` (line 1738) so {pixel_id} in URL always matches the pixel
+          // we put in promoted_object. UI override (state.pixelOverride) wins over CSV.
           const firstGeo = (String(aFirst['Countries'] || '').split(',').map(s => s.trim()).filter(Boolean)[0]) || '';
           const tokenCtx = {
-            pixel_id: rowPixelId,
+            pixel_id: pixelId,
             account_id: accId,
             adset_name: adsetName,
             ad_name: adName,
@@ -2147,7 +2148,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.6.6
+      <h2>🚀 FB Launcher v0.6.7
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
