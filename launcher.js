@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.6.11 — Bookmarklet
+ * FB Launcher v0.6.12 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -38,6 +38,7 @@
     targetAccIds: [],         // v0.6: array of selected account IDs (1+ for multi-account launch)
     pageIdOverride: '',
     instagramOverride: '',    // v0.6.1: forces instagram_user_id (skips CSV "Instagram Account ID")
+    usePageAsActor: false,    // v0.6.12: explicit "use Facebook Page as IG identity" — skips IG resolution + CSV/override IG entirely; sets identity to page in Ads Manager UI
     linkOverride: '',         // v0.2: replaces CSV Link column (with token substitution)
     urlTagsOverride: '',      // v0.2: replaces CSV URL Tags column (with token substitution)
     titleOverride: '',        // v0.2.2: replaces CSV Title (headline) for all ads
@@ -422,6 +423,7 @@
         customEventOverride: state.customEventOverride,
         pageIdOverride: state.pageIdOverride,
         instagramOverride: state.instagramOverride,
+        usePageAsActor: state.usePageAsActor,
         dsaBeneficiary: state.dsaBeneficiary,
         dsaPayer: state.dsaPayer,
         urlTagParam: state.urlTagParam,
@@ -458,6 +460,7 @@
     state.customEventOverride = s.customEventOverride || '';
     state.pageIdOverride = s.pageIdOverride || '';
     state.instagramOverride = s.instagramOverride || '';
+    state.usePageAsActor = !!s.usePageAsActor;
     state.dsaBeneficiary = s.dsaBeneficiary || '';
     state.dsaPayer = s.dsaPayer || '';
     state.urlTagParam = s.urlTagParam || 'sub2';
@@ -530,6 +533,7 @@
         customEventOverride: state.customEventOverride,
         pageIdOverride: state.pageIdOverride,
         instagramOverride: state.instagramOverride,
+        usePageAsActor: state.usePageAsActor,
         dsaBeneficiary: state.dsaBeneficiary,
         dsaPayer: state.dsaPayer,
         urlTagParam: state.urlTagParam,
@@ -1137,6 +1141,13 @@
   // Whichever we pick is verified against the account's actual IG list — if it isn't
   // there we either swap to a valid one or omit instagram_user_id entirely.
   async function resolveAccountIg(accId, pageId) {
+    // v0.6.12: explicit "Use Page as Actor" — skip the whole IG resolution dance
+    // and let FB use the Page as the IG identity (equivalent to omitting
+    // instagram_user_id at ad creation). Ads Manager UI will show
+    // "Use Facebook Page" in the IG profile field.
+    if (state.usePageAsActor) {
+      return { igId: '', source: 'page-as-actor' };
+    }
     const csvIg = stripPfx(state.rows[0]?.['Instagram Account ID'] || '');
     const desired = state.instagramOverride || csvIg;
     const validIds = await loadAccountIgIds(accId);
@@ -1714,7 +1725,9 @@
     const probePage = state.pageIdOverride || stripPfx(firstRow?.['Link Object ID'] || '');
     const igResolution = await resolveAccountIg(accId, probePage);
     let resolvedIg = igResolution.igId;
-    if (igResolution.source === 'desired-valid') {
+    if (igResolution.source === 'page-as-actor') {
+      addLog('info', `[${accLabel}] 🔗 Use Page as Actor — ads will use Facebook Page identity (no Instagram actor)`);
+    } else if (igResolution.source === 'desired-valid') {
       addLog('info', `[${accLabel}] 🔗 IG actor ${resolvedIg} validated for this account`);
     } else if (igResolution.source === 'desired-unverified') {
       addLog('info', `[${accLabel}] 🔗 IG actor ${resolvedIg} from CSV/override (no list permission to verify)`);
@@ -2033,7 +2046,9 @@
             creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: creativeBody });
           } catch (e) {
             const msg = String(e.message || '');
-            if (msg.includes('instagram_user_id') && objectStorySpec.instagram_user_id) {
+            // v0.6.12: when user explicitly chose Use Page as Actor, never attempt
+            // the IG fallback dance — that's the whole point of the checkbox.
+            if (msg.includes('instagram_user_id') && objectStorySpec.instagram_user_id && !state.usePageAsActor) {
               const rejectedIg = objectStorySpec.instagram_user_id;
               addLog('warning', `[${accLabel}] FB rejected IG ${rejectedIg} — running full IG fallback (account → page → PBIA)...`);
               // Bust any stale cache entry from initial resolveAccountIg so the
@@ -2277,7 +2292,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.6.11
+      <h2>🚀 FB Launcher v0.6.12
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -2362,8 +2377,12 @@
           ${state.pagesList.map(p => `<option value="${esc(p.id)}" ${state.pageIdOverride === p.id ? 'selected' : ''}>${esc(p.name)} (${esc(p.id)})</option>`).join('')}
         </select>` : ''}
         <input type="text" id="fbl-page-id" value="${esc(state.pageIdOverride)}" placeholder="${state.pagesList.length ? 'or paste custom page ID' : 'page ID (14-20 digits) — empty = use CSV'}" style="margin-bottom:8px">
-        <label style="margin-top:5px">Instagram Account ID <span style="color:#6e7681">— empty = auto-fetch from Page's connected IG${isMulti ? ' · ⚠ same ID for all accounts' : ''}</span></label>
-        <input type="text" id="fbl-ig-id" value="${esc(state.instagramOverride)}" placeholder="leave empty → launcher auto-detects from Page · or paste IG actor ID to override">
+        <label style="display:flex;align-items:center;gap:6px;margin-top:5px;cursor:pointer">
+          <input type="checkbox" id="fbl-use-page-as-actor" ${state.usePageAsActor ? 'checked' : ''}>
+          <span><b>Use Facebook Page as IG identity</b> <span style="color:#6e7681">— skips Instagram lookup; ads inherit Page identity for IG placements (Ads Manager shows "Use Facebook Page")</span></span>
+        </label>
+        <label style="margin-top:5px;${state.usePageAsActor ? 'opacity:.4;pointer-events:none' : ''}">Instagram Account ID <span style="color:#6e7681">— empty = auto-fetch from Page's connected IG${isMulti ? ' · ⚠ same ID for all accounts' : ''}</span></label>
+        <input type="text" id="fbl-ig-id" value="${esc(state.instagramOverride)}" placeholder="leave empty → launcher auto-detects from Page · or paste IG actor ID to override"${state.usePageAsActor ? ' disabled style="opacity:.4"' : ''}>
         ${(() => {
           // v0.6.4: cache key changed to "acc__page" since same page can resolve differently
           // per account. Hint shows status for the primary selected account.
@@ -2844,6 +2863,10 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     document.getElementById('fbl-ig-id')?.addEventListener('input', e => {
       // Strip "x:" / similar Power-Editor prefixes the user may paste from a CSV cell.
       state.instagramOverride = stripPfx(e.target.value.trim());
+    });
+    document.getElementById('fbl-use-page-as-actor')?.addEventListener('change', e => {
+      state.usePageAsActor = e.target.checked;
+      render();
     });
     const creativesEl = document.getElementById('fbl-creatives');
     if (creativesEl) {
