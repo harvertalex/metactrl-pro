@@ -3265,13 +3265,15 @@ function mountAnalytics(container) {
     { label: '📆 This month',   preset: 'this_month', defaultOn: false },
     { label: '🗓️ Last month',  preset: 'last_month', defaultOn: false },
   ];
+  /* FB API: breakdowns compatible with actions/cost_per_action_type fields.
+     platform_position was removed — invalid combo with action_type. */
   const BREAKDOWNS = [
     { id: 'country',            label: '🌍 Country' },
-    { id: 'region',             label: '📍 Region' },
+    { id: 'region',             label: '📍 Region (state/oblast)' },
+    { id: 'dma',                label: '🗺️ DMA (US market area)' },
     { id: 'age',                label: '🎂 Age' },
     { id: 'gender',             label: '⚧ Gender' },
     { id: 'publisher_platform', label: '📱 Platform (FB/IG/AN)' },
-    { id: 'platform_position',  label: '📐 Placement position' },
     { id: 'impression_device',  label: '💻 Device' },
   ];
   const ATTR_WINDOWS = [
@@ -3469,13 +3471,21 @@ function mountAnalytics(container) {
   }
   function n(v, dec) { return v != null && v !== '' ? parseFloat(v).toFixed(dec == null ? 2 : dec) : ''; }
 
-  /* status → filtering payload per level. null if not applicable. */
+  /* status → filtering payload per level. null if not applicable.
+     CAMPAIGN_PAUSED / ADSET_PAUSED are NOT valid for campaign.effective_status —
+     FB silently returns 0 rows if you pass them. Per-level whitelist below. */
   function buildStatusFilter(level, status) {
     if (level === 'account' || status === 'all') return null;
     const field = level + '.effective_status';
-    const value = status === 'active'
-      ? ['ACTIVE']
-      : ['ACTIVE','PAUSED','CAMPAIGN_PAUSED','ADSET_PAUSED','IN_PROCESS'];
+    let value;
+    if (status === 'active') {
+      value = ['ACTIVE'];
+    } else {
+      /* active+paused defaults per level */
+      if (level === 'campaign')   value = ['ACTIVE','PAUSED'];
+      else if (level === 'adset') value = ['ACTIVE','PAUSED','CAMPAIGN_PAUSED'];
+      else /* ad */               value = ['ACTIVE','PAUSED','CAMPAIGN_PAUSED','ADSET_PAUSED'];
+    }
     return [{ field, operator: 'IN', value }];
   }
 
@@ -3742,6 +3752,8 @@ function mountAnalytics(container) {
 
       const totalCalls = accountIds.length * periodDims.length * bdLoop.length;
       let callIdx = 0;
+      let emptyStreak = 0;
+      let hintShown = false;
       log(`Plan: ${accountIds.length} acc × ${periodDims.length} period × ${bdLoop.length} breakdown = ${totalCalls} API call(s)`);
 
       for (const accId of accountIds) {
@@ -3760,7 +3772,16 @@ function mountAnalytics(container) {
             const tag = `[${callIdx}/${totalCalls}] act_${accId} / ${pd.key}${bd ? ' / ' + bd : ''}`;
             try {
               const data = await fetchInsightsPaginated(accId, params, log);
-              if (!data.length) { log(`${tag} — no data`); continue; }
+              if (!data.length) {
+                log(`${tag} — no data`);
+                emptyStreak++;
+                if (emptyStreak >= 8 && !hintShown) {
+                  hintShown = true;
+                  log('⚠ 8+ empty responses in a row. Likely causes: (1) accounts had zero activity in this period, (2) status filter too strict for this level (try "All"), (3) breakdown not supported on Account level.', 'warning');
+                }
+                continue;
+              }
+              emptyStreak = 0;
               let rowsAdded = 0;
               data.forEach(d => {
                 if (hideZero && (!d.spend || parseFloat(d.spend) === 0)) { dropped++; return; }
