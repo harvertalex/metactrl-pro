@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.6.7 — Bookmarklet
+ * FB Launcher v0.6.8 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -1002,6 +1002,36 @@
         }
       }
 
+      // 3) v0.6.7: Final fallback — Page-Backed Instagram Account (PBIA).
+      // FB auto-creates a PBIA per Page; it's what "Use Facebook Page" identity in
+      // Ads Manager UI actually puts under the hood. GET returns existing PBIA,
+      // POST creates one on the fly if the page never had one. Always promotable
+      // for that page's creatives — no cross-BM mismatch.
+      if (pageId) {
+        try {
+          let pbia = null;
+          const g = await apiFetch(`/${pageId}/page_backed_instagram_accounts`, { params: { fields: 'id,username', limit: 1 } });
+          pbia = g?.data?.[0] || null;
+          if (!pbia?.id) {
+            // No PBIA yet — create one. POST returns {id, username}.
+            try {
+              const c = await apiFetch(`/${pageId}/page_backed_instagram_accounts`, { method: 'POST' });
+              if (c?.id) pbia = c;
+            } catch (e) {
+              addLog('warning', `Page ${pageId} PBIA create failed: ${e.message}`);
+            }
+          }
+          if (pbia?.id) {
+            const entry = { igId: String(pbia.id), igName: pbia.username || '', pageName, source: 'pbia' };
+            state.pageIgMap[key] = entry;
+            addLog('info', `🔗 Using Page-Backed IG (PBIA) for page "${pageName || pageId}": ${entry.igId}${entry.igName ? ' @' + entry.igName : ''}`);
+            return entry.igId;
+          }
+        } catch (e) {
+          addLog('warning', `Page ${pageId} PBIA lookup failed: ${e.message}`);
+        }
+      }
+
       state.pageIgMap[key] = { igId: '', igName: '', pageName, source: 'none' };
       addLog('warning', `No IG actor available for acc=${accId || '?'} page=${pageId || '?'} — instagram_user_id omitted (FB uses default)`);
       return '';
@@ -1626,6 +1656,9 @@
     } else if (igResolution.source === 'omitted-cannot-use') {
       addLog('warning', `[${accLabel}] 🔗 IG ${igResolution.wantedButRejected} not promotable here and no account actor available → instagram_user_id omitted (FB default)`);
     } else if (igResolution.source === 'auto') {
+      // 'auto' from resolveAccountIg includes any of: account, page, pbia.
+      // The granular source label was logged once already inside loadIgForAccount,
+      // so here we just confirm the final pick at account scope.
       addLog('info', `[${accLabel}] 🔗 IG actor auto-detected: ${resolvedIg}`);
     } else {
       addLog('info', `[${accLabel}] 🔗 no IG actor — FB will use default`);
@@ -2148,7 +2181,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.6.7
+      <h2>🚀 FB Launcher v0.6.8
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
