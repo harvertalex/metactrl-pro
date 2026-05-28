@@ -412,6 +412,65 @@ function convertRuleFromUSD(rule, rate = 1, currency = 'USD') {
 /* -------------------- GLOBAL STATE -------------------- */
 let ACCOUNTS_CACHE = [];
 
+/* -------------------- SEARCHABLE SELECT HELPER -------------------- */
+// Wraps a <select> with a search input above it that filters options by
+// textContent + value (case-insensitive substring). Works for both single
+// and multi-select. Selected options are preserved during filtering.
+function makeSearchableSelect(selectEl, opts) {
+  if (!selectEl || selectEl._searchEnhanced) return null;
+  selectEl._searchEnhanced = true;
+  opts = opts || {};
+  const placeholder = opts.placeholder || 'Search by name or ID...';
+  const debounceMs = opts.debounceMs != null ? opts.debounceMs : 80;
+
+  const buildIndex = () => Array.from(selectEl.options).map(o => ({
+    el: o,
+    key: ((o.textContent || '') + ' ' + (o.value || '')).toLowerCase()
+  }));
+  let index = buildIndex();
+
+  const input = document.createElement('input');
+  input.type = 'search';
+  input.placeholder = placeholder;
+  input.autocomplete = 'off';
+  input.style.cssText = 'width:100%;margin-bottom:6px;padding:6px 10px;' +
+    'background:var(--card,#1a1a1a);color:var(--txt,#fff);' +
+    'border:1px solid var(--bdr,#444);border-radius:6px;font-size:13px;' +
+    'box-sizing:border-box;outline:none';
+  input.addEventListener('focus', () => { input.style.borderColor = 'var(--acc,#3b82f6)'; });
+  input.addEventListener('blur', () => { input.style.borderColor = 'var(--bdr,#444)'; });
+
+  selectEl.parentNode.insertBefore(input, selectEl);
+
+  const apply = () => {
+    const q = input.value.toLowerCase().trim();
+    index.forEach(({ el, key }) => {
+      const match = !q || key.includes(q);
+      el.hidden = !match;
+      el.style.display = match ? '' : 'none';
+    });
+  };
+
+  let timer = null;
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(apply, debounceMs);
+  });
+
+  // Call this after re-populating selectEl.options to rebuild the index.
+  selectEl.refreshSearch = () => { index = buildIndex(); apply(); };
+
+  return input;
+}
+
+// Select-all variant that respects current filter — only flips visible
+// options. Use instead of `Array.from(sel.options).forEach(o => o.selected=v)`.
+function selectAllVisible(selectEl, checked) {
+  Array.from(selectEl.options).forEach(o => {
+    if (!o.hidden) o.selected = checked;
+  });
+}
+
 /* -------------------- ACCOUNTS LOADING -------------------- */
 async function loadAllAccountsWithRules(log = (() => {})) {
   log('Loading accounts…');
@@ -1414,11 +1473,15 @@ function mountGenerator(container) {
       accList.style.display = ACCOUNTS_CACHE.length ? 'block' : 'none';
       accList.size = Math.min(8, Math.max(3, ACCOUNTS_CACHE.length));
       accSelAllWrap.style.display = ACCOUNTS_CACHE.length ? 'flex' : 'none';
+      if (ACCOUNTS_CACHE.length) {
+        if (accList._searchEnhanced) accList.refreshSearch();
+        else makeSearchableSelect(accList, { placeholder: 'Search accounts by name or ID...' });
+      }
       btnLoadAccs.textContent = '🔄 Reload Accounts';
     } catch(e) { STATUS.log(`Load error: ${e.message}`, 'error'); }
     finally { btnLoadAccs.disabled = false; }
   };
-  accSelAllCb.onchange = () => Array.from(accList.options).forEach(o => o.selected = accSelAllCb.checked);
+  accSelAllCb.onchange = () => selectAllVisible(accList, accSelAllCb.checked);
 
   // ---- actions ----
   const hr = document.createElement('hr'); hr.className = 'ar-divider';
@@ -2487,6 +2550,7 @@ function mountManager(container) {
       sel.appendChild(o);
     });
     host.appendChild(sel);
+    if (ACCOUNTS_CACHE.length) makeSearchableSelect(sel, { placeholder: 'Search account by name or ID...' });
 
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap';
@@ -2541,6 +2605,7 @@ function mountManager(container) {
       sel.appendChild(o);
     });
     host.appendChild(sel);
+    if (ACCOUNTS_CACHE.length) makeSearchableSelect(sel, { placeholder: 'Search target accounts by name or ID...' });
 
     const selAllWrap = document.createElement('label');
     selAllWrap.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-bottom:8px;cursor:pointer';
@@ -2550,7 +2615,7 @@ function mountManager(container) {
     selAllWrap.appendChild(selAllCb);
     selAllWrap.appendChild(document.createTextNode('Select all accounts'));
     host.appendChild(selAllWrap);
-    selAllCb.onchange = () => Array.from(sel.options).forEach(o => o.selected = selAllCb.checked);
+    selAllCb.onchange = () => selectAllVisible(sel, selAllCb.checked);
 
     const clearWrap = document.createElement('label');
     clearWrap.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-bottom:10px;cursor:pointer';
@@ -5225,6 +5290,14 @@ function mountPixelManager(container) {
         if (role === 'account-select') { pxState.selectedAccountId = el.value; render(); }
       });
     });
+
+    // Searchable wrapper for account select (pixel list is usually small).
+    // render() rebuilds innerHTML on each call, so new <select> elements get
+    // a fresh search input each time — no need to track previous state.
+    const accSel = container.querySelector('[data-pxrole="account-select"]');
+    if (accSel && accSel.options.length > 1) {
+      makeSearchableSelect(accSel, { placeholder: 'Search account by name or ID...' });
+    }
 
     container.querySelectorAll('[data-pxbulk]').forEach(el => {
       el.addEventListener('change', () => {
