@@ -1,10 +1,14 @@
 /* ===========================================================================
- * FB Launcher v0.6.12 — Bookmarklet
+ * FB Launcher v0.7.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
  * tab+comma CSV auto-detect, video+image ads, US state region targeting.
  * v0.2: Link override, URL Tags override, token engine, pixel placeholder substitution.
+ * v0.7.0: name markers (CTRL/etc. → campaign+adset+ad names, autorule opt-in root-fix),
+ *         in-tool targeting overrides (geo/states/age/gender/placements, override CSV),
+ *         budget & bidding overrides (CBO/ABO mode, budget amount, bid strategy + cap),
+ *         wider panel (920px) + responsive 2-3-col grid layout.
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -16,6 +20,10 @@
   // ─── KILL OLD INSTANCE ──────────────────────────────────────────────────
   const PANEL_ID = '__fb_launcher_panel__';
   document.getElementById(PANEL_ID)?.remove();
+
+  // v0.7.0: name-marker chip presets. FB-safe codenames only (no gambling keywords — see
+  // feedback_fb_gambling_keywords). CTRL = autorule opt-in marker (cascade filters name CONTAIN "CTRL").
+  const MARKER_PRESETS = ['CTRL', 'PWA-A', 'PWA-B', 'EU12', 'IB', 'CSC'];
 
   // ─── CONFIG ─────────────────────────────────────────────────────────────
   const GRAPH_VER = 'v23.0';
@@ -76,6 +84,27 @@
     createStatus: 'PAUSED',
     campNameTpl: '',
     adsetNameTpl: '',
+    // v0.7.0: name markers — appended as " | <marker>" to campaign/adset/ad names at creation.
+    // Root-fix for autorule opt-in (e.g. CTRL): cascade rules filter on name CONTAIN "CTRL".
+    // Markers touch ONLY FB entity names — token context (ad_name/adset_name → URL Tags/tracker)
+    // stays clean so markers never pollute sub_id reporting.
+    markers: [],              // v0.7.0: active marker strings, e.g. ['CTRL','PWA-A']
+    markersFreeform: '',      // v0.7.0: raw free-form input "X | Y" (parsed into markers on input)
+    // v0.7.0: in-tool targeting — when set, override the matching CSV column for ALL adsets.
+    // Empty = fall back to CSV (same pattern as pixelOverride). SAC still disables region targeting.
+    geoCountriesOverride: '', // v0.7.0: comma list of country codes (e.g. "US,CA"); empty = CSV
+    geoStatesOverride: '',    // v0.7.0: comma list of US state names; resolved via resolveRegions; empty = CSV
+    ageMinOverride: '',       // v0.7.0: empty = CSV (default 18)
+    ageMaxOverride: '',       // v0.7.0: empty = CSV (default 65)
+    genderOverride: '',       // v0.7.0: '' = CSV | 'all' | 'men' | 'women'
+    advantageAudienceOverride: '', // v0.7.0: '' = CSV | '0' (off) | '1' (on)
+    placementPreset: '',      // v0.7.0: '' = CSV | all | fb_ig | fb_only | feeds_only | reels_only
+    // v0.7.0: budget & bidding — override CSV. budgetModeOverride drives CBO vs ABO structure.
+    budgetModeOverride: '',   // '' = CSV auto-detect | 'cbo' (campaign budget) | 'abo' (adset budget)
+    cboBudgetOverride: '',    // campaign daily budget $ (when mode=cbo)
+    adsetBudgetOverride: '',  // per-adset daily budget $ (when mode=abo) — applied to every adset
+    bidStrategyOverride: '',  // '' = CSV | LOWEST_COST_WITHOUT_CAP | COST_CAP | LOWEST_COST_WITH_BID_CAP
+    bidAmountOverride: '',    // bid/cost cap $ (only used when strategy is COST_CAP or BID_CAP)
     running: false,
     log: [],
     progress: { done: 0, total: 0 },
@@ -401,6 +430,45 @@
     }
   }
 
+  // v0.7.0: single source of truth for what a preset persists (shared by manual + auto save).
+  // Excludes creatives (need fresh hashes) and target accounts (chosen per session) by design.
+  function collectSettings() {
+    return {
+      campNamePrefix: state.campNamePrefix,
+      linkOverride: state.linkOverride,
+      urlTagsOverride: state.urlTagsOverride,
+      titleOverride: state.titleOverride,
+      bodyOverride: state.bodyOverride,
+      ctaOverride: state.ctaOverride,
+      pixelOverride: state.pixelOverride,
+      customEventOverride: state.customEventOverride,
+      pageIdOverride: state.pageIdOverride,
+      instagramOverride: state.instagramOverride,
+      usePageAsActor: state.usePageAsActor,
+      dsaBeneficiary: state.dsaBeneficiary,
+      dsaPayer: state.dsaPayer,
+      urlTagParam: state.urlTagParam,
+      urlTagMode: state.urlTagMode,
+      urlTagCustom: state.urlTagCustom,
+      adsetAssignments: state.adsetAssignments,
+      // v0.7.0
+      markers: state.markers,
+      markersFreeform: state.markersFreeform,
+      geoCountriesOverride: state.geoCountriesOverride,
+      geoStatesOverride: state.geoStatesOverride,
+      ageMinOverride: state.ageMinOverride,
+      ageMaxOverride: state.ageMaxOverride,
+      genderOverride: state.genderOverride,
+      advantageAudienceOverride: state.advantageAudienceOverride,
+      placementPreset: state.placementPreset,
+      budgetModeOverride: state.budgetModeOverride,
+      cboBudgetOverride: state.cboBudgetOverride,
+      adsetBudgetOverride: state.adsetBudgetOverride,
+      bidStrategyOverride: state.bidStrategyOverride,
+      bidAmountOverride: state.bidAmountOverride,
+    };
+  }
+
   function savePreset() {
     if (!state.rows.length) { setStatus('error', 'Load CSV first before saving preset.'); return; }
     const defaultName = state.campNamePrefix || state.fileName.replace(/\.[^.]+$/, '') || 'Preset';
@@ -412,25 +480,7 @@
       createdAt: new Date().toISOString(),
       fileName: state.fileName,
       csvText: state.rows.length ? JSON.stringify(state.rows) : '',  // pre-parsed rows
-      settings: {
-        campNamePrefix: state.campNamePrefix,
-        linkOverride: state.linkOverride,
-        urlTagsOverride: state.urlTagsOverride,
-        titleOverride: state.titleOverride,
-        bodyOverride: state.bodyOverride,
-        ctaOverride: state.ctaOverride,
-        pixelOverride: state.pixelOverride,
-        customEventOverride: state.customEventOverride,
-        pageIdOverride: state.pageIdOverride,
-        instagramOverride: state.instagramOverride,
-        usePageAsActor: state.usePageAsActor,
-        dsaBeneficiary: state.dsaBeneficiary,
-        dsaPayer: state.dsaPayer,
-        urlTagParam: state.urlTagParam,
-        urlTagMode: state.urlTagMode,
-        urlTagCustom: state.urlTagCustom,
-        adsetAssignments: state.adsetAssignments,
-      },
+      settings: collectSettings(),
     };
     state.presets.unshift(preset);  // newest first
     state.selectedPresetId = preset.id;
@@ -467,6 +517,21 @@
     state.urlTagMode = s.urlTagMode || 'acc_id';
     state.urlTagCustom = s.urlTagCustom || '';
     state.adsetAssignments = s.adsetAssignments || {};
+    // v0.7.0
+    state.markers = Array.isArray(s.markers) ? s.markers : [];
+    state.markersFreeform = s.markersFreeform || '';
+    state.geoCountriesOverride = s.geoCountriesOverride || '';
+    state.geoStatesOverride = s.geoStatesOverride || '';
+    state.ageMinOverride = s.ageMinOverride || '';
+    state.ageMaxOverride = s.ageMaxOverride || '';
+    state.genderOverride = s.genderOverride || '';
+    state.advantageAudienceOverride = s.advantageAudienceOverride || '';
+    state.placementPreset = s.placementPreset || '';
+    state.budgetModeOverride = s.budgetModeOverride || '';
+    state.cboBudgetOverride = s.cboBudgetOverride || '';
+    state.adsetBudgetOverride = s.adsetBudgetOverride || '';
+    state.bidStrategyOverride = s.bidStrategyOverride || '';
+    state.bidAmountOverride = s.bidAmountOverride || '';
     state.selectedPresetId = presetId;
     // Reset creatives — must be fresh per launch
     state.creativesInput = '';
@@ -522,25 +587,7 @@
       fileName: state.fileName,
       csvText: JSON.stringify(state.rows),
       auto: true,
-      settings: {
-        campNamePrefix: state.campNamePrefix,
-        linkOverride: state.linkOverride,
-        urlTagsOverride: state.urlTagsOverride,
-        titleOverride: state.titleOverride,
-        bodyOverride: state.bodyOverride,
-        ctaOverride: state.ctaOverride,
-        pixelOverride: state.pixelOverride,
-        customEventOverride: state.customEventOverride,
-        pageIdOverride: state.pageIdOverride,
-        instagramOverride: state.instagramOverride,
-        usePageAsActor: state.usePageAsActor,
-        dsaBeneficiary: state.dsaBeneficiary,
-        dsaPayer: state.dsaPayer,
-        urlTagParam: state.urlTagParam,
-        urlTagMode: state.urlTagMode,
-        urlTagCustom: state.urlTagCustom,
-        adsetAssignments: state.adsetAssignments,
-      },
+      settings: collectSettings(),
     };
     state.presets.unshift(preset);
     savePresetsToStorage();
@@ -1249,12 +1296,19 @@
       groups.get(key).push(r);
     }
 
-    // Budget mode
+    // Budget mode — CSV auto-detect, then v0.7.0 UI override (mode forces CBO/ABO + amount).
     const campBudgetRaw = String(first['Campaign Daily Budget'] || '').trim();
     const adsetBudgetRaw = String(first['Ad Set Daily Budget'] || '').trim();
     const campBudgetNum = parseNum(campBudgetRaw);
-    const isCBO = !!campBudgetRaw && campBudgetRaw.toUpperCase() !== 'UNDEFINED' && campBudgetNum > 0;
-    const cboBudget = isCBO ? campBudgetNum : 0;
+    let isCBO = !!campBudgetRaw && campBudgetRaw.toUpperCase() !== 'UNDEFINED' && campBudgetNum > 0;
+    let cboBudget = isCBO ? campBudgetNum : 0;
+    if (state.budgetModeOverride === 'cbo') {
+      isCBO = true;
+      cboBudget = parseNum(state.cboBudgetOverride) || campBudgetNum || 0;
+    } else if (state.budgetModeOverride === 'abo') {
+      isCBO = false;
+      cboBudget = 0;
+    }
 
     // SAC
     const sacRaw = String(first['Special Ad Categories'] || 'NONE').trim().toUpperCase();
@@ -1268,13 +1322,18 @@
     };
     const sacList = (sacRaw && sacRaw !== 'NONE') ? [sacMap[sacRaw] || sacRaw] : [];
 
-    // Adset budgets sum for ABO
+    // Adset budgets sum for ABO. v0.7.0: per-adset override applies the same budget to every adset.
     let aboTotal = 0;
     if (!isCBO) {
-      for (const [, gr] of groups) {
-        const ab = String(gr[0]['Ad Set Daily Budget'] || '').trim();
-        const n = (ab && ab.toUpperCase() !== 'UNDEFINED') ? parseNum(ab) : 0;
-        if (n > 0) aboTotal += n;
+      const ov = parseNum(state.adsetBudgetOverride);
+      if (state.adsetBudgetOverride && ov > 0) {
+        aboTotal = ov * groups.size;
+      } else {
+        for (const [, gr] of groups) {
+          const ab = String(gr[0]['Ad Set Daily Budget'] || '').trim();
+          const n = (ab && ab.toUpperCase() !== 'UNDEFINED') ? parseNum(ab) : 0;
+          if (n > 0) aboTotal += n;
+        }
       }
     }
 
@@ -1336,8 +1395,37 @@
     return 'LOWEST_COST_WITHOUT_CAP';
   }
 
+  // v0.7.0: UI bid-strategy override (already an FB enum) wins over CSV's free-text "Campaign Bid Strategy".
+  function effectiveBidStrategy(row) {
+    return state.bidStrategyOverride || mapBidStrategy(row && row['Campaign Bid Strategy']);
+  }
+
   function renderTpl(tpl, ctx) {
     return String(tpl || '').replace(/\{(\w+)\}|\$\{(\w+)\}/g, (_, a, b) => String(ctx[a || b] ?? ''));
+  }
+
+  // v0.7.0: append active name markers (" | CTRL", " | PWA-A", ...) to a campaign/adset/ad name.
+  // Dedup-aware: skips a marker already present as a substring (case-insensitive), so re-launches
+  // and CSV names that already carry the marker don't double it (mirrors gambling-add-ctrl.ts).
+  // Applied ONLY to FB entity names — never to the token context that feeds URL Tags / tracker.
+  function applyMarkers(name) {
+    let out = String(name || '');
+    for (const raw of state.markers) {
+      const m = String(raw || '').trim();
+      if (!m) continue;
+      if (new RegExp(m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(out)) continue;
+      out += ` | ${m}`;
+    }
+    return out;
+  }
+
+  // v0.7.0: parse the free-form markers field ("CTRL | PWA-A") into deduped trimmed tokens,
+  // merging with any chip-toggled markers already in state.markers from chips.
+  function parseFreeformMarkers(raw) {
+    return String(raw || '')
+      .split('|')
+      .map(s => s.trim())
+      .filter(Boolean);
   }
 
   /**
@@ -1609,6 +1697,20 @@
     return out;
   }
 
+  // v0.7.0: placement preset → FB targeting fields. Mirrors the all|fb_ig|fb_only|feeds_only|reels_only
+  // convention used by fb-campaign-generator. Returns null for '' (= fall back to CSV columns) and
+  // for 'all' (= omit platform/position fields → FB automatic/Advantage+ placements).
+  function placementSpec(preset) {
+    switch (preset) {
+      case 'fb_ig':      return { publisher_platforms: ['facebook', 'instagram'] };
+      case 'fb_only':    return { publisher_platforms: ['facebook'] };
+      case 'feeds_only': return { publisher_platforms: ['facebook', 'instagram'], facebook_positions: ['feed'], instagram_positions: ['stream'] };
+      case 'reels_only': return { publisher_platforms: ['facebook', 'instagram'], facebook_positions: ['facebook_reels'], instagram_positions: ['reels'] };
+      case 'all':        return {};   // explicit "all" → no restriction (automatic placements)
+      default:           return null; // '' → use CSV
+    }
+  }
+
   // ─── LAUNCHER ───────────────────────────────────────────────────────────
   // v0.6: orchestrator — pre-flight CSV-wide checks once, then run the per-account
   // pipeline for each selected account sequentially. For single-account this still
@@ -1763,6 +1865,8 @@
       } else {
         campName = firstRow['Campaign Name'] || `FB Launcher ${dateStr}`;
       }
+      // v0.7.0: markers on campaign name (campaign name is NOT used in token context, so safe here)
+      campName = applyMarkers(campName);
 
       const campBody = {
         name: campName,
@@ -1775,7 +1879,7 @@
       // sending it on a budget-less campaign trips FB error [100/1885737] "campaign budget not set".
       if (plan.isCBO) {
         campBody.daily_budget = String(Math.round(plan.cboBudget * 100));
-        campBody.bid_strategy = mapBidStrategy(firstRow['Campaign Bid Strategy']);
+        campBody.bid_strategy = effectiveBidStrategy(firstRow);
       }
 
       addLog('info', `[${accLabel}] creating campaign "${campName}"...`);
@@ -1833,17 +1937,27 @@
           })
         : (adsetSourceName !== '__default__' ? adsetSourceName : `Ad Set ${adsetIdx}`);
 
-      const countriesRaw = String(aFirst['Countries'] || '').split(',').map(s => s.trim()).filter(Boolean);
-      const fbRegions = await resolveRegions(aFirst['Regions']);
+      // v0.7.0: targeting — UI override (state.*) wins over CSV column; empty override falls back to CSV.
+      const countriesRaw = (state.geoCountriesOverride || String(aFirst['Countries'] || ''))
+        .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+      const fbRegions = await resolveRegions(state.geoStatesOverride || aFirst['Regions']);
       const countries = countriesRaw.length ? countriesRaw : ['US'];
-      const ageMin = +aFirst['Age Min'] || 18;
-      const ageMax = +aFirst['Age Max'] || 65;
-      const gender = String(aFirst['Gender'] || '').toLowerCase();
+      const ageMin = state.ageMinOverride ? (+state.ageMinOverride || 18) : (+aFirst['Age Min'] || 18);
+      const ageMax = state.ageMaxOverride ? (+state.ageMaxOverride || 65) : (+aFirst['Age Max'] || 65);
+      const gender = (state.genderOverride || String(aFirst['Gender'] || '')).toLowerCase();
       const genders = gender.includes('men') && !gender.includes('women') ? [1]
         : gender.includes('women') && !gender.includes('men') ? [2] : [1, 2];
-      const publisherPlatforms = String(aFirst['Publisher Platforms'] || '').split(',').map(s => s.trim()).filter(Boolean);
-      const fbPositions = String(aFirst['Facebook Positions'] || '').split(',').map(s => s.trim()).filter(Boolean);
-      const igPositions = String(aFirst['Instagram Positions'] || '').split(',').map(s => s.trim()).filter(Boolean);
+      // Placements: UI preset override (placementSpec) wins; else CSV columns.
+      const placePreset = placementSpec(state.placementPreset);
+      const publisherPlatforms = placePreset
+        ? (placePreset.publisher_platforms || [])
+        : String(aFirst['Publisher Platforms'] || '').split(',').map(s => s.trim()).filter(Boolean);
+      const fbPositions = placePreset
+        ? (placePreset.facebook_positions || [])
+        : String(aFirst['Facebook Positions'] || '').split(',').map(s => s.trim()).filter(Boolean);
+      const igPositions = placePreset
+        ? (placePreset.instagram_positions || [])
+        : String(aFirst['Instagram Positions'] || '').split(',').map(s => s.trim()).filter(Boolean);
       const devicePlatforms = String(aFirst['Device Platforms'] || '').split(',').map(s => s.trim()).filter(Boolean);
 
       // Pixel: UI override (highest) > CSV columns
@@ -1855,7 +1969,7 @@
         || 'PURCHASE';
       const optGoal = aFirst['Optimization Goal'] || 'OFFSITE_CONVERSIONS';
       const billingEvent = aFirst['Billing Event'] || 'IMPRESSIONS';
-      const bidStrategy = mapBidStrategy(firstRow['Campaign Bid Strategy']);
+      const bidStrategy = effectiveBidStrategy(firstRow);
 
       const geoLocations = {
         location_types: String(aFirst['Location Types'] || 'home,recent').split(',').map(s => s.trim()).filter(Boolean),
@@ -1869,7 +1983,7 @@
         age_min: ageMin,
         age_max: ageMax,
         genders,
-        targeting_automation: { advantage_audience: +(aFirst['Advantage Audience'] || 0) },
+        targeting_automation: { advantage_audience: state.advantageAudienceOverride !== '' ? +state.advantageAudienceOverride : +(aFirst['Advantage Audience'] || 0) },
       };
       if (publisherPlatforms.length) targeting.publisher_platforms = publisherPlatforms;
       if (devicePlatforms.length) targeting.device_platforms = devicePlatforms;
@@ -1878,14 +1992,16 @@
 
       const promoted = { pixel_id: pixelId, custom_event_type: customEventType };
 
-      const bidAmountRaw = aFirst['Bid Amount'];
+      const bidAmountRaw = state.bidAmountOverride || aFirst['Bid Amount'];  // v0.7.0: UI override > CSV
       const bidAmountNum = parseNum(bidAmountRaw);
       const bidNeedsCap = bidStrategy === 'COST_CAP' || bidStrategy === 'LOWEST_COST_WITH_BID_CAP';
       const bidAmountCents = bidNeedsCap && bidAmountNum > 0
         ? String(Math.round(bidAmountNum * 100)) : null;
 
+      // v0.7.0: markers on FB adset name only; adsetName stays clean for token context (URL Tags)
+      const adsetNameFinal = applyMarkers(adsetName);
       const adsetBody = {
-        name: adsetName,
+        name: adsetNameFinal,
         campaign_id: campaignId,
         status: state.createStatus,
         optimization_goal: optGoal,
@@ -1900,15 +2016,18 @@
         adsetBody.dsa_payer = state.dsaPayer || state.dsaBeneficiary;
       }
       if (!plan.isCBO) {
+        // v0.7.0: per-adset budget override applies to every adset; else CSV column.
+        const ovNum = parseNum(state.adsetBudgetOverride);
         const ab = String(aFirst['Ad Set Daily Budget'] || '').trim();
-        const abNum = (ab && ab.toUpperCase() !== 'UNDEFINED') ? parseNum(ab) : 0;
+        const csvNum = (ab && ab.toUpperCase() !== 'UNDEFINED') ? parseNum(ab) : 0;
+        const abNum = (state.adsetBudgetOverride && ovNum > 0) ? ovNum : csvNum;
         if (abNum > 0) adsetBody.daily_budget = String(Math.round(abNum * 100));
         // v0.5.1: bid_strategy belongs on the adset for ABO. CBO inherits it from campaign.
         adsetBody.bid_strategy = bidStrategy;
       }
       if (bidAmountCents) adsetBody.bid_amount = bidAmountCents;
 
-      addLog('info', `[${accLabel}] creating adset ${adsetIdx}/${plan.adsetCount} "${adsetName}"...`);
+      addLog('info', `[${accLabel}] creating adset ${adsetIdx}/${plan.adsetCount} "${adsetNameFinal}"...`);
       let adsetId;
       try {
         const adset = await apiFetch(`/act_${accId}/adsets`, { method: 'POST', body: adsetBody });
@@ -1916,7 +2035,7 @@
         state.progress.done++;
         addLog('success', `[${accLabel}] ✓ adset ${adsetIdx}/${plan.adsetCount} id=${adsetId} (${adsToCreate.length} ads coming)`);
       } catch (e) {
-        addLog('error', `[${accLabel}] ✗ adset ${adsetIdx} "${adsetName}": ${e.message}`);
+        addLog('error', `[${accLabel}] ✗ adset ${adsetIdx} "${adsetNameFinal}": ${e.message}`);
         state.progress.done += 1 + adsToCreate.length; // skip this adset's ads in progress
         continue;
       }
@@ -2086,8 +2205,10 @@
               throw e;
             }
           }
+          // v0.7.0: markers on FB ad name only; adName stays clean for token context (sub5/ad_name)
+          const adNameFinal = applyMarkers(adName);
           const adBodyPost = {
-            name: adName,
+            name: adNameFinal,
             adset_id: adsetId,
             creative: JSON.stringify({ creative_id: creative.id }),
             status: state.createStatus,
@@ -2100,7 +2221,7 @@
           await apiFetch(`/act_${accId}/ads`, { method: 'POST', body: adBodyPost });
           totalAdOk++;
           state.progress.done++;
-          addLog('success', `[${accLabel}] ✓ ad ${i + 1}/${adsToCreate.length} "${adName}"`);
+          addLog('success', `[${accLabel}] ✓ ad ${i + 1}/${adsToCreate.length} "${adNameFinal}"`);
         } catch (e) {
           totalAdErr++;
           state.progress.done++;
@@ -2134,11 +2255,11 @@
     const style = document.createElement('style');
     style.id = '__fb_launcher_styles__';
     style.textContent = `
-      #${PANEL_ID} { position:fixed; top:0; right:0; width:720px; height:100vh;
+      #${PANEL_ID} { position:fixed; top:0; right:0; width:920px; max-width:94vw; height:100vh;
         background:#0f172a; color:#e2e8f0; z-index:2147483646;
         border-left:1px solid #334155; box-shadow:-8px 0 24px rgba(0,0,0,.4);
         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-        font-size:13px; overflow-y:auto; padding:14px 16px; box-sizing:border-box; }
+        font-size:13px; overflow-y:auto; padding:14px 18px; box-sizing:border-box; }
       #${PANEL_ID} h2 { margin:0 0 4px 0; font-size:15px; font-weight:700; color:#fff;
         display:flex; align-items:center; justify-content:space-between; }
       #${PANEL_ID} .sub { color:#94a3b8; font-size:11px; margin-bottom:12px; }
@@ -2177,6 +2298,19 @@
       #${PANEL_ID} .status.warning { background:rgba(245,158,11,.1); border-color:rgba(245,158,11,.3); color:#fde68a; }
       #${PANEL_ID} .row { display:flex; gap:6px; }
       #${PANEL_ID} .row > * { flex:1; }
+      /* v0.7.0: responsive grids — settings flow 2-3 per row, collapse to 1 col on narrow panels */
+      #${PANEL_ID} .grid2 { display:grid; grid-template-columns:repeat(2,1fr); gap:10px 14px; }
+      #${PANEL_ID} .grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:10px 14px; }
+      #${PANEL_ID} .grid2 > .field, #${PANEL_ID} .grid3 > .field { margin-bottom:0; min-width:0; }
+      @media (max-width:760px) {
+        #${PANEL_ID} .grid2, #${PANEL_ID} .grid3 { grid-template-columns:1fr; }
+      }
+      /* v0.7.0: marker chips */
+      #${PANEL_ID} .chips { display:flex; flex-wrap:wrap; gap:5px; }
+      #${PANEL_ID} .chip { padding:3px 10px; border-radius:12px; font-size:11px; cursor:pointer;
+        border:1px solid #334155; background:#1e293b; color:#94a3b8; user-select:none; transition:all .12s; }
+      #${PANEL_ID} .chip:hover { border-color:#475569; color:#cbd5e1; }
+      #${PANEL_ID} .chip.on { background:rgba(59,130,246,.15); border-color:#3b82f6; color:#bfdbfe; font-weight:600; }
       #${PANEL_ID} hr { border:none; border-top:1px solid #334155; margin:14px 0; }
       #${PANEL_ID} .s-pending { color:#475569; }
       #${PANEL_ID} .s-uploading { color:#60a5fa; }
@@ -2261,6 +2395,15 @@
     const pixelValid = /^\d{8,20}$/.test(effPixel);
     const pixelInAccount = !state.pixelsList.length || !!state.pixelsList.find(p => p.id === effPixel);
 
+    // v0.7.0: budget & bidding UI helpers
+    const bMode = state.budgetModeOverride;
+    const budgetAmtVal = bMode === 'cbo' ? state.cboBudgetOverride : bMode === 'abo' ? state.adsetBudgetOverride : '';
+    const budgetAmtLabel = bMode === 'cbo' ? 'Campaign daily budget ($)'
+      : bMode === 'abo' ? `Ad set daily budget ($ × ${plan ? plan.adsetCount : 'N'} adsets)`
+      : 'Budget ($) — pick a mode first';
+    // Bid amount only meaningful for cap strategies; disable when explicitly "no cap".
+    const bidNeedsCapUI = state.bidStrategyOverride !== 'LOWEST_COST_WITHOUT_CAP';
+
     const previewHtml = plan ? `
       <div class="preview">
         <div><b>${plan.adsetCount}</b> adset${plan.adsetCount > 1 ? 's' : ''} ${plan.adsMode ? `× <b>${plan.adsModeItems.length}</b> creatives = <b>${plan.adCount}</b> ads` : `· <b>${plan.adCount}</b> ad${plan.adCount > 1 ? 's' : ''}`} · <b>${plan.isCBO ? 'CBO' : 'ABO'}</b> ${plan.isCBO ? `$${plan.cboBudget}/d` : `$${plan.aboTotal}/d total`}</div>
@@ -2282,6 +2425,9 @@
     else if (!state.dsaBeneficiary) blockReason = '⚠ Set DSA Advertiser (step 5) — FB requires it for almost all ads now';
     else if (!pixelValid) blockReason = `⚠ Pixel "${effPixel}" invalid format (8-20 digits)`;
     else if (state.pixelsList.length && !pixelInAccount) blockReason = `⚠ Pixel ${effPixel} not in primary account`;
+    // v0.7.0: a zero budget is a guaranteed FB rejection — catch it before launch.
+    else if (plan && plan.isCBO && !plan.cboBudget) blockReason = '⚠ Campaign budget is 0 — set it (1b) or in CSV';
+    else if (plan && !plan.isCBO && !plan.aboTotal) blockReason = '⚠ Ad set budget is 0 — set it (1b) or in CSV';
     const runDisabled = !!blockReason;
     const totalAds = plan?.adCount || 0;
     const buttonLabel = blockReason
@@ -2292,7 +2438,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.6.12
+      <h2>🚀 FB Launcher v0.7.0
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -2337,6 +2483,47 @@
           <input type="text" id="fbl-camp-prefix" value="${esc(state.campNamePrefix)}" placeholder="e.g. VERT | Multi | COLD TEST">
           ${state.campNamePrefix && plan ? `<div style="font-size:10px;color:#22c55e;margin-top:3px;font-family:ui-monospace,monospace;word-break:break-all">Preview: ${esc(state.campNamePrefix)} | ${plan.isCBO ? 'CBO' : 'ABO'} $${plan.isCBO ? plan.cboBudget : plan.aboTotal}/d | ${plan.adsetCount}as${plan.adCount}ads | ${(() => { const n = new Date(); return String(n.getMonth()+1).padStart(2,'0') + String(n.getDate()).padStart(2,'0') + String(n.getFullYear()).slice(-2); })()} | ${esc(isMulti ? '<acc_id>' : (primaryAcc || '<acc_id>'))}</div>` : ''}
         </div>
+        <div style="margin-top:10px">
+          <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Name markers <span style="color:#6e7681">— appended " | X" to campaign + adset + ad names. CTRL = autorule opt-in.</span></div>
+          <div class="chips">
+            ${MARKER_PRESETS.map(m => `<span class="chip ${state.markers.includes(m) ? 'on' : ''}" data-marker="${esc(m)}">${esc(m)}</span>`).join('')}
+          </div>
+          <input type="text" id="fbl-markers-freeform" value="${esc(state.markersFreeform)}" placeholder="extra markers, pipe-separated — e.g. COLD | Q2" style="margin-top:6px">
+          ${state.markers.length ? `<div style="font-size:10px;color:#22c55e;margin-top:4px;font-family:ui-monospace,monospace;word-break:break-all">Names get: <b>${esc(state.markers.map(m => '| ' + m).join(' '))}</b> ${state.markers.includes('CTRL') ? '' : '<span style="color:#fbbf24">· no CTRL → autorules skip these</span>'}</div>` : ''}
+        </div>
+      </div>
+
+      <div class="field">
+        <label>1b. Budget &amp; Bidding <span style="color:#6e7681">— fill to override CSV. Mode sets CBO (campaign budget) vs ABO (per-adset).</span></label>
+        <div class="grid2">
+          <div class="field">
+            <label>Budget mode</label>
+            <select id="fbl-budget-mode">
+              <option value="" ${bMode === '' ? 'selected' : ''}>— CSV auto-detect —</option>
+              <option value="cbo" ${bMode === 'cbo' ? 'selected' : ''}>CBO — campaign budget</option>
+              <option value="abo" ${bMode === 'abo' ? 'selected' : ''}>ABO — ad set budget</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>${budgetAmtLabel}</label>
+            <input type="text" id="fbl-budget-amount" value="${esc(budgetAmtVal)}" placeholder="${bMode ? 'e.g. 50' : 'select mode →'}"${bMode ? '' : ' disabled style="opacity:.4"'}>
+          </div>
+        </div>
+        <div class="grid2" style="margin-top:10px">
+          <div class="field">
+            <label>Bid strategy</label>
+            <select id="fbl-bid-strategy">
+              <option value="" ${state.bidStrategyOverride === '' ? 'selected' : ''}>— CSV —</option>
+              <option value="LOWEST_COST_WITHOUT_CAP" ${state.bidStrategyOverride === 'LOWEST_COST_WITHOUT_CAP' ? 'selected' : ''}>Highest volume (no cap)</option>
+              <option value="COST_CAP" ${state.bidStrategyOverride === 'COST_CAP' ? 'selected' : ''}>Cost cap</option>
+              <option value="LOWEST_COST_WITH_BID_CAP" ${state.bidStrategyOverride === 'LOWEST_COST_WITH_BID_CAP' ? 'selected' : ''}>Bid cap</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Bid / cost cap ($) <span style="color:#6e7681">${bidNeedsCapUI ? '' : '(no cap → unused)'}</span></label>
+            <input type="text" id="fbl-bid-amount" value="${esc(state.bidAmountOverride)}" placeholder="${bidNeedsCapUI ? 'e.g. 12.50' : 'n/a for highest-volume'}"${bidNeedsCapUI ? '' : ' disabled style="opacity:.4"'}>
+          </div>
+        </div>
       </div>
 
       ${previewHtml}
@@ -2369,6 +2556,7 @@
         </div>` : ''}
       </div>
 
+      <div class="grid2">
       <div class="field">
         <label>3. Page ID <span style="color:#6e7681">— ${state.pagesLoading ? 'loading pages...' : `${state.pagesList.length} pages found`}</span></label>
         ${state.pagesList.length ? `
@@ -2429,11 +2617,68 @@
           <option value="CONTACT" ${state.customEventOverride === 'CONTACT' ? 'selected' : ''}>CONTACT</option>
         </select>
       </div>
+      </div>
 
       <div class="field" ${!state.dsaBeneficiary ? 'style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:6px;padding:8px 10px"' : ''}>
         <label>5. DSA Advertiser <span style="color:${state.dsaBeneficiary ? '#22c55e' : '#fbbf24'}">${state.dsaBeneficiary ? '✓ set' : '⚠ required — FB rejects ad sets without it'}</span>${hasEuTargeting(state.rows) ? ' <span style="color:#fbbf24">· EU targeting detected</span>' : ''}</label>
-        <input type="text" id="fbl-dsa-beneficiary" value="${esc(state.dsaBeneficiary)}" placeholder="Beneficiary (person or org being advertised) — e.g. your business or page name" style="margin-bottom:5px">
-        <input type="text" id="fbl-dsa-payer" value="${esc(state.dsaPayer)}" placeholder="Payer (optional — defaults to beneficiary)">
+        <div class="grid2">
+          <div class="field"><input type="text" id="fbl-dsa-beneficiary" value="${esc(state.dsaBeneficiary)}" placeholder="Beneficiary — business or page name"></div>
+          <div class="field"><input type="text" id="fbl-dsa-payer" value="${esc(state.dsaPayer)}" placeholder="Payer (optional — defaults to beneficiary)"></div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>5b. Targeting <span style="color:#6e7681">— fill to override CSV for ALL adsets; empty = use CSV column</span>${plan?.sacList.length ? ' <span style="color:#fbbf24">· SAC active — state targeting disabled (country-level only)</span>' : ''}</label>
+        <div class="grid2">
+          <div class="field">
+            <label>Countries <span style="color:#6e7681">(codes, e.g. US,CA)</span></label>
+            <input type="text" id="fbl-geo-countries" value="${esc(state.geoCountriesOverride)}" placeholder="empty = CSV (default US)">
+          </div>
+          <div class="field">
+            <label>US states <span style="color:#6e7681">${plan?.sacList.length ? '(disabled under SAC)' : '(names, e.g. Texas,Florida)'}</span></label>
+            <input type="text" id="fbl-geo-states" value="${esc(state.geoStatesOverride)}" placeholder="empty = CSV"${plan?.sacList.length ? ' disabled style="opacity:.4"' : ''}>
+          </div>
+        </div>
+        <div class="grid3" style="margin-top:10px">
+          <div class="field">
+            <label>Age min</label>
+            <input type="text" id="fbl-age-min" value="${esc(state.ageMinOverride)}" placeholder="CSV/18">
+          </div>
+          <div class="field">
+            <label>Age max</label>
+            <input type="text" id="fbl-age-max" value="${esc(state.ageMaxOverride)}" placeholder="CSV/65">
+          </div>
+          <div class="field">
+            <label>Gender</label>
+            <select id="fbl-gender">
+              <option value="" ${state.genderOverride === '' ? 'selected' : ''}>— CSV —</option>
+              <option value="all" ${state.genderOverride === 'all' ? 'selected' : ''}>All</option>
+              <option value="men" ${state.genderOverride === 'men' ? 'selected' : ''}>Men</option>
+              <option value="women" ${state.genderOverride === 'women' ? 'selected' : ''}>Women</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid2" style="margin-top:10px">
+          <div class="field">
+            <label>Placements</label>
+            <select id="fbl-placement">
+              <option value="" ${state.placementPreset === '' ? 'selected' : ''}>— CSV —</option>
+              <option value="all" ${state.placementPreset === 'all' ? 'selected' : ''}>All (automatic)</option>
+              <option value="fb_ig" ${state.placementPreset === 'fb_ig' ? 'selected' : ''}>FB + IG</option>
+              <option value="fb_only" ${state.placementPreset === 'fb_only' ? 'selected' : ''}>FB only</option>
+              <option value="feeds_only" ${state.placementPreset === 'feeds_only' ? 'selected' : ''}>Feeds only</option>
+              <option value="reels_only" ${state.placementPreset === 'reels_only' ? 'selected' : ''}>Reels only</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Advantage Audience</label>
+            <select id="fbl-advantage">
+              <option value="" ${state.advantageAudienceOverride === '' ? 'selected' : ''}>— CSV —</option>
+              <option value="0" ${state.advantageAudienceOverride === '0' ? 'selected' : ''}>Off</option>
+              <option value="1" ${state.advantageAudienceOverride === '1' ? 'selected' : ''}>On</option>
+            </select>
+          </div>
+        </div>
       </div>
 
       <div class="field">
@@ -2868,6 +3113,47 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       state.usePageAsActor = e.target.checked;
       render();
     });
+    // v0.7.0: name marker chips — toggle preset in/out of state.markers
+    panel.querySelectorAll('.chip[data-marker]').forEach(el => {
+      el.addEventListener('click', () => {
+        const m = el.dataset.marker;
+        const i = state.markers.indexOf(m);
+        if (i >= 0) state.markers.splice(i, 1); else state.markers.push(m);
+        render();
+      });
+    });
+    // v0.7.0: free-form markers — rebuild markers = (still-selected chips) + freeform tokens
+    document.getElementById('fbl-markers-freeform')?.addEventListener('input', e => {
+      state.markersFreeform = e.target.value;
+      const chipSel = state.markers.filter(m => MARKER_PRESETS.includes(m));
+      const ff = parseFreeformMarkers(e.target.value);
+      state.markers = [...new Set([...chipSel, ...ff])];
+      render();  // update preview (focus preserved by render snapshot)
+    });
+    // v0.7.0: targeting overrides — set state, no re-render (preserves input focus naturally)
+    document.getElementById('fbl-geo-countries')?.addEventListener('input', e => { state.geoCountriesOverride = e.target.value; });
+    document.getElementById('fbl-geo-states')?.addEventListener('input', e => { state.geoStatesOverride = e.target.value; });
+    document.getElementById('fbl-age-min')?.addEventListener('input', e => { state.ageMinOverride = e.target.value.trim(); });
+    document.getElementById('fbl-age-max')?.addEventListener('input', e => { state.ageMaxOverride = e.target.value.trim(); });
+    document.getElementById('fbl-gender')?.addEventListener('change', e => { state.genderOverride = e.target.value; });
+    document.getElementById('fbl-placement')?.addEventListener('change', e => { state.placementPreset = e.target.value; });
+    document.getElementById('fbl-advantage')?.addEventListener('change', e => { state.advantageAudienceOverride = e.target.value; });
+    // v0.7.0: budget & bidding
+    document.getElementById('fbl-budget-mode')?.addEventListener('change', e => {
+      state.budgetModeOverride = e.target.value;
+      render();  // swap amount field label + enable/disable
+    });
+    document.getElementById('fbl-budget-amount')?.addEventListener('input', e => {
+      const v = e.target.value.trim();
+      if (state.budgetModeOverride === 'cbo') state.cboBudgetOverride = v;
+      else if (state.budgetModeOverride === 'abo') state.adsetBudgetOverride = v;
+      render();  // preview reflects new budget (focus preserved by snapshot)
+    });
+    document.getElementById('fbl-bid-strategy')?.addEventListener('change', e => {
+      state.bidStrategyOverride = e.target.value;
+      render();  // enable/disable bid-amount field
+    });
+    document.getElementById('fbl-bid-amount')?.addEventListener('input', e => { state.bidAmountOverride = e.target.value.trim(); });
     const creativesEl = document.getElementById('fbl-creatives');
     if (creativesEl) {
       creativesEl.addEventListener('input', e => {
