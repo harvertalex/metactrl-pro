@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.7.0 — Bookmarklet
+ * FB Launcher v0.8.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -9,6 +9,9 @@
  *         in-tool targeting overrides (geo/states/age/gender/placements, override CSV),
  *         budget & bidding overrides (CBO/ABO mode, budget amount, bid strategy + cap),
  *         wider panel (920px) + responsive 2-3-col grid layout.
+ * v0.8.0: default ACTIVE status, daily/lifetime budget (+end_time), placement checkboxes
+ *         (platforms + position groups) with presets, SafeX HOME geo-cluster presets,
+ *         AIDA phrase library (title/body/description) per vertical, link description override.
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -24,6 +27,84 @@
   // v0.7.0: name-marker chip presets. FB-safe codenames only (no gambling keywords — see
   // feedback_fb_gambling_keywords). CTRL = autorule opt-in marker (cascade filters name CONTAIN "CTRL").
   const MARKER_PRESETS = ['CTRL', 'PWA-A', 'PWA-B', 'EU12', 'IB', 'CSC'];
+
+  // v0.8.0: SafeX HOME geo tier clusters (live setup, geo memory v4.1 2026-06-10).
+  // Picking one fills the US-states field; edit/remove states after. ALL-LIVE = all 31 included states.
+  const PROVEN_HIGH = 'Missouri, Colorado, Ohio, Tennessee, Illinois, Minnesota, Kansas, Utah';
+  const PROVEN_VOLUME = 'Texas, Georgia, Arizona, Indiana, New Mexico, Pennsylvania, Michigan, Washington, Alabama, New Jersey, Massachusetts, Kentucky, Connecticut, Nebraska, Maine, Idaho, Montana, Alaska';
+  const VOLUME_CAPPED = 'North Carolina, Louisiana, Oklahoma';
+  const CONTAINMENT = 'Florida, California';
+  const GEO_CLUSTERS = {
+    'PROVEN-HIGH (8 · cap $10-11)': PROVEN_HIGH,
+    'PROVEN-VOLUME (18 · cap $8)': PROVEN_VOLUME,
+    'VOLUME-CAPPED (3 · cap $4)': VOLUME_CAPPED,
+    'CONTAINMENT (2 · cap $4-5)': CONTAINMENT,
+    'ALL-LIVE (31 states)': [PROVEN_HIGH, PROVEN_VOLUME, VOLUME_CAPPED, CONTAINMENT].join(', '),
+  };
+
+  // v0.8.0: placement building blocks. Platform checkboxes + position-group checkboxes; presets fill both.
+  const PLACEMENT_PLATFORMS = [['facebook', 'Facebook'], ['instagram', 'Instagram'], ['audience_network', 'Audience Network'], ['messenger', 'Messenger']];
+  const PLACEMENT_POSITION_GROUPS = {
+    feeds:    { label: 'Feeds',           facebook: ['feed'],            instagram: ['stream'] },
+    stories:  { label: 'Stories',         facebook: ['story'],           instagram: ['story'] },
+    reels:    { label: 'Reels',           facebook: ['facebook_reels'],  instagram: ['reels'] },
+    instream: { label: 'In-stream video', facebook: ['instream_video'],  instagram: [] },
+    search:   { label: 'Search',          facebook: ['search'],          instagram: [] },
+    explore:  { label: 'Explore',         facebook: [],                  instagram: ['explore'] },
+  };
+  const PLACEMENT_PRESETS = {
+    all:        { platforms: ['facebook', 'instagram', 'audience_network', 'messenger'], groups: [] },
+    fb_ig:      { platforms: ['facebook', 'instagram'], groups: [] },
+    fb_only:    { platforms: ['facebook'], groups: [] },
+    feeds_only: { platforms: ['facebook', 'instagram'], groups: ['feeds'] },
+    reels_only: { platforms: ['facebook', 'instagram'], groups: ['reels'] },
+  };
+
+  // v0.8.0: AIDA copy library per vertical — title = Attention, body = Interest+Desire,
+  // desc = Action (short CTA line for the link description). Picking a suggestion fills the
+  // field (editable after). Gambling kept FB-policy-safe (no explicit casino/bet claims).
+  const PHRASE_LIB = {
+    insurance: {
+      label: 'Insurance (Home/Auto)',
+      title: ['See How Much You Could Save', 'New 2026 Insurance Rates Are Here', 'Homeowners Are Switching & Saving', 'Compare Rates in Under 2 Minutes', 'Most Homeowners Overpay — Do You?'],
+      body: [
+        'Compare home insurance rates from top providers. Most homeowners save $600+/year. Takes 2 minutes.',
+        'Your rate may have dropped this year. See updated quotes from top-rated insurers in your state — free, no obligation.',
+        'Stop overpaying for coverage you already have. One quick search compares every major provider side by side.',
+      ],
+      desc: ['Free quote — no obligation', 'Compare in 2 minutes', 'See your new rate today', 'Check your savings now'],
+    },
+    gambling: {
+      label: 'Gambling / Casino',
+      title: ['Your Welcome Bonus Is Ready', 'Join Thousands of Players Today', 'New Players Get a Head Start', 'Spin the Reels Tonight', 'Claim Your Sign-Up Offer'],
+      body: [
+        'Discover top-rated games and a generous welcome package for new members. 18+. Play responsibly.',
+        'Thousands of players, daily rewards, instant sign-up. Get started in seconds. 18+. T&Cs apply.',
+        'New members get an exclusive welcome offer the moment they join. Limited availability. 18+ only.',
+      ],
+      desc: ['Claim your bonus', 'Sign up in seconds', 'New players welcome', '18+ · Play responsibly'],
+    },
+    crypto: {
+      label: 'Crypto / Trading',
+      title: ['Start Trading in Minutes', 'AI-Powered Market Signals', 'The Platform Traders Trust', 'Your First Trade Is Waiting', 'Smarter Trading Starts Here'],
+      body: [
+        'Join a platform built for modern traders. Real-time data, low fees, fast withdrawals. Capital at risk.',
+        'AI-driven signals help you spot moves earlier. Start with as little as you like. Trading involves risk.',
+        'Open an account in minutes and trade major markets from one dashboard. Your capital is at risk.',
+      ],
+      desc: ['Start trading today', 'Open free account', 'Capital at risk', 'Trade in minutes'],
+    },
+    nutra: {
+      label: 'Nutra / Health',
+      title: ['The Simple Daily Habit', 'What Experts Are Talking About', 'Support Your Body Naturally', 'A Smarter Way to Feel Better', 'Thousands Made the Switch'],
+      body: [
+        'A natural approach people are adding to their daily routine. Results vary. Not medical advice.',
+        'Backed by a simple idea and clean ingredients. See what the buzz is about. Individual results vary.',
+        'Thousands are rethinking their daily routine with this natural option. Results may vary.',
+      ],
+      desc: ['Learn more', 'See the method', 'Results may vary', 'Try it today'],
+    },
+  };
 
   // ─── CONFIG ─────────────────────────────────────────────────────────────
   const GRAPH_VER = 'v23.0';
@@ -81,7 +162,7 @@
     urlTagParam: 'sub2',      // legacy: single-param replacement in URL Tags
     urlTagMode: 'acc_id',
     urlTagCustom: '',
-    createStatus: 'PAUSED',
+    createStatus: 'ACTIVE',   // v0.8.0: default ACTIVE (launch immediately) per Alexander
     campNameTpl: '',
     adsetNameTpl: '',
     // v0.7.0: name markers — appended as " | <marker>" to campaign/adset/ad names at creation.
@@ -98,13 +179,19 @@
     ageMaxOverride: '',       // v0.7.0: empty = CSV (default 65)
     genderOverride: '',       // v0.7.0: '' = CSV | 'all' | 'men' | 'women'
     advantageAudienceOverride: '', // v0.7.0: '' = CSV | '0' (off) | '1' (on)
-    placementPreset: '',      // v0.7.0: '' = CSV | all | fb_ig | fb_only | feeds_only | reels_only
     // v0.7.0: budget & bidding — override CSV. budgetModeOverride drives CBO vs ABO structure.
     budgetModeOverride: '',   // '' = CSV auto-detect | 'cbo' (campaign budget) | 'abo' (adset budget)
     cboBudgetOverride: '',    // campaign daily budget $ (when mode=cbo)
     adsetBudgetOverride: '',  // per-adset daily budget $ (when mode=abo) — applied to every adset
     bidStrategyOverride: '',  // '' = CSV | LOWEST_COST_WITHOUT_CAP | COST_CAP | LOWEST_COST_WITH_BID_CAP
     bidAmountOverride: '',    // bid/cost cap $ (only used when strategy is COST_CAP or BID_CAP)
+    budgetTypeOverride: '',   // v0.8.0: '' = CSV (daily) | 'daily' | 'lifetime'
+    budgetEndDate: '',        // v0.8.0: datetime-local string; required for lifetime budget (end_time)
+    // v0.8.0: placements — checkboxes (platforms + position groups). Presets fill both. Empty = CSV.
+    placementPlatforms: [],   // subset of facebook/instagram/audience_network/messenger
+    placementPositionGroups: [], // subset of PLACEMENT_POSITION_GROUPS keys; empty = all positions
+    descriptionOverride: '',  // v0.8.0: link/video description (Action line); empty = CSV
+    phraseVertical: 'insurance', // v0.8.0: selected vertical for the AIDA phrase dropdowns
     running: false,
     log: [],
     progress: { done: 0, total: 0 },
@@ -460,12 +547,17 @@
       ageMaxOverride: state.ageMaxOverride,
       genderOverride: state.genderOverride,
       advantageAudienceOverride: state.advantageAudienceOverride,
-      placementPreset: state.placementPreset,
+      placementPlatforms: state.placementPlatforms,
+      placementPositionGroups: state.placementPositionGroups,
       budgetModeOverride: state.budgetModeOverride,
       cboBudgetOverride: state.cboBudgetOverride,
       adsetBudgetOverride: state.adsetBudgetOverride,
       bidStrategyOverride: state.bidStrategyOverride,
       bidAmountOverride: state.bidAmountOverride,
+      budgetTypeOverride: state.budgetTypeOverride,
+      budgetEndDate: state.budgetEndDate,
+      descriptionOverride: state.descriptionOverride,
+      phraseVertical: state.phraseVertical,
     };
   }
 
@@ -526,12 +618,17 @@
     state.ageMaxOverride = s.ageMaxOverride || '';
     state.genderOverride = s.genderOverride || '';
     state.advantageAudienceOverride = s.advantageAudienceOverride || '';
-    state.placementPreset = s.placementPreset || '';
+    state.placementPlatforms = Array.isArray(s.placementPlatforms) ? s.placementPlatforms : [];
+    state.placementPositionGroups = Array.isArray(s.placementPositionGroups) ? s.placementPositionGroups : [];
     state.budgetModeOverride = s.budgetModeOverride || '';
     state.cboBudgetOverride = s.cboBudgetOverride || '';
     state.adsetBudgetOverride = s.adsetBudgetOverride || '';
     state.bidStrategyOverride = s.bidStrategyOverride || '';
     state.bidAmountOverride = s.bidAmountOverride || '';
+    state.budgetTypeOverride = s.budgetTypeOverride || '';
+    state.budgetEndDate = s.budgetEndDate || '';
+    state.descriptionOverride = s.descriptionOverride || '';
+    state.phraseVertical = s.phraseVertical || 'insurance';
     state.selectedPresetId = presetId;
     // Reset creatives — must be fresh per launch
     state.creativesInput = '';
@@ -1400,6 +1497,37 @@
     return state.bidStrategyOverride || mapBidStrategy(row && row['Campaign Bid Strategy']);
   }
 
+  // v0.8.0: lifetime vs daily budget. Lifetime requires an end_time on the budget-carrying entity
+  // (campaign for CBO, adset for ABO); FB also needs end_time on adsets when CBO uses a lifetime budget.
+  function isLifetimeBudget() { return state.budgetTypeOverride === 'lifetime'; }
+  function budgetEndTimeUnix() {
+    if (!state.budgetEndDate) return null;
+    const t = Date.parse(state.budgetEndDate);  // datetime-local "YYYY-MM-DDTHH:mm" → ms
+    return isNaN(t) ? null : Math.floor(t / 1000);
+  }
+
+  // v0.8.0: resolve checkbox placements → FB targeting fields. Returns null when nothing selected
+  // (→ fall back to CSV columns). publisher_platforms from checkboxes; positions from group checkboxes.
+  function resolvePlacements() {
+    const platforms = state.placementPlatforms.slice();
+    const groups = state.placementPositionGroups.slice();
+    if (!platforms.length && !groups.length) return null;  // CSV fallback
+    const out = {};
+    if (platforms.length) out.publisher_platforms = platforms;
+    if (groups.length) {
+      const fb = [], ig = [];
+      for (const g of groups) {
+        const def = PLACEMENT_POSITION_GROUPS[g];
+        if (!def) continue;
+        if (!platforms.length || platforms.includes('facebook')) fb.push(...def.facebook);
+        if (!platforms.length || platforms.includes('instagram')) ig.push(...def.instagram);
+      }
+      if (fb.length) out.facebook_positions = [...new Set(fb)];
+      if (ig.length) out.instagram_positions = [...new Set(ig)];
+    }
+    return out;
+  }
+
   function renderTpl(tpl, ctx) {
     return String(tpl || '').replace(/\{(\w+)\}|\$\{(\w+)\}/g, (_, a, b) => String(ctx[a || b] ?? ''));
   }
@@ -1697,20 +1825,6 @@
     return out;
   }
 
-  // v0.7.0: placement preset → FB targeting fields. Mirrors the all|fb_ig|fb_only|feeds_only|reels_only
-  // convention used by fb-campaign-generator. Returns null for '' (= fall back to CSV columns) and
-  // for 'all' (= omit platform/position fields → FB automatic/Advantage+ placements).
-  function placementSpec(preset) {
-    switch (preset) {
-      case 'fb_ig':      return { publisher_platforms: ['facebook', 'instagram'] };
-      case 'fb_only':    return { publisher_platforms: ['facebook'] };
-      case 'feeds_only': return { publisher_platforms: ['facebook', 'instagram'], facebook_positions: ['feed'], instagram_positions: ['stream'] };
-      case 'reels_only': return { publisher_platforms: ['facebook', 'instagram'], facebook_positions: ['facebook_reels'], instagram_positions: ['reels'] };
-      case 'all':        return {};   // explicit "all" → no restriction (automatic placements)
-      default:           return null; // '' → use CSV
-    }
-  }
-
   // ─── LAUNCHER ───────────────────────────────────────────────────────────
   // v0.6: orchestrator — pre-flight CSV-wide checks once, then run the per-account
   // pipeline for each selected account sequentially. For single-account this still
@@ -1878,7 +1992,13 @@
       // v0.5.1: bid_strategy only on CBO campaign-level. For ABO it lives on adset-level —
       // sending it on a budget-less campaign trips FB error [100/1885737] "campaign budget not set".
       if (plan.isCBO) {
-        campBody.daily_budget = String(Math.round(plan.cboBudget * 100));
+        if (isLifetimeBudget()) {
+          campBody.lifetime_budget = String(Math.round(plan.cboBudget * 100));
+          const et = budgetEndTimeUnix();
+          if (et) campBody.end_time = String(et);  // lifetime needs a schedule end
+        } else {
+          campBody.daily_budget = String(Math.round(plan.cboBudget * 100));
+        }
         campBody.bid_strategy = effectiveBidStrategy(firstRow);
       }
 
@@ -1947,16 +2067,16 @@
       const gender = (state.genderOverride || String(aFirst['Gender'] || '')).toLowerCase();
       const genders = gender.includes('men') && !gender.includes('women') ? [1]
         : gender.includes('women') && !gender.includes('men') ? [2] : [1, 2];
-      // Placements: UI preset override (placementSpec) wins; else CSV columns.
-      const placePreset = placementSpec(state.placementPreset);
-      const publisherPlatforms = placePreset
-        ? (placePreset.publisher_platforms || [])
+      // Placements: UI checkboxes (platforms + position groups) win; else CSV columns. (v0.8.0)
+      const placeUI = resolvePlacements();
+      const publisherPlatforms = placeUI
+        ? (placeUI.publisher_platforms || [])
         : String(aFirst['Publisher Platforms'] || '').split(',').map(s => s.trim()).filter(Boolean);
-      const fbPositions = placePreset
-        ? (placePreset.facebook_positions || [])
+      const fbPositions = placeUI
+        ? (placeUI.facebook_positions || [])
         : String(aFirst['Facebook Positions'] || '').split(',').map(s => s.trim()).filter(Boolean);
-      const igPositions = placePreset
-        ? (placePreset.instagram_positions || [])
+      const igPositions = placeUI
+        ? (placeUI.instagram_positions || [])
         : String(aFirst['Instagram Positions'] || '').split(',').map(s => s.trim()).filter(Boolean);
       const devicePlatforms = String(aFirst['Device Platforms'] || '').split(',').map(s => s.trim()).filter(Boolean);
 
@@ -2021,9 +2141,21 @@
         const ab = String(aFirst['Ad Set Daily Budget'] || '').trim();
         const csvNum = (ab && ab.toUpperCase() !== 'UNDEFINED') ? parseNum(ab) : 0;
         const abNum = (state.adsetBudgetOverride && ovNum > 0) ? ovNum : csvNum;
-        if (abNum > 0) adsetBody.daily_budget = String(Math.round(abNum * 100));
+        if (abNum > 0) {
+          if (isLifetimeBudget()) {
+            adsetBody.lifetime_budget = String(Math.round(abNum * 100));  // v0.8.0
+            const et = budgetEndTimeUnix();
+            if (et) adsetBody.end_time = String(et);
+          } else {
+            adsetBody.daily_budget = String(Math.round(abNum * 100));
+          }
+        }
         // v0.5.1: bid_strategy belongs on the adset for ABO. CBO inherits it from campaign.
         adsetBody.bid_strategy = bidStrategy;
+      } else if (isLifetimeBudget()) {
+        // v0.8.0: CBO + lifetime — FB requires each adset to carry the schedule end_time.
+        const et = budgetEndTimeUnix();
+        if (et) adsetBody.end_time = String(et);
       }
       if (bidAmountCents) adsetBody.bid_amount = bidAmountCents;
 
@@ -2104,9 +2236,11 @@
           const itemTitle = adInfo.forcedItem?.title || null;
           const itemBody  = adInfo.forcedItem?.body  || null;
           const itemCta   = adInfo.forcedItem?.cta   || null;
+          const itemDesc  = adInfo.forcedItem?.description || null;
           const adTitle = itemTitle || state.titleOverride || r['Title'] || '';
           const adBody  = itemBody  || state.bodyOverride  || r['Body']  || '';
           const cta     = itemCta   || state.ctaOverride   || r['Call to Action'] || 'LEARN_MORE';
+          const adDesc  = itemDesc  || state.descriptionOverride || r['Link Description'] || r['Description'] || '';  // v0.8.0
 
           // v0.6.5: use the IG actor resolved once for this account (above the adset loop).
           // Per-ad lookup was removing all the value of caching when CSV had its own IG
@@ -2127,6 +2261,7 @@
             };
             if (adBody) objectStorySpec.video_data.message = adBody;
             if (adTitle) objectStorySpec.video_data.title = adTitle;
+            if (adDesc) objectStorySpec.video_data.link_description = adDesc;  // v0.8.0
             if (itemThumb) {
               objectStorySpec.video_data.image_hash = itemThumb;
             } else {
@@ -2147,6 +2282,7 @@
             };
             if (adBody) objectStorySpec.link_data.message = adBody;
             if (adTitle) objectStorySpec.link_data.name = adTitle;
+            if (adDesc) objectStorySpec.link_data.description = adDesc;  // v0.8.0
           } else {
             throw new Error('No Image Hash or Video ID — cannot create creative');
           }
@@ -2265,7 +2401,7 @@
       #${PANEL_ID} .sub { color:#94a3b8; font-size:11px; margin-bottom:12px; }
       #${PANEL_ID} .field { margin-bottom:10px; }
       #${PANEL_ID} label { display:block; font-size:11px; color:#94a3b8; margin-bottom:3px; }
-      #${PANEL_ID} input[type=text], #${PANEL_ID} input[type=file], #${PANEL_ID} select, #${PANEL_ID} textarea {
+      #${PANEL_ID} input[type=text], #${PANEL_ID} input[type=file], #${PANEL_ID} input[type=datetime-local], #${PANEL_ID} select, #${PANEL_ID} textarea {
         width:100%; padding:6px 8px; background:#1e293b; border:1px solid #334155;
         border-radius:5px; color:#e2e8f0; font-size:12px; box-sizing:border-box;
         font-family:inherit; }
@@ -2395,14 +2531,17 @@
     const pixelValid = /^\d{8,20}$/.test(effPixel);
     const pixelInAccount = !state.pixelsList.length || !!state.pixelsList.find(p => p.id === effPixel);
 
-    // v0.7.0: budget & bidding UI helpers
+    // v0.7.0/v0.8.0: budget & bidding UI helpers
     const bMode = state.budgetModeOverride;
+    const isLifetimeUI = state.budgetTypeOverride === 'lifetime';
+    const budgetWord = isLifetimeUI ? 'lifetime' : 'daily';
     const budgetAmtVal = bMode === 'cbo' ? state.cboBudgetOverride : bMode === 'abo' ? state.adsetBudgetOverride : '';
-    const budgetAmtLabel = bMode === 'cbo' ? 'Campaign daily budget ($)'
-      : bMode === 'abo' ? `Ad set daily budget ($ × ${plan ? plan.adsetCount : 'N'} adsets)`
+    const budgetAmtLabel = bMode === 'cbo' ? `Campaign ${budgetWord} budget ($)`
+      : bMode === 'abo' ? `Ad set ${budgetWord} budget ($ × ${plan ? plan.adsetCount : 'N'} adsets)`
       : 'Budget ($) — pick a mode first';
     // Bid amount only meaningful for cap strategies; disable when explicitly "no cap".
     const bidNeedsCapUI = state.bidStrategyOverride !== 'LOWEST_COST_WITHOUT_CAP';
+    const phr = PHRASE_LIB[state.phraseVertical] || PHRASE_LIB.insurance;
 
     const previewHtml = plan ? `
       <div class="preview">
@@ -2428,6 +2567,7 @@
     // v0.7.0: a zero budget is a guaranteed FB rejection — catch it before launch.
     else if (plan && plan.isCBO && !plan.cboBudget) blockReason = '⚠ Campaign budget is 0 — set it (1b) or in CSV';
     else if (plan && !plan.isCBO && !plan.aboTotal) blockReason = '⚠ Ad set budget is 0 — set it (1b) or in CSV';
+    else if (isLifetimeBudget() && !budgetEndTimeUnix()) blockReason = '⚠ Lifetime budget needs an end date (1b)';
     const runDisabled = !!blockReason;
     const totalAds = plan?.adCount || 0;
     const buttonLabel = blockReason
@@ -2438,7 +2578,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.7.0
+      <h2>🚀 FB Launcher v0.8.0
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -2494,21 +2634,34 @@
       </div>
 
       <div class="field">
-        <label>1b. Budget &amp; Bidding <span style="color:#6e7681">— fill to override CSV. Mode sets CBO (campaign budget) vs ABO (per-adset).</span></label>
-        <div class="grid2">
+        <label>1b. Budget &amp; Bidding <span style="color:#6e7681">— fill to override CSV. Mode = CBO/ABO, type = daily/lifetime.</span></label>
+        <div class="grid3">
           <div class="field">
             <label>Budget mode</label>
             <select id="fbl-budget-mode">
-              <option value="" ${bMode === '' ? 'selected' : ''}>— CSV auto-detect —</option>
-              <option value="cbo" ${bMode === 'cbo' ? 'selected' : ''}>CBO — campaign budget</option>
-              <option value="abo" ${bMode === 'abo' ? 'selected' : ''}>ABO — ad set budget</option>
+              <option value="" ${bMode === '' ? 'selected' : ''}>— CSV —</option>
+              <option value="cbo" ${bMode === 'cbo' ? 'selected' : ''}>CBO (campaign)</option>
+              <option value="abo" ${bMode === 'abo' ? 'selected' : ''}>ABO (ad set)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Budget type</label>
+            <select id="fbl-budget-type">
+              <option value="" ${state.budgetTypeOverride === '' ? 'selected' : ''}>— CSV (daily) —</option>
+              <option value="daily" ${state.budgetTypeOverride === 'daily' ? 'selected' : ''}>Daily</option>
+              <option value="lifetime" ${state.budgetTypeOverride === 'lifetime' ? 'selected' : ''}>Lifetime</option>
             </select>
           </div>
           <div class="field">
             <label>${budgetAmtLabel}</label>
-            <input type="text" id="fbl-budget-amount" value="${esc(budgetAmtVal)}" placeholder="${bMode ? 'e.g. 50' : 'select mode →'}"${bMode ? '' : ' disabled style="opacity:.4"'}>
+            <input type="text" id="fbl-budget-amount" value="${esc(budgetAmtVal)}" placeholder="${bMode ? 'e.g. 50' : 'pick mode'}"${bMode ? '' : ' disabled style="opacity:.4"'}>
           </div>
         </div>
+        ${isLifetimeUI ? `
+        <div class="field" style="margin-top:10px">
+          <label>Lifetime end date <span style="color:${budgetEndTimeUnix() ? '#22c55e' : '#fbbf24'}">${budgetEndTimeUnix() ? '✓' : '⚠ required for lifetime budget'}</span></label>
+          <input type="datetime-local" id="fbl-budget-end" value="${esc(state.budgetEndDate)}">
+        </div>` : ''}
         <div class="grid2" style="margin-top:10px">
           <div class="field">
             <label>Bid strategy</label>
@@ -2629,13 +2782,20 @@
 
       <div class="field">
         <label>5b. Targeting <span style="color:#6e7681">— fill to override CSV for ALL adsets; empty = use CSV column</span>${plan?.sacList.length ? ' <span style="color:#fbbf24">· SAC active — state targeting disabled (country-level only)</span>' : ''}</label>
-        <div class="grid2">
+        <div class="field">
+          <label>Geo cluster preset <span style="color:#6e7681">— SafeX HOME tiers → fills US states (editable after)</span></label>
+          <select id="fbl-geo-cluster">
+            <option value="">— pick a cluster to fill states —</option>
+            ${Object.keys(GEO_CLUSTERS).map(k => `<option value="${esc(k)}">${esc(k)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="grid2" style="margin-top:10px">
           <div class="field">
             <label>Countries <span style="color:#6e7681">(codes, e.g. US,CA)</span></label>
             <input type="text" id="fbl-geo-countries" value="${esc(state.geoCountriesOverride)}" placeholder="empty = CSV (default US)">
           </div>
           <div class="field">
-            <label>US states <span style="color:#6e7681">${plan?.sacList.length ? '(disabled under SAC)' : '(names, e.g. Texas,Florida)'}</span></label>
+            <label>US states <span style="color:#6e7681">${plan?.sacList.length ? '(disabled under SAC)' : '(names, comma-separated)'}</span></label>
             <input type="text" id="fbl-geo-states" value="${esc(state.geoStatesOverride)}" placeholder="empty = CSV"${plan?.sacList.length ? ' disabled style="opacity:.4"' : ''}>
           </div>
         </div>
@@ -2658,25 +2818,36 @@
             </select>
           </div>
         </div>
-        <div class="grid2" style="margin-top:10px">
-          <div class="field">
-            <label>Placements</label>
-            <select id="fbl-placement">
-              <option value="" ${state.placementPreset === '' ? 'selected' : ''}>— CSV —</option>
-              <option value="all" ${state.placementPreset === 'all' ? 'selected' : ''}>All (automatic)</option>
-              <option value="fb_ig" ${state.placementPreset === 'fb_ig' ? 'selected' : ''}>FB + IG</option>
-              <option value="fb_only" ${state.placementPreset === 'fb_only' ? 'selected' : ''}>FB only</option>
-              <option value="feeds_only" ${state.placementPreset === 'feeds_only' ? 'selected' : ''}>Feeds only</option>
-              <option value="reels_only" ${state.placementPreset === 'reels_only' ? 'selected' : ''}>Reels only</option>
-            </select>
+        <div class="field" style="margin-top:10px">
+          <label>Placements <span style="color:#6e7681">— preset fills the boxes, then toggle. Empty = CSV / automatic.</span></label>
+          <div class="grid2">
+            <div class="field">
+              <label style="font-size:10px">Quick preset</label>
+              <select id="fbl-placement-preset">
+                <option value="">— preset —</option>
+                <option value="all">All platforms</option>
+                <option value="fb_ig">FB + IG</option>
+                <option value="fb_only">FB only</option>
+                <option value="feeds_only">Feeds only</option>
+                <option value="reels_only">Reels only</option>
+              </select>
+            </div>
+            <div class="field">
+              <label style="font-size:10px">Advantage Audience</label>
+              <select id="fbl-advantage">
+                <option value="" ${state.advantageAudienceOverride === '' ? 'selected' : ''}>— CSV —</option>
+                <option value="0" ${state.advantageAudienceOverride === '0' ? 'selected' : ''}>Off</option>
+                <option value="1" ${state.advantageAudienceOverride === '1' ? 'selected' : ''}>On</option>
+              </select>
+            </div>
           </div>
-          <div class="field">
-            <label>Advantage Audience</label>
-            <select id="fbl-advantage">
-              <option value="" ${state.advantageAudienceOverride === '' ? 'selected' : ''}>— CSV —</option>
-              <option value="0" ${state.advantageAudienceOverride === '0' ? 'selected' : ''}>Off</option>
-              <option value="1" ${state.advantageAudienceOverride === '1' ? 'selected' : ''}>On</option>
-            </select>
+          <div style="font-size:10px;color:#6e7681;margin:6px 0 3px">Platforms</div>
+          <div class="chips">
+            ${PLACEMENT_PLATFORMS.map(([id, label]) => `<span class="chip ${state.placementPlatforms.includes(id) ? 'on' : ''}" data-platform="${esc(id)}">${esc(label)}</span>`).join('')}
+          </div>
+          <div style="font-size:10px;color:#6e7681;margin:6px 0 3px">Position groups <span style="color:#475569">(none = all positions)</span></div>
+          <div class="chips">
+            ${Object.entries(PLACEMENT_POSITION_GROUPS).map(([k, def]) => `<span class="chip ${state.placementPositionGroups.includes(k) ? 'on' : ''}" data-posgroup="${esc(k)}">${esc(def.label)}</span>`).join('')}
           </div>
         </div>
       </div>
@@ -2799,9 +2970,40 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
 
       <div class="field">
         <label>9. Ad copy override (optional) <span style="color:#6e7681">— same for all ads; per-creative title/body/cta in ads-mode JSON wins</span></label>
-        <input type="text" id="fbl-title-override" value="${esc(state.titleOverride)}" placeholder="Title (headline) — empty = use CSV Title" style="margin-bottom:5px">
-        <textarea id="fbl-body-override" placeholder="Body (primary text) — empty = use CSV Body" style="width:100%;min-height:50px;padding:6px 8px;background:#1e293b;border:1px solid #334155;border-radius:5px;color:#e2e8f0;font-size:12px;font-family:inherit;box-sizing:border-box;resize:vertical;margin-bottom:5px">${esc(state.bodyOverride)}</textarea>
-        <select id="fbl-cta-override">
+        <div class="field">
+          <label style="font-size:10px">AIDA phrase library <span style="color:#6e7681">— pick to fill a field, then edit. Attention=title · Interest+Desire=body · Action=description</span></label>
+          <select id="fbl-phrase-vertical">
+            ${Object.entries(PHRASE_LIB).map(([k, v]) => `<option value="${esc(k)}" ${state.phraseVertical === k ? 'selected' : ''}>${esc(v.label)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="grid2">
+          <div class="field">
+            <input type="text" id="fbl-title-override" value="${esc(state.titleOverride)}" placeholder="Title (headline) — empty = use CSV Title">
+          </div>
+          <div class="field">
+            <select id="fbl-phrase-title">
+              <option value="">↳ insert headline (Attention)…</option>
+              ${phr.title.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <textarea id="fbl-body-override" placeholder="Body (primary text) — empty = use CSV Body" style="width:100%;min-height:50px;padding:6px 8px;background:#1e293b;border:1px solid #334155;border-radius:5px;color:#e2e8f0;font-size:12px;font-family:inherit;box-sizing:border-box;resize:vertical;margin:5px 0">${esc(state.bodyOverride)}</textarea>
+        <select id="fbl-phrase-body" style="margin-bottom:5px">
+          <option value="">↳ insert primary text (Interest+Desire)…</option>
+          ${phr.body.map(b => `<option value="${esc(b)}">${esc(b.length > 70 ? b.slice(0, 70) + '…' : b)}</option>`).join('')}
+        </select>
+        <div class="grid2">
+          <div class="field">
+            <input type="text" id="fbl-description-override" value="${esc(state.descriptionOverride)}" placeholder="Description (link) — empty = use CSV">
+          </div>
+          <div class="field">
+            <select id="fbl-phrase-desc">
+              <option value="">↳ insert description (Action/CTA)…</option>
+              ${phr.desc.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <select id="fbl-cta-override" style="margin-top:5px">
           <option value="">— CTA from CSV (or LEARN_MORE if empty) —</option>
           <option value="LEARN_MORE" ${state.ctaOverride === 'LEARN_MORE' ? 'selected' : ''}>LEARN_MORE</option>
           <option value="GET_QUOTE" ${state.ctaOverride === 'GET_QUOTE' ? 'selected' : ''}>GET_QUOTE (insurance)</option>
@@ -3136,12 +3338,48 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     document.getElementById('fbl-age-min')?.addEventListener('input', e => { state.ageMinOverride = e.target.value.trim(); });
     document.getElementById('fbl-age-max')?.addEventListener('input', e => { state.ageMaxOverride = e.target.value.trim(); });
     document.getElementById('fbl-gender')?.addEventListener('change', e => { state.genderOverride = e.target.value; });
-    document.getElementById('fbl-placement')?.addEventListener('change', e => { state.placementPreset = e.target.value; });
     document.getElementById('fbl-advantage')?.addEventListener('change', e => { state.advantageAudienceOverride = e.target.value; });
+    // v0.8.0: geo cluster preset — fills states (editable after), then resets the dropdown
+    document.getElementById('fbl-geo-cluster')?.addEventListener('change', e => {
+      const v = e.target.value;
+      if (v && GEO_CLUSTERS[v]) state.geoStatesOverride = GEO_CLUSTERS[v];
+      render();
+    });
+    // v0.8.0: placement preset fills the checkbox arrays
+    document.getElementById('fbl-placement-preset')?.addEventListener('change', e => {
+      const p = PLACEMENT_PRESETS[e.target.value];
+      if (p) { state.placementPlatforms = p.platforms.slice(); state.placementPositionGroups = p.groups.slice(); }
+      render();
+    });
+    // v0.8.0: placement platform + position-group chips
+    panel.querySelectorAll('.chip[data-platform]').forEach(el => {
+      el.addEventListener('click', () => {
+        const id = el.dataset.platform;
+        const i = state.placementPlatforms.indexOf(id);
+        if (i >= 0) state.placementPlatforms.splice(i, 1); else state.placementPlatforms.push(id);
+        render();
+      });
+    });
+    panel.querySelectorAll('.chip[data-posgroup]').forEach(el => {
+      el.addEventListener('click', () => {
+        const g = el.dataset.posgroup;
+        const i = state.placementPositionGroups.indexOf(g);
+        if (i >= 0) state.placementPositionGroups.splice(i, 1); else state.placementPositionGroups.push(g);
+        render();
+      });
+    });
     // v0.7.0: budget & bidding
     document.getElementById('fbl-budget-mode')?.addEventListener('change', e => {
       state.budgetModeOverride = e.target.value;
       render();  // swap amount field label + enable/disable
+    });
+    document.getElementById('fbl-budget-type')?.addEventListener('change', e => {
+      state.budgetTypeOverride = e.target.value;
+      render();  // toggle lifetime end-date field + relabel amount
+    });
+    document.getElementById('fbl-budget-end')?.addEventListener('input', e => {
+      state.budgetEndDate = e.target.value;
+      render();  // update ✓/⚠ on end-date label
     });
     document.getElementById('fbl-budget-amount')?.addEventListener('input', e => {
       const v = e.target.value.trim();
@@ -3177,6 +3415,23 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     });
     document.getElementById('fbl-cta-override')?.addEventListener('change', e => {
       state.ctaOverride = e.target.value;
+    });
+    document.getElementById('fbl-description-override')?.addEventListener('input', e => {
+      state.descriptionOverride = e.target.value;
+    });
+    // v0.8.0: AIDA phrase library — vertical switch + insert-into-field dropdowns
+    document.getElementById('fbl-phrase-vertical')?.addEventListener('change', e => {
+      state.phraseVertical = e.target.value;
+      render();  // refresh suggestion lists
+    });
+    document.getElementById('fbl-phrase-title')?.addEventListener('change', e => {
+      if (e.target.value) { state.titleOverride = e.target.value; render(); }
+    });
+    document.getElementById('fbl-phrase-body')?.addEventListener('change', e => {
+      if (e.target.value) { state.bodyOverride = e.target.value; render(); }
+    });
+    document.getElementById('fbl-phrase-desc')?.addEventListener('change', e => {
+      if (e.target.value) { state.descriptionOverride = e.target.value; render(); }
     });
     document.getElementById('fbl-tag-param')?.addEventListener('input', e => {
       state.urlTagParam = e.target.value.trim();
