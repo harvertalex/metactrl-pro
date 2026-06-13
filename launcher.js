@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.10.2 — Bookmarklet
+ * FB Launcher v0.11.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -20,6 +20,9 @@
  *          non-US region resolution (per-country), Advantage Audience default OFF, dry-run mode.
  * v0.10.1: clearer cluster-split UX (per-adset preview + grey single geo fields).
  * v0.10.2: uploaded-hashes JSON panel in step 6 with one-click Copy (upload→hash→copy).
+ * v0.11.0: IG identity fix — resolve the Page's connected IG FIRST (was account-actor first),
+ *          post-create readback that flags FB silently dropping an unusable instagram_user_id,
+ *          no more empty-IG cache poisoning (terminal vs retryable), actionable PBIA #10 log.
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -1159,18 +1162,23 @@
   // in different accounts.
   async function loadIgForAccount(accId, pageId) {
     const key = `${accId || ''}__${pageId || ''}`;
-    if (key in state.pageIgMap) return state.pageIgMap[key]?.igId || '';
+    if (key in state.pageIgMap) {
+      // v0.11.0: short-circuit ONLY on a positive hit or a definitive "no IG" (terminal).
+      // Errored/transient entries fall through and re-resolve — kills the in-session cache
+      // poisoning where one transient failure locked every later ad to an empty IG.
+      const e = state.pageIgMap[key];
+      if (e && (e.igId || e.terminal)) return e.igId || '';
+    }
     if (state.pageIgLoading[key]) return '';
     state.pageIgLoading[key] = true;
     let pageName = '';
+    let anyError = false;
     try {
       if (pageId) {
         try {
           const r = await apiFetch(`/${pageId}`, { params: { fields: 'name' } });
           pageName = r?.name || '';
-          // v0.6.6: auto-fill DSA Beneficiary from the Page name if the user hasn't
-          // set one. FB now requires dsa_beneficiary for almost all ad sets, not
-          // just EU targeting, so we lean on the page identity to keep launches moving.
+          // v0.6.6: auto-fill DSA Beneficiary from the Page name if the user hasn't set one.
           if (pageName && !state.dsaBeneficiary) {
             state.dsaBeneficiary = pageName;
             addLog('info', `🔖 Auto-filled DSA Beneficiary from page: "${pageName}"`);
@@ -1178,80 +1186,62 @@
         } catch {}
       }
 
-      // 1) Actors promotable in THIS account — these are guaranteed to work.
-      if (accId) {
-        try {
-          const r = await apiFetch(`/act_${accId}/instagram_accounts`, { params: { fields: 'id,username', limit: 25 } });
-          const actors = r?.data || [];
-          if (actors.length) {
-            const item = actors[0];
-            const entry = { igId: String(item.id), igName: item.username || '', pageName, source: 'account', count: actors.length };
-            state.pageIgMap[key] = entry;
-            const extra = actors.length > 1 ? ` (${actors.length} available)` : '';
-            addLog('info', `🔗 IG actor for acc ${accId}: ${entry.igId}${entry.igName ? ' @' + entry.igName : ''}${extra}`);
-            return entry.igId;
-          }
-        } catch (e) {
-          addLog('warning', `Account ${accId} /instagram_accounts lookup failed: ${e.message}`);
-        }
-      }
-
-      // 2) v0.6.11: Page-level IG lookup. Three approaches in order:
-      //    a) Modern field `connected_instagram_account` — IG linked via Page
-      //       Settings (this is the one Ads Manager UI dropdown actually shows).
-      //    b) `instagram_business_account` — IG Business Account linked to page.
-      //    c) Legacy edge `/page/instagram_accounts` — older, often returns
-      //       "nonexisting field" if user lacks page admin role, but free try.
-      // Any one of these will let us pass instagram_user_id and have it show
-      // properly in the Ads Manager UI for review.
+      // v0.11.0: the PAGE's connected Instagram is the identity Ads Manager shows in the
+      // dropdown — resolve it FIRST (was below the account-actor lookup, which returned an
+      // arbitrary/empty actor and left the IG field wrong/blank for pages that DO have a linked IG).
+      let pageIg = null;
       if (pageId) {
         try {
           const pf = await apiFetch(`/${pageId}`, {
             params: { fields: 'connected_instagram_account{id,username},instagram_business_account{id,username}' },
           });
-          const candidates = [
-            { obj: pf?.connected_instagram_account, label: 'connected_instagram_account' },
-            { obj: pf?.instagram_business_account, label: 'instagram_business_account' },
-          ];
-          for (const c of candidates) {
-            if (c.obj?.id) {
-              const entry = { igId: String(c.obj.id), igName: c.obj.username || '', pageName, source: c.label };
-              state.pageIgMap[key] = entry;
-              addLog('info', `🔗 Found IG via page.${c.label}: ${entry.igId}${entry.igName ? ' @' + entry.igName : ''}`);
-              return entry.igId;
-            }
+          if (pf?.connected_instagram_account?.id) pageIg = { id: String(pf.connected_instagram_account.id), username: pf.connected_instagram_account.username || '', label: 'connected_instagram_account' };
+          else if (pf?.instagram_business_account?.id) pageIg = { id: String(pf.instagram_business_account.id), username: pf.instagram_business_account.username || '', label: 'instagram_business_account' };
+        } catch (e) { anyError = true; addLog('warning', `Page ${pageId} connected/business IG lookup failed: ${e.message}`); }
+        if (!pageIg) {
+          try {
+            const r = await apiFetch(`/${pageId}/instagram_accounts`, { params: { fields: 'id,username', limit: 5 } });
+            const item = r?.data?.[0];
+            if (item?.id) pageIg = { id: String(item.id), username: item.username || '', label: 'page' };
+          } catch (e) {
+            // "nonexisting field" = token lacks page admin role; not a real error, drop quietly.
+            if (!/nonexisting field/i.test(String(e.message || ''))) { anyError = true; addLog('warning', `Page ${pageId} /instagram_accounts lookup failed: ${e.message}`); }
           }
-        } catch (e) {
-          addLog('warning', `Page ${pageId} connected/business IG lookup failed: ${e.message}`);
         }
+      }
+
+      // Account's promotable actors — used to VERIFY the page IG (guaranteed to stick) and as fallback.
+      let accountActors = [];
+      let validIds = new Set();
+      if (accId) {
         try {
-          const r = await apiFetch(`/${pageId}/instagram_accounts`, { params: { fields: 'id,username', limit: 5 } });
-          const item = r?.data?.[0];
-          if (item?.id) {
-            const entry = { igId: String(item.id), igName: item.username || '', pageName, source: 'page' };
-            state.pageIgMap[key] = entry;
-            addLog('info', `🔗 Found IG via legacy /page/instagram_accounts: ${entry.igId}${entry.igName ? ' @' + entry.igName : ''}`);
-            return entry.igId;
-          }
-        } catch (e) {
-          // Common: "nonexisting field" when user token lacks page admin role.
-          // Quietly drop to PBIA — we'll surface actionable guidance later if all paths fail.
-          if (!/nonexisting field/i.test(String(e.message || ''))) {
-            addLog('warning', `Page ${pageId} /instagram_accounts lookup failed: ${e.message}`);
-          }
-        }
+          const r = await apiFetch(`/act_${accId}/instagram_accounts`, { params: { fields: 'id,username', limit: 25 } });
+          accountActors = r?.data || [];
+          validIds = new Set(accountActors.map(a => String(a.id)));
+        } catch (e) { anyError = true; addLog('warning', `Account ${accId} /instagram_accounts lookup failed: ${e.message}`); }
       }
 
-      // 3) v0.6.7: Final fallback — Page-Backed Instagram Account (PBIA).
+      // Decide (v0.11.0 ladder): page-connected IG > account actor substitute > PBIA > page-only.
+      if (pageIg) {
+        const promotable = validIds.has(pageIg.id);
+        const entry = { igId: pageIg.id, igName: pageIg.username, pageName, source: promotable ? pageIg.label + '+promotable' : pageIg.label + '-unverified' };
+        state.pageIgMap[key] = entry;
+        addLog('info', `🔗 Page IG ${pageIg.id}${pageIg.username ? ' @' + pageIg.username : ''} via ${pageIg.label}${promotable ? ' (promotable ✓)' : ' (not in this account — will verify after create)'}`);
+        return entry.igId;
+      }
+      if (accountActors.length) {
+        const item = accountActors[0];
+        const entry = { igId: String(item.id), igName: item.username || '', pageName, source: 'account-substitute', count: accountActors.length };
+        state.pageIgMap[key] = entry;
+        addLog('info', `🔗 No IG on page — using account actor ${entry.igId}${entry.igName ? ' @' + entry.igName : ''}${accountActors.length > 1 ? ` (1 of ${accountActors.length})` : ''} as identity`);
+        return entry.igId;
+      }
       const pbia = await loadPbiaForPage(pageId, pageName);
-      if (pbia?.igId) {
-        state.pageIgMap[key] = { ...pbia, source: 'pbia' };
-        return pbia.igId;
-      }
+      if (pbia?.igId) { state.pageIgMap[key] = { ...pbia, source: 'pbia' }; return pbia.igId; }
 
-      state.pageIgMap[key] = { igId: '', igName: '', pageName, source: 'none' };
-      // v0.6.11: actionable guidance instead of just "no IG available".
-      addLog('warning', `⚠ Page "${pageName || pageId}" has no Instagram identity linked (no connected IG, no Business IG, no admin rights for PBIA). Ads will run on Facebook only. To fix: link an Instagram account in Page Settings (https://business.facebook.com/settings/instagram-accounts), then re-launch. Or paste a promotable IG actor ID in step 3.`);
+      // No IG anywhere. Cache as terminal ONLY if nothing errored (so transient fails retry).
+      state.pageIgMap[key] = { igId: '', igName: '', pageName, source: anyError ? 'error' : 'none', terminal: !anyError };
+      addLog('warning', `⚠ Page "${pageName || pageId}" has no Instagram identity (no connected IG, no account actor, PBIA unavailable). Ads run Facebook-only — IG field empty. Fix: link an IG in Page Settings (business.facebook.com/settings/instagram-accounts), OR paste a promotable IG ID in step 3, OR tick "Use Facebook Page as IG identity".`);
       return '';
     } finally {
       state.pageIgLoading[key] = false;
@@ -1303,7 +1293,12 @@
             addLog('warning', `PBIA POST succeeded but returned no id — body: ${JSON.stringify(c).slice(0, 200)}`);
           }
         } catch (e) {
-          addLog('warning', `PBIA POST failed: ${e.message}`);
+          const m = String(e.message || '');
+          if (/\b10\b|permission/i.test(m)) {
+            addLog('warning', `PBIA POST denied (#10): token lacks ADVERTISER+ role on this Page, or the Page is restricted, or Page+IG+ad-account aren't all assigned to the same Business. Can't create a Page-Backed IG with this token → identity will be page-only.`);
+          } else {
+            addLog('warning', `PBIA POST failed: ${m}`);
+          }
         }
       }
       if (pbia?.id) {
@@ -1318,6 +1313,22 @@
     state.pageIgMap[cacheKey] = null;
     addLog('warning', `PBIA: no PBIA found or created for page ${pageId}`);
     return null;
+  }
+
+  // v0.11.0: post-create readback. FB frequently CREATES the creative even when it
+  // silently discards an unusable instagram_user_id (IG not promotable by this token/
+  // account), leaving the Ads Manager IG field empty while the launch "succeeds". Read
+  // the creative back and warn if the IG we sent didn't stick — you can't patch it onto
+  // an existing creative, so the user must fix access/identity and relaunch.
+  async function verifyCreativeIg(creativeId, expectedIg, accLabel, adName) {
+    if (state.dryRun || !creativeId || !expectedIg || String(creativeId).startsWith('DRY')) return;
+    try {
+      const c = await apiFetch(`/${creativeId}`, { params: { fields: 'object_story_spec{instagram_user_id}' } });
+      const got = c?.object_story_spec?.instagram_user_id ? String(c.object_story_spec.instagram_user_id) : '';
+      if (got !== String(expectedIg)) {
+        addLog('warning', `[${accLabel}] ⚠ FB dropped IG ${expectedIg} on "${adName}" → IG field will be EMPTY (page-only). The IG isn't promotable by this account/token (BM claim / asset assignment / page role). Link a real IG or accept page-only.`);
+      }
+    } catch { /* best-effort */ }
   }
 
   // v0.6.3 compatibility shim: older callers pass just pageId. Resolve via primary
@@ -2469,6 +2480,8 @@
             }
           }
           }  // end else (non-dry-run creative)
+          // v0.11.0: confirm the IG identity actually stuck (catches FB's silent drop).
+          await verifyCreativeIg(creative?.id, resolvedIg, accLabel, adName);
           // v0.7.0: markers on FB ad name only; adName stays clean for token context (sub5/ad_name)
           const adNameFinal = applyMarkers(adName);
           const adBodyPost = {
@@ -2745,7 +2758,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.10.2
+      <h2>🚀 FB Launcher v0.11.0
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -2925,9 +2938,16 @@
             return `<div style="font-size:11px;color:#6e7681;margin-top:4px">Override active — auto-detected (${esc(ig.igId || 'none')}) ignored</div>`;
           }
           if (ig.igId) {
-            const srcLabel = ig.source === 'account' ? `account actor${ig.count > 1 ? ` · 1 of ${ig.count}` : ''}` : ig.source === 'page' ? '⚠ page actor (may not be promotable here)' : 'detected';
-            const color = ig.source === 'account' ? '#22c55e' : '#fbbf24';
-            return `<div style="font-size:11px;color:${color};margin-top:4px">🔗 Auto-detected (${srcLabel}): <b>${esc(ig.igId)}</b>${ig.igName ? ` @${esc(ig.igName)}` : ''}${isMulti ? ' · Note: lookup runs per account at launch' : ''}</div>`;
+            // v0.11.0 sources: connected_instagram_account+promotable / *-unverified / account-substitute / pbia / page
+            const s = ig.source || '';
+            const promotable = /\+promotable|account-substitute/.test(s);
+            const srcLabel = s.includes('connected_instagram_account') ? (promotable ? 'page IG (promotable ✓)' : '⚠ page IG (not in this account — verified after create)')
+              : s.includes('instagram_business_account') ? (promotable ? 'page Business IG (promotable ✓)' : '⚠ page Business IG (unverified)')
+              : s === 'account-substitute' ? `⚠ account actor — page has no IG${ig.count > 1 ? ` · 1 of ${ig.count}` : ''}`
+              : s === 'pbia' ? 'page-backed IG (PBIA)'
+              : s === 'page' ? '⚠ page actor (may not be promotable here)' : 'detected';
+            const color = promotable ? '#22c55e' : '#fbbf24';
+            return `<div style="font-size:11px;color:${color};margin-top:4px">🔗 ${srcLabel}: <b>${esc(ig.igId)}</b>${ig.igName ? ` @${esc(ig.igName)}` : ''}${isMulti ? ' · lookup runs per account at launch' : ''}</div>`;
           }
           return `<div style="font-size:11px;color:#fbbf24;margin-top:4px">⚠ No IG actor available for account ${esc(probeAcc || '?')} — instagram_user_id omitted at launch (FB uses default)</div>`;
         })()}
