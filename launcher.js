@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.10.1 — Bookmarklet
+ * FB Launcher v0.10.2 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -18,6 +18,8 @@
  * v0.10.0: CSV-less launch (objective selector + creatives → synthetic 1-adset plan),
  *          multi-adset split by geo cluster (one-click waterfall), delayed start_time,
  *          non-US region resolution (per-country), Advantage Audience default OFF, dry-run mode.
+ * v0.10.1: clearer cluster-split UX (per-adset preview + grey single geo fields).
+ * v0.10.2: uploaded-hashes JSON panel in step 6 with one-click Copy (upload→hash→copy).
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -2630,6 +2632,22 @@
     ).join('');
   }
 
+  // v0.10.2: the upload→hash JSON (our standard {name, imageHash|videoId, thumbnailHash} format),
+  // for copy-paste into ARIA / fb-campaign-generator / CSV. Prefers the auto-paired ads-mode items;
+  // falls back to building from completed uploads. Returns '' when nothing usable is uploaded.
+  function uploadedHashesJson() {
+    if (state.creativesParsed?.mode === 'ads' && state.creativesParsed.items?.length) {
+      return JSON.stringify(state.creativesParsed.items, null, 2);
+    }
+    const done = state.uploads.filter(u => u.status === 'done' && (u.imageHash || u.videoId));
+    if (!done.length) return '';
+    return JSON.stringify(done.map(u => {
+      const o = { name: String(u.name || '').replace(/\.[^.]+$/, '') };
+      if (u.videoId) o.videoId = u.videoId; else o.imageHash = u.imageHash;
+      return o;
+    }), null, 2);
+  }
+
   function render() {
     if (!panel) return;
 
@@ -2727,7 +2745,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.10.1
+      <h2>🚀 FB Launcher v0.10.2
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -3089,6 +3107,19 @@
             </div>`;
           }).join('')}</div>` : ''}
         </div>
+        ${(() => {
+          const hj = uploadedHashesJson();
+          if (!hj) return '';
+          const n = (() => { try { return JSON.parse(hj).length; } catch { return ''; } })();
+          return `
+          <div class="field" style="border-left-color:#a78bfa;margin-bottom:8px">
+            <label style="display:flex;align-items:center;justify-content:space-between">
+              <span>📋 Hashes <span style="color:#6e7681">— ${n} item(s), ready to copy</span></span>
+              <button id="fbl-copy-hashes" style="padding:4px 10px;font-size:11px">Copy JSON</button>
+            </label>
+            <textarea id="fbl-hashes-out" readonly style="width:100%;min-height:70px;padding:6px 8px;background:#0d1726;border:1px solid #2b3a55;border-radius:6px;color:#a5b4fc;font-size:11px;font-family:ui-monospace,monospace;box-sizing:border-box;resize:vertical">${esc(hj)}</textarea>
+          </div>`;
+        })()}
         <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Or paste manually:</div>
         <textarea id="fbl-creatives" placeholder='Paste any of:
 
@@ -3614,6 +3645,19 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       });
       creativesEl.addEventListener('blur', () => render());
     }
+    // v0.10.2: copy uploaded-hashes JSON to clipboard (fallback to selecting the textarea)
+    document.getElementById('fbl-copy-hashes')?.addEventListener('click', async () => {
+      const json = uploadedHashesJson();
+      if (!json) return;
+      try {
+        await navigator.clipboard.writeText(json);
+        setStatus('success', '📋 Hashes JSON copied to clipboard.');
+      } catch {
+        const ta = document.getElementById('fbl-hashes-out');
+        if (ta) { ta.focus(); ta.select(); document.execCommand('copy'); setStatus('success', '📋 Hashes selected — Ctrl+C to copy.'); }
+      }
+      render();
+    });
     document.getElementById('fbl-link-override')?.addEventListener('input', e => {
       state.linkOverride = e.target.value.trim();
     });
