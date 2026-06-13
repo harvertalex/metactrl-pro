@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.10.0 — Bookmarklet
+ * FB Launcher v0.10.1 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -2685,6 +2685,9 @@
     // Bid amount only meaningful for cap strategies; disable when explicitly "no cap".
     const bidNeedsCapUI = state.bidStrategyOverride !== 'LOWEST_COST_WITHOUT_CAP';
     const phr = PHRASE_LIB[state.phraseVertical] || PHRASE_LIB.insurance;
+    // v0.10.1: cluster split active → single geo fields are ignored (each adset uses its own geo)
+    const splitClustersSel = (state.adsetSplitClusters || []).map(i => GEO_PRESETS[i]).filter(Boolean);
+    const splitActive = splitClustersSel.length > 0;
 
     const previewHtml = plan ? `
       <div class="preview">
@@ -2724,7 +2727,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.10.0
+      <h2>🚀 FB Launcher v0.10.1
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -2966,21 +2969,26 @@
             ${['Lead-gen — US states', 'Gambling — countries'].map(g => `<optgroup label="${esc(g)}">${GEO_PRESETS.map((p, i) => p.group === g ? `<option value="${i}">${esc(p.label)}</option>` : '').join('')}</optgroup>`).join('')}
           </select>
         </div>
-        <div class="field">
-          <label>Split into ad sets by cluster <span style="color:#6e7681">— pick clusters → one ad set each (waterfall). Overrides single geo + CSV adsets.</span></label>
+        <div class="field" ${splitActive ? 'style="border-left-color:#22c55e"' : ''}>
+          <label>Split into ad sets by cluster <span style="color:#6e7681">— click clusters → one ad set EACH, own geo. Waterfall in one launch.</span></label>
           <div class="chips">
-            ${GEO_PRESETS.map((p, i) => `<span class="chip ${state.adsetSplitClusters.includes(i) ? 'on' : ''}" data-clusteridx="${i}" title="${esc(p.group)}">${esc(p.label.replace(/ \(.*\)$/, '').replace(/ · .*/, ''))}</span>`).join('')}
+            ${GEO_PRESETS.map((p, i) => `<span class="chip ${state.adsetSplitClusters.includes(i) ? 'on' : ''}" data-clusteridx="${i}" title="${esc(p.value)}">${esc(p.label.replace(/ \(.*\)$/, '').replace(/ · .*/, ''))}</span>`).join('')}
           </div>
-          ${state.adsetSplitClusters.length ? `<div style="font-size:10px;color:#22c55e;margin-top:4px">→ ${state.adsetSplitClusters.length} ad sets, each with its own geo. Creatives go into every ad set.</div>` : ''}
+          ${splitActive ? `
+          <div style="margin-top:8px;background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.25);border-radius:6px;padding:7px 9px">
+            <div style="font-size:11px;color:#4ade80;font-weight:600;margin-bottom:5px">→ ${splitClustersSel.length} ad set${splitClustersSel.length > 1 ? 's' : ''} will be created (creatives go into each):</div>
+            ${splitClustersSel.map((p, i) => `<div style="font-size:11px;color:#cbd5e1;line-height:1.5;margin-bottom:3px"><b style="color:#fff">${String(i + 1).padStart(2, '0')} ${esc(p.label.replace(/ \(.*\)$/, '').replace(/ · .*/, ''))}</b> <span style="color:#6e7681">${p.field === 'states' ? 'states' : 'countries'}:</span> ${esc(p.value)}</div>`).join('')}
+            <div style="font-size:10px;color:#fbbf24;margin-top:4px">↑ single Countries / US-states fields below are ignored while split is on. Click a chip again to remove.</div>
+          </div>` : ''}
         </div>
         <div class="grid2" style="margin-top:10px">
           <div class="field">
-            <label>Countries <span style="color:#6e7681">(codes, e.g. US,CA)</span></label>
-            <input type="text" id="fbl-geo-countries" value="${esc(state.geoCountriesOverride)}" placeholder="empty = CSV (default US)">
+            <label>Countries <span style="color:#6e7681">${splitActive ? '(ignored — cluster split on)' : '(codes, e.g. US,CA)'}</span></label>
+            <input type="text" id="fbl-geo-countries" value="${esc(state.geoCountriesOverride)}" placeholder="${splitActive ? 'using cluster split ↑' : 'empty = CSV (default US)'}"${splitActive ? ' disabled style="opacity:.4"' : ''}>
           </div>
           <div class="field">
-            <label>US states <span style="color:#6e7681">${plan?.sacList.length ? '(disabled under SAC)' : '(names, comma-separated)'}</span></label>
-            <input type="text" id="fbl-geo-states" value="${esc(state.geoStatesOverride)}" placeholder="empty = CSV"${plan?.sacList.length ? ' disabled style="opacity:.4"' : ''}>
+            <label>US states <span style="color:#6e7681">${splitActive ? '(ignored — cluster split on)' : plan?.sacList.length ? '(disabled under SAC)' : '(names, comma-separated)'}</span></label>
+            <input type="text" id="fbl-geo-states" value="${esc(state.geoStatesOverride)}" placeholder="${splitActive ? 'using cluster split ↑' : 'empty = CSV'}"${(splitActive || plan?.sacList.length) ? ' disabled style="opacity:.4"' : ''}>
           </div>
         </div>
         <div class="grid3" style="margin-top:10px">
