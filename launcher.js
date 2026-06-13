@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.9.0 — Bookmarklet
+ * FB Launcher v0.10.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -15,6 +15,9 @@
  * v0.9.0: visual refresh (section cards, gradient header, custom scrollbar), gambling phrase
  *         set (user-supplied US app angles), gambling country geo presets (EN-T1/DACH/Nordic/
  *         SW-EU/MID-CEE/DEEP-CEE), Special Ad Category selector (Financial/Housing/etc).
+ * v0.10.0: CSV-less launch (objective selector + creatives → synthetic 1-adset plan),
+ *          multi-adset split by geo cluster (one-click waterfall), delayed start_time,
+ *          non-US region resolution (per-country), Advantage Audience default OFF, dry-run mode.
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -224,7 +227,11 @@
     ageMinOverride: '',       // v0.7.0: empty = CSV (default 18)
     ageMaxOverride: '',       // v0.7.0: empty = CSV (default 65)
     genderOverride: '',       // v0.7.0: '' = CSV | 'all' | 'men' | 'women'
-    advantageAudienceOverride: '', // v0.7.0: '' = CSV | '0' (off) | '1' (on)
+    advantageAudienceOverride: '0', // v0.10.0: default OFF — geo-strict launches must not leak (was '')
+    objectiveOverride: '',    // v0.10.0: '' = CSV | OUTCOME_SALES | OUTCOME_LEADS | ... (needed for CSV-less)
+    adsetSplitClusters: [],   // v0.10.0: GEO_PRESETS indices → one adset per cluster (waterfall in one click)
+    startDate: '',            // v0.10.0: datetime-local; adset start_time (delayed start / Kyiv→US timing)
+    dryRun: false,            // v0.10.0: build + log payloads without POSTing
     sacOverride: '',          // v0.9.0: '' = CSV | NONE | FINANCIAL_PRODUCTS_SERVICES | HOUSING | EMPLOYMENT | CREDIT | ISSUES_ELECTIONS_POLITICS | ONLINE_GAMBLING_AND_GAMING
     // v0.7.0: budget & bidding — override CSV. budgetModeOverride drives CBO vs ABO structure.
     budgetModeOverride: '',   // '' = CSV auto-detect | 'cbo' (campaign budget) | 'abo' (adset budget)
@@ -595,6 +602,9 @@
       genderOverride: state.genderOverride,
       advantageAudienceOverride: state.advantageAudienceOverride,
       sacOverride: state.sacOverride,
+      objectiveOverride: state.objectiveOverride,
+      adsetSplitClusters: state.adsetSplitClusters,
+      startDate: state.startDate,
       placementPlatforms: state.placementPlatforms,
       placementPositionGroups: state.placementPositionGroups,
       budgetModeOverride: state.budgetModeOverride,
@@ -667,6 +677,9 @@
     state.genderOverride = s.genderOverride || '';
     state.advantageAudienceOverride = s.advantageAudienceOverride || '';
     state.sacOverride = s.sacOverride || '';
+    state.objectiveOverride = s.objectiveOverride || '';
+    state.adsetSplitClusters = Array.isArray(s.adsetSplitClusters) ? s.adsetSplitClusters : [];
+    state.startDate = s.startDate || '';
     state.placementPlatforms = Array.isArray(s.placementPlatforms) ? s.placementPlatforms : [];
     state.placementPositionGroups = Array.isArray(s.placementPositionGroups) ? s.placementPositionGroups : [];
     state.budgetModeOverride = s.budgetModeOverride || '';
@@ -1431,15 +1444,36 @@
 
   // ─── LAUNCH PLAN ANALYSIS ───────────────────────────────────────────────
   function analyzePlan() {
-    if (!state.rows.length) return null;
-    const first = state.rows[0];
+    // v0.10.0: ads-mode = creatives (uploaded or pasted JSON) define new ads per adset.
+    const adsMode = state.creativesParsed?.mode === 'ads';
+    const adsModeItems = adsMode ? state.creativesParsed.items : null;
+    const hasRows = state.rows.length > 0;
+    const splitClusters = (state.adsetSplitClusters || []).map(i => GEO_PRESETS[i]).filter(Boolean);
+    // CSV-less / cluster-split both need uploaded/pasted creatives to have any ads.
+    const csvless = !hasRows;
+    if (csvless && !(adsMode && adsModeItems && adsModeItems.length)) return null;
 
-    // Group rows by Ad Set Name
+    const first = hasRows ? state.rows[0] : {};
+
+    // Build adset groups — three sources, in priority:
+    //  1) cluster split  → one synthetic adset per selected geo cluster (carries its own geo)
+    //  2) CSV rows       → group by "Ad Set Name"
+    //  3) CSV-less       → single synthetic adset
     const groups = new Map();
-    for (const r of state.rows) {
-      const key = r['Ad Set Name'] || '__default__';
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(r);
+    if (splitClusters.length) {
+      splitClusters.forEach((c, i) => {
+        const row = hasRows ? { ...state.rows[0] } : {};
+        if (c.field === 'states') row._geoStates = c.value; else row._geoCountries = c.value;
+        groups.set(`${String(i + 1).padStart(2, '0')} ${c.label}`, [row]);
+      });
+    } else if (hasRows) {
+      for (const r of state.rows) {
+        const key = r['Ad Set Name'] || '__default__';
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(r);
+      }
+    } else {
+      groups.set('__default__', [{}]);
     }
 
     // Budget mode — CSV auto-detect, then v0.7.0 UI override (mode forces CBO/ABO + amount).
@@ -1485,9 +1519,7 @@
       }
     }
 
-    // Ads-mode (creatives override defines new ads per adset)
-    const adsMode = state.creativesParsed?.mode === 'ads';
-    const adsModeItems = adsMode ? state.creativesParsed.items : null;
+    // Ad count (adsMode/adsModeItems computed at top of function)
     let adCount;
     if (adsMode) {
       const hasAssignments = Object.keys(state.adsetAssignments || {}).length > 0;
@@ -1510,11 +1542,12 @@
       adCount,
       adsMode,
       adsModeItems,
+      csvless,
       isCBO,
       cboBudget,
       aboTotal,
       sacList,
-      objective: first['Campaign Objective'] || '',
+      objective: state.objectiveOverride || first['Campaign Objective'] || '',
       pixel: stripPfx(first['Optimized Conversion Tracking Pixels'] || first['Pixel'] || ''),
       event: first['Optimized Event'] || first['Custom Event Type'] || '',
     };
@@ -1541,6 +1574,17 @@
     if (n.includes('cost_cap') || n === 'cost_cap') return 'COST_CAP';
     if (n === 'lowest_cost_with_bid_cap') return 'LOWEST_COST_WITH_BID_CAP';
     return 'LOWEST_COST_WITHOUT_CAP';
+  }
+
+  // v0.10.0: UI objective override (FB enum) wins over CSV; required for CSV-less launches.
+  function effectiveObjective(row) {
+    return state.objectiveOverride || mapObjective(row && row['Campaign Objective']);
+  }
+  // v0.10.0: optional adset start_time (delayed start). datetime-local → unix seconds.
+  function startTimeUnix() {
+    if (!state.startDate) return null;
+    const t = Date.parse(state.startDate);
+    return isNaN(t) ? null : Math.floor(t / 1000);
   }
 
   // v0.7.0: UI bid-strategy override (already an FB enum) wins over CSV's free-text "Campaign Bid Strategy".
@@ -1844,34 +1888,42 @@
     'district of columbia':3853,'washington dc':3893,
   };
 
-  let _fbStateMapCache = null;
-  async function fetchFbStateMap() {
-    if (_fbStateMapCache) return _fbStateMapCache;
+  // v0.10.0: per-country region map cache. fetchFbRegionMap('GB') etc.
+  const _fbRegionMapCache = {};
+  async function fetchFbRegionMap(cc) {
+    if (_fbRegionMapCache[cc]) return _fbRegionMapCache[cc];
     try {
       const res = await apiFetch('/search', {
-        params: { type: 'adgeolocation', location_types: '["region"]', country_code: 'US', limit: 200 },
+        params: { type: 'adgeolocation', location_types: '["region"]', country_code: cc, limit: 500 },
       });
       const map = {};
       (res?.data || []).forEach(r => { map[r.name.toLowerCase()] = r.key; });
-      _fbStateMapCache = map;
+      _fbRegionMapCache[cc] = map;
       return map;
     } catch {
-      _fbStateMapCache = {};
+      _fbRegionMapCache[cc] = {};
       return {};
     }
   }
 
-  async function resolveRegions(regionsRaw) {
+  // v0.10.0: resolve region names against the launch's target countries (was US-only).
+  // Tries each target country's FB region map, then the static US table as a fast fallback.
+  async function resolveRegions(regionsRaw, countries) {
     if (!regionsRaw) return [];
-    const stateNames = String(regionsRaw).split(',').map(s => s.trim().replace(/\s+US$/i, '').trim()).filter(Boolean);
-    if (!stateNames.length) return [];
-    const fbMap = await fetchFbStateMap();
+    const names = String(regionsRaw).split(',').map(s => s.trim().replace(/\s+US$/i, '').trim()).filter(Boolean);
+    if (!names.length) return [];
+    const ctys = (countries && countries.length) ? countries : ['US'];
     const out = [];
-    for (const name of stateNames) {
+    for (const name of names) {
       const lc = name.toLowerCase();
-      const key = fbMap[lc] || US_STATE_KEYS[lc];
-      if (key) out.push({ key: String(key), name, country: 'US' });
-      else addLog('warning', `Region not found: "${name}" — skipped`);
+      let matched = null;
+      for (const cc of ctys) {
+        const map = await fetchFbRegionMap(cc);
+        if (map[lc]) { matched = { key: String(map[lc]), name, country: cc }; break; }
+      }
+      if (!matched && US_STATE_KEYS[lc]) matched = { key: String(US_STATE_KEYS[lc]), name, country: 'US' };
+      if (matched) out.push(matched);
+      else addLog('warning', `Region not found in ${ctys.join('/')}: "${name}" — skipped`);
     }
     return out;
   }
@@ -1881,10 +1933,14 @@
   // pipeline for each selected account sequentially. For single-account this still
   // produces exactly one campaign; for N accounts it produces N independent campaigns.
   async function runLaunch() {
-    if (!state.rows.length) { setStatus('error', 'Load a CSV first.'); return; }
     if (!state.targetAccIds.length) { setStatus('error', 'Select at least one target ad account.'); return; }
     const plan = analyzePlan();
-    if (!plan) { setStatus('error', 'Cannot analyze plan from CSV.'); return; }
+    if (!plan) { setStatus('error', 'Load a CSV, or upload creatives + set objective/link for a CSV-less launch.'); return; }
+    // v0.10.0: CSV-less needs objective + destination link in the UI (CSV normally supplies these).
+    if (plan.csvless) {
+      if (!plan.objective) { setStatus('error', 'CSV-less: pick a Campaign Objective (step 1b/9 area).'); return; }
+      if (!state.linkOverride) { setStatus('error', 'CSV-less: set a destination Link (step 7).'); return; }
+    }
 
     // Pre-flight: DSA Beneficiary required. FB used to enforce this only for EU
     // targeting, but in 2026 they expanded the rule to almost all ad sets — error
@@ -1979,7 +2035,7 @@
   async function runLaunchForAccount(accId, plan, dateStr) {
     const acc = ACCOUNTS.find(a => a.id === accId);
     const accLabel = acc?.name || accId;
-    const firstRow = state.rows[0];
+    const firstRow = state.rows[0] || {};  // v0.10.0: {} for CSV-less launches
 
     const sacLabel = plan.sacList.length ? ` SAC:${plan.sacList[0]}` : '';
     const budgetLabel = plan.isCBO ? `CBO $${plan.cboBudget}/d` : `ABO $${plan.aboTotal}/d total`;
@@ -2035,7 +2091,7 @@
 
       const campBody = {
         name: campName,
-        objective: mapObjective(firstRow['Campaign Objective']),
+        objective: effectiveObjective(firstRow),
         status: state.createStatus,
         special_ad_categories: JSON.stringify(plan.sacList),
         buying_type: firstRow['Buying Type'] || 'AUCTION',
@@ -2053,11 +2109,17 @@
         campBody.bid_strategy = effectiveBidStrategy(firstRow);
       }
 
-      addLog('info', `[${accLabel}] creating campaign "${campName}"...`);
-      const camp = await apiFetch(`/act_${accId}/campaigns`, { method: 'POST', body: campBody });
+      addLog('info', `[${accLabel}] ${state.dryRun ? '🟦 DRY ' : ''}creating campaign "${campName}"...`);
+      let camp;
+      if (state.dryRun) {
+        addLog('info', `[${accLabel}] 🟦 campaign payload: ${JSON.stringify(campBody)}`);
+        camp = { id: 'DRY_CAMPAIGN' };
+      } else {
+        camp = await apiFetch(`/act_${accId}/campaigns`, { method: 'POST', body: campBody });
+      }
       campaignId = camp.id;
       state.progress.done++;
-      addLog('success', `[${accLabel}] ✓ campaign id=${campaignId}`);
+      addLog('success', `[${accLabel}] ${state.dryRun ? '🟦 DRY ' : '✓ '}campaign id=${campaignId}`);
     } catch (e) {
       addLog('error', `[${accLabel}] ✗ campaign failed: ${e.message}`);
       // Don't stop multi-account run on one campaign failure; the orchestrator
@@ -2108,11 +2170,12 @@
           })
         : (adsetSourceName !== '__default__' ? adsetSourceName : `Ad Set ${adsetIdx}`);
 
-      // v0.7.0: targeting — UI override (state.*) wins over CSV column; empty override falls back to CSV.
-      const countriesRaw = (state.geoCountriesOverride || String(aFirst['Countries'] || ''))
+      // v0.7.0/v0.10.0: targeting — per-adset cluster geo (_geoCountries/_geoStates) wins, then UI
+      // override (state.*), then CSV column.
+      const countriesRaw = (aFirst._geoCountries || state.geoCountriesOverride || String(aFirst['Countries'] || ''))
         .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
-      const fbRegions = await resolveRegions(state.geoStatesOverride || aFirst['Regions']);
       const countries = countriesRaw.length ? countriesRaw : ['US'];
+      const fbRegions = await resolveRegions(aFirst._geoStates || state.geoStatesOverride || aFirst['Regions'], countries);
       const ageMin = state.ageMinOverride ? (+state.ageMinOverride || 18) : (+aFirst['Age Min'] || 18);
       const ageMax = state.ageMaxOverride ? (+state.ageMaxOverride || 65) : (+aFirst['Age Max'] || 65);
       const gender = (state.genderOverride || String(aFirst['Gender'] || '')).toLowerCase();
@@ -2209,14 +2272,21 @@
         if (et) adsetBody.end_time = String(et);
       }
       if (bidAmountCents) adsetBody.bid_amount = bidAmountCents;
+      // v0.10.0: optional delayed start (Kyiv→US timing). Lifetime already set end_time above.
+      { const st = startTimeUnix(); if (st) adsetBody.start_time = String(st); }
 
       addLog('info', `[${accLabel}] creating adset ${adsetIdx}/${plan.adsetCount} "${adsetNameFinal}"...`);
       let adsetId;
       try {
-        const adset = await apiFetch(`/act_${accId}/adsets`, { method: 'POST', body: adsetBody });
-        adsetId = adset.id;
+        if (state.dryRun) {
+          addLog('info', `[${accLabel}] 🟦 adset payload: ${JSON.stringify(adsetBody)}`);
+          adsetId = `DRY_ADSET_${adsetIdx}`;
+        } else {
+          const adset = await apiFetch(`/act_${accId}/adsets`, { method: 'POST', body: adsetBody });
+          adsetId = adset.id;
+        }
         state.progress.done++;
-        addLog('success', `[${accLabel}] ✓ adset ${adsetIdx}/${plan.adsetCount} id=${adsetId} (${adsToCreate.length} ads coming)`);
+        addLog('success', `[${accLabel}] ${state.dryRun ? '🟦 DRY ' : '✓ '}adset ${adsetIdx}/${plan.adsetCount} id=${adsetId} (${adsToCreate.length} ads coming)`);
       } catch (e) {
         addLog('error', `[${accLabel}] ✗ adset ${adsetIdx} "${adsetNameFinal}": ${e.message}`);
         state.progress.done += 1 + adsToCreate.length; // skip this adset's ads in progress
@@ -2348,6 +2418,10 @@
           // FB Ads Manager UI will then display in the IG identity dropdown —
           // PBIA, while functional, leaves that dropdown empty.
           let creative;
+          if (state.dryRun) {
+            addLog('info', `[${accLabel}] 🟦 creative: ${JSON.stringify(objectStorySpec).slice(0, 500)}`);
+            creative = { id: 'DRY_CREATIVE' };
+          } else {
           try {
             creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: creativeBody });
           } catch (e) {
@@ -2392,6 +2466,7 @@
               throw e;
             }
           }
+          }  // end else (non-dry-run creative)
           // v0.7.0: markers on FB ad name only; adName stays clean for token context (sub5/ad_name)
           const adNameFinal = applyMarkers(adName);
           const adBodyPost = {
@@ -2405,10 +2480,14 @@
             adBodyPost.dsa_beneficiary = state.dsaBeneficiary;
             adBodyPost.dsa_payer = state.dsaPayer || state.dsaBeneficiary;  // payer defaults to beneficiary
           }
-          await apiFetch(`/act_${accId}/ads`, { method: 'POST', body: adBodyPost });
+          if (state.dryRun) {
+            addLog('info', `[${accLabel}] 🟦 ad payload: ${JSON.stringify(adBodyPost)}`);
+          } else {
+            await apiFetch(`/act_${accId}/ads`, { method: 'POST', body: adBodyPost });
+          }
           totalAdOk++;
           state.progress.done++;
-          addLog('success', `[${accLabel}] ✓ ad ${i + 1}/${adsToCreate.length} "${adNameFinal}"`);
+          addLog('success', `[${accLabel}] ${state.dryRun ? '🟦 DRY ' : '✓ '}ad ${i + 1}/${adsToCreate.length} "${adNameFinal}"`);
         } catch (e) {
           totalAdErr++;
           state.progress.done++;
@@ -2619,7 +2698,7 @@
     // Determine launch button state + label (tells user what's missing)
     let blockReason = '';
     if (state.running) blockReason = `Running ${state.progress.done}/${state.progress.total}...`;
-    else if (!state.rows.length) blockReason = '⬆ Load CSV first (step 1)';
+    else if (!plan) blockReason = '⬆ Load CSV (step 1) or upload creatives for a CSV-less launch';
     else if (!hasAccounts) blockReason = '⬆ Select at least one target account (step 2)';
     else if (!state.pageIdOverride && !state.rows.some(r => r['Link Object ID'])) blockReason = '⬆ Set Page ID (step 3)';
     else if (state.pageIdOverride && !/^\d{10,20}$/.test(state.pageIdOverride)) blockReason = `⚠ Page ID "${state.pageIdOverride}" invalid (10-20 digits)`;
@@ -2632,6 +2711,9 @@
     else if (plan && plan.isCBO && !plan.cboBudget) blockReason = '⚠ Campaign budget is 0 — set it (1b) or in CSV';
     else if (plan && !plan.isCBO && !plan.aboTotal) blockReason = '⚠ Ad set budget is 0 — set it (1b) or in CSV';
     else if (isLifetimeBudget() && !budgetEndTimeUnix()) blockReason = '⚠ Lifetime budget needs an end date (1b)';
+    // v0.10.0: CSV-less needs objective + destination link from the UI.
+    else if (plan && plan.csvless && !plan.objective) blockReason = '⬆ CSV-less: pick a Campaign Objective (1b)';
+    else if (plan && plan.csvless && !state.linkOverride) blockReason = '⬆ CSV-less: set destination Link (step 7)';
     const runDisabled = !!blockReason;
     const totalAds = plan?.adCount || 0;
     const buttonLabel = blockReason
@@ -2642,7 +2724,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.9.0
+      <h2>🚀 FB Launcher v0.10.0
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -2698,8 +2780,26 @@
       </div>
 
       <div class="field">
-        <label>1b. Budget &amp; Bidding <span style="color:#6e7681">— fill to override CSV. Mode = CBO/ABO, type = daily/lifetime.</span></label>
-        <div class="grid3">
+        <label>1b. Campaign · objective, budget, schedule <span style="color:#6e7681">— fill to override CSV. Objective required for CSV-less.</span></label>
+        <div class="grid2">
+          <div class="field">
+            <label>Campaign objective ${plan?.csvless ? '<span style="color:#fbbf24">⚠ required (no CSV)</span>' : ''}</label>
+            <select id="fbl-objective">
+              <option value="" ${state.objectiveOverride === '' ? 'selected' : ''}>— CSV —</option>
+              <option value="OUTCOME_SALES" ${state.objectiveOverride === 'OUTCOME_SALES' ? 'selected' : ''}>Sales (conversions)</option>
+              <option value="OUTCOME_LEADS" ${state.objectiveOverride === 'OUTCOME_LEADS' ? 'selected' : ''}>Leads</option>
+              <option value="OUTCOME_TRAFFIC" ${state.objectiveOverride === 'OUTCOME_TRAFFIC' ? 'selected' : ''}>Traffic</option>
+              <option value="OUTCOME_APP_PROMOTION" ${state.objectiveOverride === 'OUTCOME_APP_PROMOTION' ? 'selected' : ''}>App promotion</option>
+              <option value="OUTCOME_ENGAGEMENT" ${state.objectiveOverride === 'OUTCOME_ENGAGEMENT' ? 'selected' : ''}>Engagement</option>
+              <option value="OUTCOME_AWARENESS" ${state.objectiveOverride === 'OUTCOME_AWARENESS' ? 'selected' : ''}>Awareness</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Start time <span style="color:#6e7681">— empty = now (Kyiv→US timing)</span></label>
+            <input type="datetime-local" id="fbl-start-date" value="${esc(state.startDate)}">
+          </div>
+        </div>
+        <div class="grid3" style="margin-top:10px">
           <div class="field">
             <label>Budget mode</label>
             <select id="fbl-budget-mode">
@@ -2865,6 +2965,13 @@
             <option value="">— pick a preset to fill geo —</option>
             ${['Lead-gen — US states', 'Gambling — countries'].map(g => `<optgroup label="${esc(g)}">${GEO_PRESETS.map((p, i) => p.group === g ? `<option value="${i}">${esc(p.label)}</option>` : '').join('')}</optgroup>`).join('')}
           </select>
+        </div>
+        <div class="field">
+          <label>Split into ad sets by cluster <span style="color:#6e7681">— pick clusters → one ad set each (waterfall). Overrides single geo + CSV adsets.</span></label>
+          <div class="chips">
+            ${GEO_PRESETS.map((p, i) => `<span class="chip ${state.adsetSplitClusters.includes(i) ? 'on' : ''}" data-clusteridx="${i}" title="${esc(p.group)}">${esc(p.label.replace(/ \(.*\)$/, '').replace(/ · .*/, ''))}</span>`).join('')}
+          </div>
+          ${state.adsetSplitClusters.length ? `<div style="font-size:10px;color:#22c55e;margin-top:4px">→ ${state.adsetSplitClusters.length} ad sets, each with its own geo. Creatives go into every ad set.</div>` : ''}
         </div>
         <div class="grid2" style="margin-top:10px">
           <div class="field">
@@ -3120,12 +3227,16 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
           <option value="PAUSED" ${state.createStatus === 'PAUSED' ? 'selected' : ''}>PAUSED (review before launch)</option>
           <option value="ACTIVE" ${state.createStatus === 'ACTIVE' ? 'selected' : ''}>ACTIVE (launch immediately)</option>
         </select>
+        <label style="display:flex;align-items:center;gap:6px;margin-top:8px;cursor:pointer">
+          <input type="checkbox" id="fbl-dry-run" ${state.dryRun ? 'checked' : ''} style="width:auto;margin:0">
+          <span><b>🟦 Dry run</b> <span style="color:#6e7681">— build &amp; log API payloads, don't actually create anything</span></span>
+        </label>
       </div>
 
       <hr>
 
       <button class="primary" id="fbl-run" ${runDisabled ? 'disabled' : ''} style="width:100%">
-        ${buttonLabel}
+        ${state.dryRun && !runDisabled ? '🟦 DRY RUN — ' : ''}${buttonLabel}
       </button>
 
       ${state.progress.total ? `<div class="progress"><div style="width:${progressPct}%"></div></div>` : ''}
@@ -3426,6 +3537,19 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       }
       render();
     });
+    // v0.10.0: cluster-split chips — one adset per selected cluster
+    panel.querySelectorAll('.chip[data-clusteridx]').forEach(el => {
+      el.addEventListener('click', () => {
+        const idx = +el.dataset.clusteridx;
+        const i = state.adsetSplitClusters.indexOf(idx);
+        if (i >= 0) state.adsetSplitClusters.splice(i, 1); else state.adsetSplitClusters.push(idx);
+        render();
+      });
+    });
+    // v0.10.0: objective / start time / dry run
+    document.getElementById('fbl-objective')?.addEventListener('change', e => { state.objectiveOverride = e.target.value; render(); });
+    document.getElementById('fbl-start-date')?.addEventListener('input', e => { state.startDate = e.target.value; });
+    document.getElementById('fbl-dry-run')?.addEventListener('change', e => { state.dryRun = e.target.checked; render(); });
     // v0.8.0: placement preset fills the checkbox arrays
     document.getElementById('fbl-placement-preset')?.addEventListener('change', e => {
       const p = PLACEMENT_PRESETS[e.target.value];
