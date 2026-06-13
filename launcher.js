@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.8.0 — Bookmarklet
+ * FB Launcher v0.9.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -12,6 +12,9 @@
  * v0.8.0: default ACTIVE status, daily/lifetime budget (+end_time), placement checkboxes
  *         (platforms + position groups) with presets, SafeX HOME geo-cluster presets,
  *         AIDA phrase library (title/body/description) per vertical, link description override.
+ * v0.9.0: visual refresh (section cards, gradient header, custom scrollbar), gambling phrase
+ *         set (user-supplied US app angles), gambling country geo presets (EN-T1/DACH/Nordic/
+ *         SW-EU/MID-CEE/DEEP-CEE), Special Ad Category selector (Financial/Housing/etc).
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -34,13 +37,23 @@
   const PROVEN_VOLUME = 'Texas, Georgia, Arizona, Indiana, New Mexico, Pennsylvania, Michigan, Washington, Alabama, New Jersey, Massachusetts, Kentucky, Connecticut, Nebraska, Maine, Idaho, Montana, Alaska';
   const VOLUME_CAPPED = 'North Carolina, Louisiana, Oklahoma';
   const CONTAINMENT = 'Florida, California';
-  const GEO_CLUSTERS = {
-    'PROVEN-HIGH (8 · cap $10-11)': PROVEN_HIGH,
-    'PROVEN-VOLUME (18 · cap $8)': PROVEN_VOLUME,
-    'VOLUME-CAPPED (3 · cap $4)': VOLUME_CAPPED,
-    'CONTAINMENT (2 · cap $4-5)': CONTAINMENT,
-    'ALL-LIVE (31 states)': [PROVEN_HIGH, PROVEN_VOLUME, VOLUME_CAPPED, CONTAINMENT].join(', '),
-  };
+  // field: 'states' fills the US-states box, 'countries' fills the Countries box (codes).
+  // Gambling pools from currency split / PWA banner memory: EN-T1 (UK=GB,CA,AU,IE), EU12.
+  const GEO_PRESETS = [
+    { group: 'Lead-gen — US states', label: 'PROVEN-HIGH (8 · cap $10-11)', field: 'states', value: PROVEN_HIGH },
+    { group: 'Lead-gen — US states', label: 'PROVEN-VOLUME (18 · cap $8)', field: 'states', value: PROVEN_VOLUME },
+    { group: 'Lead-gen — US states', label: 'VOLUME-CAPPED (3 · cap $4)', field: 'states', value: VOLUME_CAPPED },
+    { group: 'Lead-gen — US states', label: 'CONTAINMENT (2 · cap $4-5)', field: 'states', value: CONTAINMENT },
+    { group: 'Lead-gen — US states', label: 'ALL-LIVE (31 states)', field: 'states', value: [PROVEN_HIGH, PROVEN_VOLUME, VOLUME_CAPPED, CONTAINMENT].join(', ') },
+    { group: 'Gambling — countries', label: 'A1 · EN-T1 (CA/AU/IE/NZ)', field: 'countries', value: 'CA, AU, IE, NZ' },
+    { group: 'Gambling — countries', label: 'B1 · DACH (DE/AT/CH)', field: 'countries', value: 'DE, AT, CH' },
+    { group: 'Gambling — countries', label: 'B2 · NORDIC (NO/DK/FI)', field: 'countries', value: 'NO, DK, FI' },
+    { group: 'Gambling — countries', label: 'B3 · SW-EU (FR/BE/ES/IT/NL)', field: 'countries', value: 'FR, BE, ES, IT, NL' },
+    { group: 'Gambling — countries', label: 'C1 · MID-CEE (PT/GR/PL/CZ)', field: 'countries', value: 'PT, GR, PL, CZ' },
+    { group: 'Gambling — countries', label: 'C2 · DEEP-CEE (SK/SI/HR/RO/HU)', field: 'countries', value: 'SK, SI, HR, RO, HU' },
+    { group: 'Gambling — countries', label: 'ALL gambling (24 countries)', field: 'countries', value: 'CA, AU, IE, NZ, DE, AT, CH, NO, DK, FI, FR, BE, ES, IT, NL, PT, GR, PL, CZ, SK, SI, HR, RO, HU' },
+    { group: 'Gambling — countries', label: 'USA only', field: 'countries', value: 'US' },
+  ];
 
   // v0.8.0: placement building blocks. Platform checkboxes + position-group checkboxes; presets fill both.
   const PLACEMENT_PLATFORMS = [['facebook', 'Facebook'], ['instagram', 'Instagram'], ['audience_network', 'Audience Network'], ['messenger', 'Messenger']];
@@ -76,13 +89,46 @@
     },
     gambling: {
       label: 'Gambling / Casino',
-      title: ['Your Welcome Bonus Is Ready', 'Join Thousands of Players Today', 'New Players Get a Head Start', 'Spin the Reels Tonight', 'Claim Your Sign-Up Offer'],
-      body: [
-        'Discover top-rated games and a generous welcome package for new members. 18+. Play responsibly.',
-        'Thousands of players, daily rewards, instant sign-up. Get started in seconds. 18+. T&Cs apply.',
-        'New members get an exclusive welcome offer the moment they join. Limited availability. 18+ only.',
+      title: [
+        "🎉 Unleash the Winning Spirit! 🏆",
+        "🚀 Elevate Your Wins: Install Now! 💸",
+        "🌟 Discover Limitless Prizes! 🔓",
+        "🃏 Play Like a Pro: Win Big! 💰",
+        "🔥 Ignite Your Fortunes: Get Started! 🎁",
+        "🍀 Try Your Luck: Spin to Win! 🎯",
+        "🎲 Roll the Dice of Success! 💥",
+        "🏆 Triumph Today: Play and Win! ✨",
+        "🚀 Win Big! 💰 #1 in USA 🏆",
+        "🔥 Feel the Heat! 🎲 USA's Finest 🌟",
+        "🎁 Your Lucky Break! 🏅 #1 App in USA 🍒",
+        "🔝 The Ultimate Gaming Experience! 🃏",
       ],
-      desc: ['Claim your bonus', 'Sign up in seconds', 'New players welcome', '18+ · Play responsibly'],
+      body: [
+        "💸 Boost Your Bankroll: Get Welcome Bonus & up to 125 Free Spins Now! 🎲🔥",
+        "🇺🇸 Exclusive for the USA! 🎁 Best Welcome Bonus Pack Guaranteed 🎉🎊",
+        "⚡️ Only 20 Hours Left! 💰 Get Welcome Bonus & up to 125 Free Spins Today! 🎉💵 in the Mobile App 📱🎉",
+        "💎 Bet Big, Win Bigger! 🎁 Best Welcome Bonus Pack Guaranteed 🎉🎊",
+        "🎁 Your Luck Awaits! 🍀 Sign Up and get Welcome Bonus 🤑💫",
+        "🚀 Take a Chance, Hit the Jackpot! 🔝 Get 250 Free Spins 🎯💥",
+        "🏆 Join the Winners' Club! 🌟 Get a 200% Deposit Match 💎💪",
+        "🌟 Start Winning Today! 🏆 100% Match Bonus for New Players 💸💎",
+        "💎 Go All In, Go All Out! 💰 Get 300% Bonus on Your First Deposit 💥🃏",
+        "🎲 Feel the Rush of Victory! 🚀 Get 500 Free Spins Today 🎁💫",
+        "💰 Get in on the Action! 🎰 Join Now for a $1000 Welcome Bonus 🤑🚀",
+        "🌟 Discover Limitless Prizes: Unlock up to 100% & 125 Free Spins! 🎁💰",
+        "💎 Claim Your Jackpot Journey: Boost Your Bankroll with up to 100% & 125 Free Spins! 💸🚀",
+        "🔓 Unleash Epic Rewards: Up to 100% & 125 Free Spins Await Your Victory! 🎉🔥",
+      ],
+      desc: [
+        "🚀 Boost Your Odds: Install for Maximum Wins Today!",
+        "🎯 Aim for Victory: Install Now and Conquer the Game!",
+        "💰 Fortune Favors the Bold: Install and Win Now!",
+        "🎲 Roll the Dice of Success: Install for Big Wins Today!",
+        "🔥 Ignite Your Winning Streak: Install Now and Prevail!",
+        "🎰 Spin Your Way to Success: Install Now and Score Big!",
+        "💎 Unlock the Path to Riches: Install for Mega Wins Now!",
+        "🍀 Embrace the Winning Vibe: Install and Conquer Today!",
+      ],
     },
     crypto: {
       label: 'Crypto / Trading',
@@ -179,6 +225,7 @@
     ageMaxOverride: '',       // v0.7.0: empty = CSV (default 65)
     genderOverride: '',       // v0.7.0: '' = CSV | 'all' | 'men' | 'women'
     advantageAudienceOverride: '', // v0.7.0: '' = CSV | '0' (off) | '1' (on)
+    sacOverride: '',          // v0.9.0: '' = CSV | NONE | FINANCIAL_PRODUCTS_SERVICES | HOUSING | EMPLOYMENT | CREDIT | ISSUES_ELECTIONS_POLITICS | ONLINE_GAMBLING_AND_GAMING
     // v0.7.0: budget & bidding — override CSV. budgetModeOverride drives CBO vs ABO structure.
     budgetModeOverride: '',   // '' = CSV auto-detect | 'cbo' (campaign budget) | 'abo' (adset budget)
     cboBudgetOverride: '',    // campaign daily budget $ (when mode=cbo)
@@ -547,6 +594,7 @@
       ageMaxOverride: state.ageMaxOverride,
       genderOverride: state.genderOverride,
       advantageAudienceOverride: state.advantageAudienceOverride,
+      sacOverride: state.sacOverride,
       placementPlatforms: state.placementPlatforms,
       placementPositionGroups: state.placementPositionGroups,
       budgetModeOverride: state.budgetModeOverride,
@@ -618,6 +666,7 @@
     state.ageMaxOverride = s.ageMaxOverride || '';
     state.genderOverride = s.genderOverride || '';
     state.advantageAudienceOverride = s.advantageAudienceOverride || '';
+    state.sacOverride = s.sacOverride || '';
     state.placementPlatforms = Array.isArray(s.placementPlatforms) ? s.placementPlatforms : [];
     state.placementPositionGroups = Array.isArray(s.placementPositionGroups) ? s.placementPositionGroups : [];
     state.budgetModeOverride = s.budgetModeOverride || '';
@@ -1417,7 +1466,9 @@
       'ISSUES_ELECTIONS_POLITICS': 'ISSUES_ELECTIONS_POLITICS',
       'ONLINE_GAMBLING_AND_GAMING': 'ONLINE_GAMBLING_AND_GAMING',
     };
-    const sacList = (sacRaw && sacRaw !== 'NONE') ? [sacMap[sacRaw] || sacRaw] : [];
+    let sacList = (sacRaw && sacRaw !== 'NONE') ? [sacMap[sacRaw] || sacRaw] : [];
+    // v0.9.0: UI Special Ad Category override wins over CSV ('NONE' clears it).
+    if (state.sacOverride) sacList = state.sacOverride === 'NONE' ? [] : [state.sacOverride];
 
     // Adset budgets sum for ABO. v0.7.0: per-adset override applies the same budget to every adset.
     let aboTotal = 0;
@@ -2392,30 +2443,43 @@
     style.id = '__fb_launcher_styles__';
     style.textContent = `
       #${PANEL_ID} { position:fixed; top:0; right:0; width:920px; max-width:94vw; height:100vh;
-        background:#0f172a; color:#e2e8f0; z-index:2147483646;
-        border-left:1px solid #334155; box-shadow:-8px 0 24px rgba(0,0,0,.4);
+        background:linear-gradient(180deg,#0d1526 0%,#0a0f1c 100%); color:#e2e8f0; z-index:2147483646;
+        border-left:1px solid #1e2a44; box-shadow:-10px 0 30px rgba(0,0,0,.5);
         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-        font-size:13px; overflow-y:auto; padding:14px 18px; box-sizing:border-box; }
-      #${PANEL_ID} h2 { margin:0 0 4px 0; font-size:15px; font-weight:700; color:#fff;
-        display:flex; align-items:center; justify-content:space-between; }
-      #${PANEL_ID} .sub { color:#94a3b8; font-size:11px; margin-bottom:12px; }
-      #${PANEL_ID} .field { margin-bottom:10px; }
+        font-size:13px; overflow-y:auto; padding:0 18px 16px; box-sizing:border-box; }
+      #${PANEL_ID}::-webkit-scrollbar { width:10px; }
+      #${PANEL_ID}::-webkit-scrollbar-track { background:transparent; }
+      #${PANEL_ID}::-webkit-scrollbar-thumb { background:#243049; border-radius:5px; border:2px solid #0a0f1c; }
+      #${PANEL_ID}::-webkit-scrollbar-thumb:hover { background:#3b4a66; }
+      /* v0.9.0: header bar — full-bleed gradient */
+      #${PANEL_ID} h2 { margin:0 -18px 14px; padding:15px 18px; font-size:15px; font-weight:700; color:#fff;
+        background:linear-gradient(100deg,#1d4ed8 0%,#3b82f6 60%,#6366f1 100%);
+        display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:5;
+        box-shadow:0 2px 12px rgba(29,78,216,.35); letter-spacing:.3px; }
+      #${PANEL_ID} .sub { color:#94a3b8; font-size:11px; margin-bottom:14px; }
+      /* v0.9.0: each numbered step = a card with a left accent; nested fields stay plain */
+      #${PANEL_ID} .field { background:#131d31; border:1px solid #233148; border-left:3px solid #3b82f6;
+        border-radius:9px; padding:11px 13px; margin-bottom:11px; transition:border-color .15s; }
+      #${PANEL_ID} .field:hover { border-left-color:#60a5fa; }
+      #${PANEL_ID} .field .field { background:none; border:none; border-radius:0; padding:0; margin:0; }
+      #${PANEL_ID} .field > label { font-size:12px; font-weight:600; color:#e8eef7; margin-bottom:7px; letter-spacing:.2px; }
       #${PANEL_ID} label { display:block; font-size:11px; color:#94a3b8; margin-bottom:3px; }
       #${PANEL_ID} input[type=text], #${PANEL_ID} input[type=file], #${PANEL_ID} input[type=datetime-local], #${PANEL_ID} select, #${PANEL_ID} textarea {
-        width:100%; padding:6px 8px; background:#1e293b; border:1px solid #334155;
-        border-radius:5px; color:#e2e8f0; font-size:12px; box-sizing:border-box;
-        font-family:inherit; }
-      #${PANEL_ID} input:focus, #${PANEL_ID} select:focus, #${PANEL_ID} textarea:focus { outline:1px solid #3b82f6; border-color:#3b82f6; }
-      #${PANEL_ID} button { padding:7px 12px; border-radius:5px; border:1px solid #334155;
-        background:#1e293b; color:#e2e8f0; font-size:12px; cursor:pointer; font-family:inherit; }
-      #${PANEL_ID} button:hover { background:#334155; }
-      #${PANEL_ID} button.primary { background:#3b82f6; border-color:#3b82f6; color:#fff; font-weight:600; }
-      #${PANEL_ID} button.primary:hover { background:#2563eb; }
+        width:100%; padding:7px 9px; background:#0d1726; border:1px solid #2b3a55;
+        border-radius:6px; color:#e2e8f0; font-size:12px; box-sizing:border-box;
+        font-family:inherit; transition:border-color .12s,box-shadow .12s; }
+      #${PANEL_ID} input:focus, #${PANEL_ID} select:focus, #${PANEL_ID} textarea:focus { outline:none; border-color:#3b82f6; box-shadow:0 0 0 2px rgba(59,130,246,.25); }
+      #${PANEL_ID} button { padding:7px 12px; border-radius:6px; border:1px solid #2b3a55;
+        background:#1a2740; color:#e2e8f0; font-size:12px; cursor:pointer; font-family:inherit; transition:background .12s; }
+      #${PANEL_ID} button:hover { background:#26344f; }
+      #${PANEL_ID} button.primary { background:linear-gradient(100deg,#2563eb,#3b82f6); border:none; color:#fff; font-weight:700; box-shadow:0 2px 10px rgba(37,99,235,.4); }
+      #${PANEL_ID} button.primary:hover { background:linear-gradient(100deg,#1d4ed8,#2563eb); }
       #${PANEL_ID} button:disabled { opacity:.4; cursor:not-allowed; }
-      #${PANEL_ID} .close { background:none; border:none; color:#64748b; font-size:20px; padding:0 4px; line-height:1; }
-      #${PANEL_ID} .preview { background:rgba(0,0,0,.2); border:1px solid #334155;
-        border-radius:6px; padding:8px 10px; font-size:11px; color:#cbd5e1; line-height:1.6;
-        margin-bottom:10px; }
+      #${PANEL_ID} .close { background:rgba(255,255,255,.12); border:none; color:#fff; font-size:18px; padding:0 8px; line-height:1.4; border-radius:5px; cursor:pointer; }
+      #${PANEL_ID} .close:hover { background:rgba(255,255,255,.25); }
+      #${PANEL_ID} .preview { background:linear-gradient(100deg,rgba(59,130,246,.1),rgba(99,102,241,.06)); border:1px solid #2f4a7a;
+        border-left:3px solid #22c55e; border-radius:9px; padding:9px 12px; font-size:11px; color:#cbd5e1; line-height:1.6;
+        margin-bottom:11px; }
       #${PANEL_ID} .preview b { color:#fff; }
       #${PANEL_ID} .log { background:rgba(0,0,0,.3); border:1px solid #334155; border-radius:6px;
         padding:8px 10px; max-height:240px; overflow-y:auto; font-family:ui-monospace,monospace;
@@ -2578,7 +2642,7 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.8.0
+      <h2>🚀 FB Launcher v0.9.0
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
@@ -2781,12 +2845,25 @@
       </div>
 
       <div class="field">
-        <label>5b. Targeting <span style="color:#6e7681">— fill to override CSV for ALL adsets; empty = use CSV column</span>${plan?.sacList.length ? ' <span style="color:#fbbf24">· SAC active — state targeting disabled (country-level only)</span>' : ''}</label>
+        <label>5b. Targeting <span style="color:#6e7681">— fill to override CSV for ALL adsets; empty = use CSV column</span>${plan?.sacList.length ? ` <span style="color:#fbbf24">· SAC: ${esc(plan.sacList[0])} — state targeting disabled</span>` : ''}</label>
         <div class="field">
-          <label>Geo cluster preset <span style="color:#6e7681">— SafeX HOME tiers → fills US states (editable after)</span></label>
+          <label>Special Ad Category <span style="color:#6e7681">— lead-gen insurance = Financial; restricts state targeting</span></label>
+          <select id="fbl-sac">
+            <option value="" ${state.sacOverride === '' ? 'selected' : ''}>— CSV —</option>
+            <option value="NONE" ${state.sacOverride === 'NONE' ? 'selected' : ''}>None (no restriction)</option>
+            <option value="FINANCIAL_PRODUCTS_SERVICES" ${state.sacOverride === 'FINANCIAL_PRODUCTS_SERVICES' ? 'selected' : ''}>Financial products &amp; services</option>
+            <option value="CREDIT" ${state.sacOverride === 'CREDIT' ? 'selected' : ''}>Credit</option>
+            <option value="HOUSING" ${state.sacOverride === 'HOUSING' ? 'selected' : ''}>Housing</option>
+            <option value="EMPLOYMENT" ${state.sacOverride === 'EMPLOYMENT' ? 'selected' : ''}>Employment</option>
+            <option value="ISSUES_ELECTIONS_POLITICS" ${state.sacOverride === 'ISSUES_ELECTIONS_POLITICS' ? 'selected' : ''}>Social issues / elections / politics</option>
+            <option value="ONLINE_GAMBLING_AND_GAMING" ${state.sacOverride === 'ONLINE_GAMBLING_AND_GAMING' ? 'selected' : ''}>Online gambling &amp; gaming</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Geo preset <span style="color:#6e7681">— lead-gen tiers fill US states · gambling pools fill countries (editable after)</span></label>
           <select id="fbl-geo-cluster">
-            <option value="">— pick a cluster to fill states —</option>
-            ${Object.keys(GEO_CLUSTERS).map(k => `<option value="${esc(k)}">${esc(k)}</option>`).join('')}
+            <option value="">— pick a preset to fill geo —</option>
+            ${['Lead-gen — US states', 'Gambling — countries'].map(g => `<optgroup label="${esc(g)}">${GEO_PRESETS.map((p, i) => p.group === g ? `<option value="${i}">${esc(p.label)}</option>` : '').join('')}</optgroup>`).join('')}
           </select>
         </div>
         <div class="grid2" style="margin-top:10px">
@@ -3339,10 +3416,14 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     document.getElementById('fbl-age-max')?.addEventListener('input', e => { state.ageMaxOverride = e.target.value.trim(); });
     document.getElementById('fbl-gender')?.addEventListener('change', e => { state.genderOverride = e.target.value; });
     document.getElementById('fbl-advantage')?.addEventListener('change', e => { state.advantageAudienceOverride = e.target.value; });
-    // v0.8.0: geo cluster preset — fills states (editable after), then resets the dropdown
+    document.getElementById('fbl-sac')?.addEventListener('change', e => { state.sacOverride = e.target.value; render(); });  // v0.9.0: SAC gates state targeting → re-render
+    // v0.8.0/v0.9.0: geo preset — fills states OR countries depending on the preset's field
     document.getElementById('fbl-geo-cluster')?.addEventListener('change', e => {
-      const v = e.target.value;
-      if (v && GEO_CLUSTERS[v]) state.geoStatesOverride = GEO_CLUSTERS[v];
+      const p = GEO_PRESETS[+e.target.value];
+      if (p) {
+        if (p.field === 'states') state.geoStatesOverride = p.value;
+        else state.geoCountriesOverride = p.value;
+      }
       render();
     });
     // v0.8.0: placement preset fills the checkbox arrays
