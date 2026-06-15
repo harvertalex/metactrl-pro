@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.17.1 — Bookmarklet
+ * FB Launcher v0.18.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -57,6 +57,23 @@
  *          so the form reads as a stack of framed HUD modules at a glance. Dot-grid alpha .06→.13 + dot
  *          1px→1.4px (clearly visible in the gaps). Panel frame brackets 18px→26px legs, alpha .45→.7,
  *          glow .4→.6. Subtle cyan inset top hairline on cards at rest. No logic change.
+ * v0.18.0: FULL Cyberpunk HUD redesign (CSS/skin pass — no logic change, all form ids/handlers/DOM intact).
+ *          Matches the "Cyberpunk HUD control panel" reference, boldly this time. Six areas:
+ *          (1) Palette shifted navy → dark teal-black (panel #061a22→#04141a, cards #082530, inputs #06222d);
+ *              cyan accents brightened (#38bdf8 / #5eead4); green #22c55e kept for online/ok.
+ *          (2) BOLD corner brackets — per-card legs 15→20px @ alpha .55 at rest, full #38bdf8 + glow on focus;
+ *              panel-frame brackets on ALL 4 corners (38px legs, alpha .9, glow), framing the body "screen"
+ *              (top brackets start ~54px down → clear of the header close button + rail toggle).
+ *          (3) HUD module headers — top-level step titles (.fbl-main > .field > label) UPPERCASE + letter-spacing
+ *              + leading glowing cyan ▸ glyph; grey hint spans keep sentence-case (text-transform:none).
+ *          (4) [bracketed] cyan readouts on READ-ONLY values only — preview metrics (.preview b), account/page/pixel
+ *              counts (.fbl-readout), selected-account chips → cyan bracketed mono. Editable inputs untouched.
+ *          (5) Segmented glowing meter — .progress now discrete cells (cyan→blue fill + track-stripe ::after gaps + glow).
+ *          (6) GIANT glowing launch hero — .primary big (18px pad / 15px / uppercase), cyan→blue gradient, layered
+ *              outer glow rings + white corner brackets; functional readiness subtitle under it (.fbl-launch-sub,
+ *              reuses run state: ready / awaiting-setup / dry-run / running). LIVE FEED rail gained a "● STATUS: ONLINE"
+ *              line (mirrors header LED). Secondary buttons → thin cyan-outline transparent (ref look). Chips → cyan
+ *              active cells. Levers to dial back kept inline (bracket alpha/legs, card bg, grid alpha, hero glow rings).
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -2620,21 +2637,28 @@
     const style = document.createElement('style');
     style.id = '__fb_launcher_styles__';
     style.textContent = `
+      /* v0.18.0 Cyberpunk HUD: palette nudged from navy → dark teal-black so the whole console reads
+         as the reference. Cyan accents brightened. Levers: TEAL bg pair + .field/.fbl-main bg below. */
       #${PANEL_ID} { position:fixed; top:0; right:0; width:1140px; max-width:96vw; height:100vh;
-        background:linear-gradient(180deg,#0d1526 0%,#0a0f1c 100%); color:#e2e8f0; z-index:2147483646;
-        border-left:1px solid #1e2a44; box-shadow:-10px 0 30px rgba(0,0,0,.5);
+        background:linear-gradient(180deg,#061a22 0%,#04141a 100%); color:#e2e8f0; z-index:2147483646;
+        border-left:1px solid #0e3a47; box-shadow:-10px 0 30px rgba(0,0,0,.5),inset 1px 0 0 rgba(56,189,248,.12);
         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         font-size:13px; display:flex; flex-direction:column; overflow:hidden; box-sizing:border-box; }
-      /* v0.17.1 Holographic HUD: cyan interior corner brackets framing the console (TL + BL, left edge only —
-         right edge hugs the screen). Bigger (26px legs) + brighter so the whole console reads as framed.
-         pointer-events:none, clear of header close button + rail toggle (both top-right / inner). */
-      #${PANEL_ID}::before { content:''; position:absolute; inset:0; pointer-events:none; z-index:6;
+      /* v0.18.0 Cyberpunk HUD: BOLD bright-cyan corner brackets framing the whole console "screen", all 4 corners.
+         The two top brackets start ~54px down so they frame the body area and never touch the header close button /
+         rail toggle. 38px legs, 2.5px, full glow — this + the per-card brackets are the #1 signature. pointer-events:none.
+         Lever: bracket alpha .9 / glow radius 9px / leg 38px to dial back. */
+      #${PANEL_ID}::before { content:''; position:absolute; left:0; right:0; top:54px; bottom:0; pointer-events:none; z-index:6;
         background:
-          linear-gradient(rgba(56,189,248,.7),rgba(56,189,248,.7)) left 8px top 8px/26px 1.5px no-repeat,
-          linear-gradient(rgba(56,189,248,.7),rgba(56,189,248,.7)) left 8px top 8px/1.5px 26px no-repeat,
-          linear-gradient(rgba(56,189,248,.7),rgba(56,189,248,.7)) left 8px bottom 8px/26px 1.5px no-repeat,
-          linear-gradient(rgba(56,189,248,.7),rgba(56,189,248,.7)) left 8px bottom 8px/1.5px 26px no-repeat;
-        filter:drop-shadow(0 0 6px rgba(56,189,248,.6)); }
+          linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) left 9px top 6px/38px 2.5px no-repeat,
+          linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) left 9px top 6px/2.5px 38px no-repeat,
+          linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) right 9px top 6px/38px 2.5px no-repeat,
+          linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) right 9px top 6px/2.5px 38px no-repeat,
+          linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) left 9px bottom 9px/38px 2.5px no-repeat,
+          linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) left 9px bottom 9px/2.5px 38px no-repeat,
+          linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) right 9px bottom 9px/38px 2.5px no-repeat,
+          linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) right 9px bottom 9px/2.5px 38px no-repeat;
+        filter:drop-shadow(0 0 9px rgba(56,189,248,.75)); }
       /* v0.14.0: custom scrollbar on the inner scroll panes (left log rail + right form) */
       #${PANEL_ID} .fbl-scroll::-webkit-scrollbar { width:10px; }
       #${PANEL_ID} .fbl-scroll::-webkit-scrollbar-track { background:transparent; }
@@ -2643,11 +2667,20 @@
       /* v0.14.0: two-column body — left log rail, right scrolling form. Header spans both. */
       #${PANEL_ID} .fbl-cols { display:flex; flex:1; min-height:0; overflow:hidden; }
       #${PANEL_ID} .fbl-lograil { width:330px; flex-shrink:0; display:flex; flex-direction:column;
-        border-right:1px solid #1a2740; background:#080d18; transition:width .15s; }
+        border-right:1px solid #0e3a47; background:#03101a; transition:width .15s; }
       #${PANEL_ID} .fbl-lograil.collapsed { width:38px; }
       #${PANEL_ID} .fbl-railhead { flex-shrink:0; display:flex; align-items:center; justify-content:space-between;
-        padding:9px 11px; font-size:12px; font-weight:700; color:#cbd5e1; border-bottom:1px solid #1a2740;
-        font-family:ui-monospace,monospace; letter-spacing:.5px; }
+        padding:9px 11px; font-size:12px; font-weight:700; color:#7dd3fc; border-bottom:1px solid #0e3a47;
+        font-family:ui-monospace,monospace; letter-spacing:.5px; text-shadow:0 0 7px rgba(56,189,248,.5); }
+      /* v0.18.0 Cyberpunk HUD: "● STATUS: ONLINE" line above the live feed — green dot + green mono text. */
+      #${PANEL_ID} .fbl-railstatus { flex-shrink:0; display:flex; align-items:center; gap:7px;
+        padding:8px 11px 6px; font-family:ui-monospace,monospace; font-size:10.5px; font-weight:700;
+        letter-spacing:1px; color:#4ade80; }
+      #${PANEL_ID} .fbl-railstatus .dot { width:8px; height:8px; border-radius:50%; background:#22c55e;
+        box-shadow:0 0 8px #22c55e; animation:fbl-led-pulse 2.4s ease-in-out infinite; }
+      #${PANEL_ID} .fbl-railstatus.warn { color:#fbbf24; } #${PANEL_ID} .fbl-railstatus.warn .dot { background:#fbbf24; box-shadow:0 0 8px #fbbf24; }
+      #${PANEL_ID} .fbl-railstatus.err { color:#f87171; } #${PANEL_ID} .fbl-railstatus.err .dot { background:#ef4444; box-shadow:0 0 8px #ef4444; }
+      #${PANEL_ID} .fbl-lograil.collapsed .fbl-railstatus { display:none; }
       #${PANEL_ID} .fbl-railbody { flex:1; min-height:0; display:flex; flex-direction:column; padding:10px 11px; overflow:hidden; }
       #${PANEL_ID} .fbl-lograil.collapsed .fbl-railbody, #${PANEL_ID} .fbl-lograil.collapsed .fbl-railhead .ttl { display:none; }
       /* v0.17.1 Holographic HUD: cyan dot-grid mesh behind the right form column only — clearly visible
@@ -2670,80 +2703,131 @@
       #${PANEL_ID} .fbl-led.err { background:#ef4444; }
       @keyframes fbl-led-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
       #${PANEL_ID} .sub { color:#94a3b8; font-size:11px; margin:14px 0; }
-      /* v0.16.0 Ops Cockpit: cards = instrument panels. Cyan (#38bdf8) telemetry tick = read-only/state, NOT clickable.
-         v0.17.1: faint cyan inset top hairline at rest = "instrument module" edge (reinforces the framed read under the brackets). */
-      #${PANEL_ID} .field { position:relative; background:#0d1626; border:1px solid #1a2740; border-left:3px solid #38bdf8;
+      /* v0.18.0 Cyberpunk HUD: cards = framed instrument modules. Teal-black surface, cyan telemetry tick (read-only/state, NOT clickable).
+         Faint cyan inset top hairline at rest = module edge. Lever: card bg #082530 → #0a1b26 if too bright over the grid. */
+      #${PANEL_ID} .field { position:relative; background:#082530; border:1px solid #103a47; border-left:3px solid #38bdf8;
         border-radius:9px; padding:11px 13px; margin-bottom:11px; transition:border-color .15s,box-shadow .15s;
-        box-shadow:inset 0 1px 0 rgba(56,189,248,.08); }
+        box-shadow:inset 0 1px 0 rgba(56,189,248,.12); }
       #${PANEL_ID} .field:hover { border-left-color:#7dd3fc; }
-      /* v0.17.1 Holographic HUD: EVERY step card carries cyan L-corner brackets AT REST (faint, no glow) so the
-         whole form reads as a stack of framed HUD modules even when nothing is focused. Legs ~15px for legibility. */
+      /* v0.18.0 Cyberpunk HUD: EVERY step card carries BOLD cyan L-corner brackets AT REST so the whole form reads as a
+         stack of framed HUD modules at a glance (this is the #1 ref signature). 20px legs / 2.5px / alpha .55, no glow at rest;
+         brighten to full #38bdf8 + glow on :focus-within. Lever: rest alpha .55 / legs 20px / focus glow radius 7px. */
       #${PANEL_ID} .field::after { content:''; position:absolute; inset:-1px; border-radius:9px; pointer-events:none; z-index:2;
         transition:filter .15s;
         background:
-          linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) left 0 top 0/15px 2px no-repeat,
-          linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) left 0 top 0/2px 15px no-repeat,
-          linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) right 0 top 0/15px 2px no-repeat,
-          linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) right 0 top 0/2px 15px no-repeat,
-          linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) left 0 bottom 0/15px 2px no-repeat,
-          linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) left 0 bottom 0/2px 15px no-repeat,
-          linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) right 0 bottom 0/15px 2px no-repeat,
-          linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) right 0 bottom 0/2px 15px no-repeat; }
-      /* v0.17.1 Holographic HUD: active step card = lock-on. Brackets brighten to full #38bdf8 + glow, border lifts. */
-      #${PANEL_ID} .field:focus-within { border-color:#2b5e7a; border-left-color:#7dd3fc; box-shadow:0 0 14px rgba(56,189,248,.1); }
+          linear-gradient(rgba(56,189,248,.55),rgba(56,189,248,.55)) left 0 top 0/20px 2.5px no-repeat,
+          linear-gradient(rgba(56,189,248,.55),rgba(56,189,248,.55)) left 0 top 0/2.5px 20px no-repeat,
+          linear-gradient(rgba(56,189,248,.55),rgba(56,189,248,.55)) right 0 top 0/20px 2.5px no-repeat,
+          linear-gradient(rgba(56,189,248,.55),rgba(56,189,248,.55)) right 0 top 0/2.5px 20px no-repeat,
+          linear-gradient(rgba(56,189,248,.55),rgba(56,189,248,.55)) left 0 bottom 0/20px 2.5px no-repeat,
+          linear-gradient(rgba(56,189,248,.55),rgba(56,189,248,.55)) left 0 bottom 0/2.5px 20px no-repeat,
+          linear-gradient(rgba(56,189,248,.55),rgba(56,189,248,.55)) right 0 bottom 0/20px 2.5px no-repeat,
+          linear-gradient(rgba(56,189,248,.55),rgba(56,189,248,.55)) right 0 bottom 0/2.5px 20px no-repeat; }
+      /* v0.18.0 Cyberpunk HUD: active step card = lock-on. Brackets full #38bdf8 + glow, border + surface lift. */
+      #${PANEL_ID} .field:focus-within { border-color:#2b6e8a; border-left-color:#7dd3fc; box-shadow:0 0 16px rgba(56,189,248,.16),inset 0 1px 0 rgba(56,189,248,.2); }
       #${PANEL_ID} .field:focus-within::after {
         background:
-          linear-gradient(#38bdf8,#38bdf8) left 0 top 0/15px 2px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) left 0 top 0/2px 15px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) right 0 top 0/15px 2px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) right 0 top 0/2px 15px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) left 0 bottom 0/15px 2px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) left 0 bottom 0/2px 15px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) right 0 bottom 0/15px 2px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) right 0 bottom 0/2px 15px no-repeat;
-        filter:drop-shadow(0 0 6px rgba(56,189,248,.7)); }
+          linear-gradient(#38bdf8,#38bdf8) left 0 top 0/20px 2.5px no-repeat,
+          linear-gradient(#38bdf8,#38bdf8) left 0 top 0/2.5px 20px no-repeat,
+          linear-gradient(#38bdf8,#38bdf8) right 0 top 0/20px 2.5px no-repeat,
+          linear-gradient(#38bdf8,#38bdf8) right 0 top 0/2.5px 20px no-repeat,
+          linear-gradient(#38bdf8,#38bdf8) left 0 bottom 0/20px 2.5px no-repeat,
+          linear-gradient(#38bdf8,#38bdf8) left 0 bottom 0/2.5px 20px no-repeat,
+          linear-gradient(#38bdf8,#38bdf8) right 0 bottom 0/20px 2.5px no-repeat,
+          linear-gradient(#38bdf8,#38bdf8) right 0 bottom 0/2.5px 20px no-repeat;
+        filter:drop-shadow(0 0 7px rgba(56,189,248,.8)); }
       /* nested .field stays bracket-free + edge-free — only the outer numbered step cards get the HUD frame */
       #${PANEL_ID} .field .field { position:static; background:none; border:none; border-radius:0; padding:0; margin:0; box-shadow:none; }
       #${PANEL_ID} .field .field::after { content:none; }
       #${PANEL_ID} .field .field:focus-within { box-shadow:none; }
       #${PANEL_ID} .field > label { font-size:12px; font-weight:600; color:#e8eef7; margin-bottom:7px; letter-spacing:.2px; }
+      /* v0.18.0 Cyberpunk HUD: top-level step-card titles → HUD module headers (uppercase + tracking + leading cyan glyph).
+         Scoped to .fbl-main > .field > label so nested grid sub-labels stay sentence-case. Grey hint spans keep their case (text-transform:none). */
+      #${PANEL_ID} .fbl-main > .field > label { text-transform:uppercase; letter-spacing:.9px; font-size:11.5px; color:#d6f3ff;
+        display:flex; align-items:baseline; flex-wrap:wrap; gap:5px; }
+      #${PANEL_ID} .fbl-main > .field > label::before { content:'▸'; color:#38bdf8; font-weight:700;
+        text-shadow:0 0 6px rgba(56,189,248,.7); margin-right:1px; text-transform:none; }
+      #${PANEL_ID} .fbl-main > .field > label span, #${PANEL_ID} .fbl-main > .field > label code,
+      #${PANEL_ID} .fbl-main > .field > label b { text-transform:none; letter-spacing:0; }
       #${PANEL_ID} label { display:block; font-size:11px; color:#94a3b8; margin-bottom:3px; }
       #${PANEL_ID} input[type=text], #${PANEL_ID} input[type=file], #${PANEL_ID} input[type=datetime-local], #${PANEL_ID} select, #${PANEL_ID} textarea {
-        width:100%; padding:7px 9px; background:#0d1726; border:1px solid #2b3a55;
+        width:100%; padding:7px 9px; background:#06222d; border:1px solid #1a4a5a;
         border-radius:6px; color:#e2e8f0; font-size:12px; box-sizing:border-box;
         font-family:inherit; transition:border-color .12s,box-shadow .12s; }
       /* v0.17.0 Holographic HUD: focus = cyan lock-on (telemetry accent; a state, not a default clickable affordance). Launch button stays action-blue. */
       #${PANEL_ID} input:focus, #${PANEL_ID} select:focus, #${PANEL_ID} textarea:focus { outline:none; border-color:#38bdf8; box-shadow:0 0 0 2px rgba(56,189,248,.25),0 0 10px rgba(56,189,248,.15); }
-      #${PANEL_ID} button { padding:7px 12px; border-radius:6px; border:1px solid #2b3a55;
-        background:#1a2740; color:#e2e8f0; font-size:12px; cursor:pointer; font-family:inherit; transition:background .12s; }
-      #${PANEL_ID} button:hover { background:#26344f; }
-      #${PANEL_ID} button.primary { background:linear-gradient(100deg,#2563eb,#3b82f6); border:none; color:#fff; font-weight:700;
-        letter-spacing:.6px; box-shadow:0 2px 10px rgba(37,99,235,.4); transition:background .12s,box-shadow .1s,transform .05s; }
-      #${PANEL_ID} button.primary:hover { background:linear-gradient(100deg,#1d4ed8,#2563eb); }
+      /* v0.18.0 Cyberpunk HUD: secondary buttons → thin cyan-outlined transparent (cyan text), per the ref.
+         (Accent-split normally keeps cyan off clickables; this ref pass intentionally allows it on secondary actions.) */
+      #${PANEL_ID} button { padding:7px 12px; border-radius:6px; border:1px solid rgba(56,189,248,.45);
+        background:rgba(56,189,248,.06); color:#7dd3fc; font-size:12px; cursor:pointer; font-family:inherit; transition:background .12s,border-color .12s,box-shadow .12s; }
+      #${PANEL_ID} button:hover { background:rgba(56,189,248,.14); border-color:#38bdf8; box-shadow:0 0 8px rgba(56,189,248,.25); }
+      /* v0.18.0 Cyberpunk HUD: the LAUNCH hero — giant, bright cyan→blue gradient, intense layered glow, framed with brackets.
+         Lever: shrink padding 18px→13px / drop the two outer box-shadow rings to dial back the glow. */
+      #${PANEL_ID} button.primary { position:relative; padding:18px 20px; font-size:15px; border-radius:11px;
+        background:linear-gradient(100deg,#0ea5e9,#2563eb 55%,#3b82f6); border:none; color:#f0fbff; font-weight:800;
+        letter-spacing:1.2px; text-transform:uppercase; text-shadow:0 0 10px rgba(8,30,60,.6);
+        box-shadow:0 0 0 1px rgba(125,211,252,.6),0 0 22px rgba(56,189,248,.55),0 0 46px rgba(37,99,235,.4),0 6px 18px rgba(0,0,0,.45);
+        transition:background .12s,box-shadow .12s,transform .05s; overflow:visible; }
+      #${PANEL_ID} button.primary:hover:not(:disabled) { background:linear-gradient(100deg,#38bdf8,#2563eb 55%,#4f8df9);
+        box-shadow:0 0 0 1px rgba(125,211,252,.85),0 0 30px rgba(56,189,248,.75),0 0 60px rgba(37,99,235,.5),0 6px 18px rgba(0,0,0,.45); }
+      /* corner brackets framing the hero (cyan, glowing) */
+      #${PANEL_ID} button.primary::after { content:''; position:absolute; inset:5px; border-radius:7px; pointer-events:none;
+        background:
+          linear-gradient(rgba(224,247,255,.95),rgba(224,247,255,.95)) left 0 top 0/16px 2.5px no-repeat,
+          linear-gradient(rgba(224,247,255,.95),rgba(224,247,255,.95)) left 0 top 0/2.5px 16px no-repeat,
+          linear-gradient(rgba(224,247,255,.95),rgba(224,247,255,.95)) right 0 top 0/16px 2.5px no-repeat,
+          linear-gradient(rgba(224,247,255,.95),rgba(224,247,255,.95)) right 0 top 0/2.5px 16px no-repeat,
+          linear-gradient(rgba(224,247,255,.95),rgba(224,247,255,.95)) left 0 bottom 0/16px 2.5px no-repeat,
+          linear-gradient(rgba(224,247,255,.95),rgba(224,247,255,.95)) left 0 bottom 0/2.5px 16px no-repeat,
+          linear-gradient(rgba(224,247,255,.95),rgba(224,247,255,.95)) right 0 bottom 0/16px 2.5px no-repeat,
+          linear-gradient(rgba(224,247,255,.95),rgba(224,247,255,.95)) right 0 bottom 0/2.5px 16px no-repeat;
+        filter:drop-shadow(0 0 4px rgba(224,247,255,.6)); }
       /* v0.16.0: confirm-feel press on the launch trigger */
-      #${PANEL_ID} button.primary:active:not(:disabled) { transform:translateY(1px); box-shadow:inset 0 2px 8px rgba(0,0,0,.45); }
-      #${PANEL_ID} button:disabled { opacity:.4; cursor:not-allowed; }
+      #${PANEL_ID} button.primary:active:not(:disabled) { transform:translateY(1px); box-shadow:inset 0 2px 10px rgba(0,0,0,.5),0 0 18px rgba(56,189,248,.4); }
+      #${PANEL_ID} button.primary:disabled { background:linear-gradient(100deg,#16384a,#1b3a52); color:#7da8c0;
+        box-shadow:0 0 0 1px rgba(56,189,248,.2),0 0 10px rgba(56,189,248,.1); }
+      #${PANEL_ID} button.primary:disabled::after { filter:none; opacity:.45; }
+      /* v0.18.0 Cyberpunk HUD: functional readiness subtitle under the launch hero (reuses blockReason / ready text). */
+      #${PANEL_ID} .fbl-launch-sub { text-align:center; font-family:ui-monospace,monospace; font-size:10.5px; letter-spacing:1.5px;
+        text-transform:uppercase; margin-top:9px; color:#5eead4; text-shadow:0 0 7px rgba(94,234,212,.4); }
+      #${PANEL_ID} .fbl-launch-sub.blocked { color:#fbbf24; text-shadow:0 0 7px rgba(251,191,36,.35); }
+      #${PANEL_ID} button:disabled:not(.primary) { opacity:.4; cursor:not-allowed; }
       #${PANEL_ID} .close { background:rgba(255,255,255,.12); border:none; color:#fff; font-size:18px; padding:0 8px; line-height:1.4; border-radius:5px; cursor:pointer; }
       #${PANEL_ID} .close:hover { background:rgba(255,255,255,.25); }
-      #${PANEL_ID} .preview { background:linear-gradient(100deg,rgba(59,130,246,.1),rgba(99,102,241,.06)); border:1px solid #2f4a7a;
-        border-left:3px solid #22c55e; border-radius:9px; padding:9px 12px; font-size:11px; color:#cbd5e1; line-height:1.6;
+      #${PANEL_ID} .preview { background:linear-gradient(100deg,rgba(56,189,248,.1),rgba(37,99,235,.06)); border:1px solid #1a4a5a;
+        border-left:3px solid #22c55e; border-radius:9px; padding:9px 12px; font-size:11px; color:#cbd5e1; line-height:1.9;
         margin-bottom:11px; }
-      /* v0.16.0: preview = readout — metrics/counts/budgets align like an instrument */
-      #${PANEL_ID} .preview b { color:#fff; font-family:ui-monospace,monospace; font-variant-numeric:tabular-nums; }
+      /* v0.18.0 Cyberpunk HUD: preview metrics = [bracketed] cyan readouts (read-only telemetry). Brackets via pseudo-els, CSS-only.
+         Inline color:#22c55e/#ef4444 on the pixel <b> still wins (status), so only the neutral metric <b>s turn cyan-bracketed. */
+      #${PANEL_ID} .preview b { font-family:ui-monospace,monospace; font-variant-numeric:tabular-nums; color:#5eead4;
+        background:rgba(56,189,248,.08); border:1px solid rgba(56,189,248,.3); border-radius:4px; padding:0 5px;
+        text-shadow:0 0 6px rgba(94,234,212,.3); white-space:nowrap; }
+      #${PANEL_ID} .preview b::before { content:'['; color:#38bdf8; margin-right:3px; opacity:.8; }
+      #${PANEL_ID} .preview b::after { content:']'; color:#38bdf8; margin-left:3px; opacity:.8; }
+      /* v0.18.0 Cyberpunk HUD: reusable [bracketed] cyan readout for inline readonly counts (accounts/pages/pixels etc). */
+      #${PANEL_ID} .fbl-readout { font-family:ui-monospace,monospace; font-variant-numeric:tabular-nums; color:#5eead4;
+        background:rgba(56,189,248,.08); border:1px solid rgba(56,189,248,.3); border-radius:4px; padding:0 5px; white-space:nowrap;
+        text-shadow:0 0 6px rgba(94,234,212,.3); }
+      #${PANEL_ID} .fbl-readout::before { content:'['; color:#38bdf8; margin-right:3px; opacity:.8; }
+      #${PANEL_ID} .fbl-readout::after { content:']'; color:#38bdf8; margin-left:3px; opacity:.8; }
       /* v0.16.0 Ops Cockpit: log rail = telemetry feed (the hero). Darkest surface + faint scanlines. */
-      #${PANEL_ID} .log { flex:1; min-height:0; overflow-y:auto; background:#05080f;
-        background-image:repeating-linear-gradient(0deg, rgba(56,189,248,.03) 0, rgba(56,189,248,.03) 1px, transparent 1px, transparent 3px);
-        border:1px solid #1a2740; border-radius:6px; padding:8px 10px;
+      #${PANEL_ID} .log { flex:1; min-height:0; overflow-y:auto; background:#020a10;
+        background-image:repeating-linear-gradient(0deg, rgba(56,189,248,.035) 0, rgba(56,189,248,.035) 1px, transparent 1px, transparent 3px);
+        border:1px solid #0e3a47; border-radius:6px; padding:8px 10px;
         font-family:ui-monospace,monospace; font-size:11px; font-variant-numeric:tabular-nums; }
       #${PANEL_ID} .log div { word-break:break-word; line-height:1.45; margin-bottom:2px;
         padding:1px 0; }
       #${PANEL_ID} .log div.error-line { background:rgba(239,68,68,.08);
         border-left:2px solid #ef4444; padding-left:4px; margin:2px 0; }
       #${PANEL_ID} .log .ts { color:#38bdf8; opacity:.85; margin-right:6px; }
-      /* segmented glowing telemetry strip */
-      #${PANEL_ID} .progress { height:6px; border-radius:3px; background:#0d1626; border:1px solid #1a2740; overflow:hidden; margin:6px 0; }
-      #${PANEL_ID} .progress > div { height:100%; background:linear-gradient(90deg,#2563eb,#3b82f6,#6366f1);
-        background-size:14px 100%; box-shadow:0 0 8px rgba(59,130,246,.6); transition:width .3s; }
+      /* v0.18.0 Cyberpunk HUD: segmented glowing meter — discrete cells (▮▮▮▮▯▯) not a smooth fill.
+         The fill is a bright cyan→blue gradient; a ::after overlay of track-colored stripes punches the gaps between cells. */
+      #${PANEL_ID} .progress { position:relative; height:11px; border-radius:3px; background:#031019;
+        border:1px solid #103a47; overflow:hidden; margin:6px 0; box-shadow:inset 0 0 6px rgba(0,0,0,.5); }
+      #${PANEL_ID} .progress > div { height:100%; background:linear-gradient(90deg,#38bdf8,#2563eb);
+        box-shadow:0 0 10px rgba(56,189,248,.7),inset 0 0 4px rgba(224,247,255,.5); transition:width .3s; }
+      #${PANEL_ID} .progress::after { content:''; position:absolute; inset:0; pointer-events:none;
+        background:repeating-linear-gradient(90deg, transparent 0 9px, #031019 9px 12px); }
       #${PANEL_ID} .status { padding:8px 10px; border-radius:6px; font-size:12px; margin:8px 0;
         background:rgba(59,130,246,.1); border:1px solid rgba(59,130,246,.3); color:#dbeafe; }
       #${PANEL_ID} .status.success { background:rgba(34,197,94,.1); border-color:rgba(34,197,94,.3); color:#bbf7d0; }
@@ -2761,13 +2845,13 @@
         #${PANEL_ID} .fbl-lograil { width:auto; max-height:30vh; border-right:none; border-bottom:1px solid #1e2a44; }
         #${PANEL_ID} .fbl-lograil.collapsed { width:auto; }
       }
-      /* v0.7.0: marker chips */
+      /* v0.7.0: marker chips · v0.18.0 HUD: resting = dim teal cell, "on" = bright cyan active cell (a selected state). */
       #${PANEL_ID} .chips { display:flex; flex-wrap:wrap; gap:5px; }
-      #${PANEL_ID} .chip { padding:3px 10px; border-radius:12px; font-size:11px; cursor:pointer;
-        border:1px solid #334155; background:#1e293b; color:#94a3b8; user-select:none; transition:all .12s; }
-      #${PANEL_ID} .chip:hover { border-color:#475569; color:#cbd5e1; }
-      #${PANEL_ID} .chip.on { background:rgba(59,130,246,.15); border-color:#3b82f6; color:#bfdbfe; font-weight:600; }
-      #${PANEL_ID} hr { border:none; border-top:1px solid #334155; margin:14px 0; }
+      #${PANEL_ID} .chip { padding:3px 10px; border-radius:6px; font-size:11px; cursor:pointer;
+        border:1px solid #1a4a5a; background:#06222d; color:#94a3b8; user-select:none; transition:all .12s; }
+      #${PANEL_ID} .chip:hover { border-color:#2b6e8a; color:#cbd5e1; }
+      #${PANEL_ID} .chip.on { background:rgba(56,189,248,.18); border-color:#38bdf8; color:#cffafe; font-weight:600; box-shadow:0 0 8px rgba(56,189,248,.3); }
+      #${PANEL_ID} hr { border:none; border-top:1px solid #103a47; margin:16px 0 12px; }
       #${PANEL_ID} .s-pending { color:#475569; }
       #${PANEL_ID} .s-uploading { color:#60a5fa; }
       #${PANEL_ID} .s-processing { color:#fbbf24; }
@@ -2921,9 +3005,11 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     const ledClass = state.status.type === 'error' ? 'err' : state.status.type === 'warning' ? 'warn' : '';
+    // v0.18.0 Cyberpunk HUD: rail status mirrors the header LED (online / standby / alert).
+    const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>FB LAUNCHER // v0.17.1</span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>FB LAUNCHER // v0.18.0</span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -2932,6 +3018,7 @@
             <span class="ttl">◉ LIVE FEED${state.log.length ? ` · ${state.log.length}` : ''}</span>
             <button id="fbl-rail-toggle" title="${state.logRailCollapsed ? 'Expand log' : 'Collapse log'}" style="padding:1px 7px;font-size:12px;border-radius:5px">${state.logRailCollapsed ? '▶' : '◀'}</button>
           </div>
+          <div class="fbl-railstatus ${ledClass}"><span class="dot"></span>STATUS: ${railStatusWord}</div>
           <div class="fbl-railbody">
             ${state.progress.total ? `<div class="progress" style="margin:0 0 8px"><div style="width:${progressPct}%"></div></div>` : ''}
             <div class="log fbl-scroll" id="fbl-log">${state.log.length ? logHtml() : '<div style="color:#475569">Logs appear here when you launch.<br><br>Build &amp; preview the campaign on the right →</div>'}</div>
@@ -3057,7 +3144,7 @@
       ${previewHtml}
 
       <div class="field">
-        <label>2. Target accounts <span style="color:#6e7681">— ${hasAccounts ? `<b style="color:#22c55e">${state.targetAccIds.length} selected</b>` : 'pick one or more'}</span></label>
+        <label>2. Target accounts <span style="color:#6e7681">— ${hasAccounts ? `<span class="fbl-readout">${state.targetAccIds.length}</span> selected` : 'pick one or more'}</span></label>
         <div class="row">
           <input type="text" id="fbl-acc-filter" placeholder="Filter by name, ID, BM..." value="${esc(state.accFilter)}" style="flex:2">
           <button id="fbl-reload-acc" ${accountsLoading ? 'disabled' : ''}>${accountsLoading ? '⏳' : '↻'}</button>
@@ -3066,8 +3153,8 @@
         ${selectedAccs.length ? `
         <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">
           ${selectedAccs.map(a => `
-            <span style="background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.35);border-radius:12px;padding:2px 8px;font-size:11px;color:#d1fae5;display:inline-flex;align-items:center;gap:5px" title="${esc(a.id)} · BM: ${esc(a.bm)}">
-              ${esc(a.label)}
+            <span style="background:rgba(56,189,248,.12);border:1px solid rgba(56,189,248,.4);border-radius:6px;padding:2px 8px;font-size:11px;color:#cffafe;display:inline-flex;align-items:center;gap:5px;font-family:ui-monospace,monospace;box-shadow:0 0 8px rgba(56,189,248,.2)" title="${esc(a.id)} · BM: ${esc(a.bm)}">
+              <span style="color:#38bdf8;opacity:.8">[</span>${esc(a.label)}<span style="color:#38bdf8;opacity:.8">]</span>
               <button class="fbl-acc-remove" data-acc="${esc(a.id)}" style="background:none;border:none;color:#fca5a5;padding:0 2px;cursor:pointer;font-size:13px;line-height:1" title="Remove">✕</button>
             </span>
           `).join('')}
@@ -3086,7 +3173,7 @@
 
       <div class="grid2">
       <div class="field">
-        <label>3. Page ID <span style="color:#6e7681">— ${state.pagesLoading ? 'loading pages...' : `${state.pagesList.length} pages found`}</span></label>
+        <label>3. Page ID <span style="color:#6e7681">— ${state.pagesLoading ? 'loading pages...' : `<span class="fbl-readout">${state.pagesList.length}</span> pages found`}</span></label>
         ${state.pagesList.length ? `
         <select id="fbl-page-select" style="margin-bottom:5px">
           <option value="">— from CSV "Link Object ID" —</option>
@@ -3131,7 +3218,7 @@
       </div>
 
       <div class="field">
-        <label>4. Pixel &amp; Conversion event <span style="color:#6e7681">— ${state.pixelsLoading ? 'loading pixels...' : `${state.pixelsList.length} pixels in account`}</span></label>
+        <label>4. Pixel &amp; Conversion event <span style="color:#6e7681">— ${state.pixelsLoading ? 'loading pixels...' : `<span class="fbl-readout">${state.pixelsList.length}</span> pixels in account`}</span></label>
         ${state.pixelsList.length ? `
         <select id="fbl-pixel-select" style="margin-bottom:5px">
           <option value="">— from CSV column —</option>
@@ -3491,6 +3578,12 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       <button class="primary" id="fbl-run" ${runDisabled ? 'disabled' : ''} style="width:100%">
         ${state.dryRun && !runDisabled ? '🟦 DRY RUN — ' : ''}${buttonLabel}
       </button>
+      <div class="fbl-launch-sub${runDisabled && !state.running ? ' blocked' : ''}">${
+        state.running ? '◉ LAUNCH SEQUENCE RUNNING…'
+        : runDisabled ? '▲ AWAITING SETUP — RESOLVE STEP ABOVE'
+        : state.dryRun ? '◇ DRY RUN ARMED — NO LIVE WRITES'
+        : '● SYSTEM READY — AWAITING COMMAND'
+      }</div>
         </div>
       </div>
     `;
