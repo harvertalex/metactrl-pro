@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.12.0 — Bookmarklet
+ * FB Launcher v0.13.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -25,6 +25,9 @@
  *          no more empty-IG cache poisoning (terminal vs retryable), actionable PBIA #10 log.
  * v0.12.0: manual attribution window — dropdown in step 4 (1d/7d click ± 1d view). Was hardcoded
  *          to 1-day click. UI override > CSV "Attribution Spec" column > 1-day click default.
+ * v0.13.0: CSV-less adset count — "number of ad sets" field makes N identical adsets without CSV
+ *          (same targeting on each); unlocks the 6.5 creative-distribution matrix for CSV-less
+ *          launches + adds a "1 per ad set" round-robin button (ad set i → creative i, cycling).
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -237,6 +240,7 @@
     advantageAudienceOverride: '0', // v0.10.0: default OFF — geo-strict launches must not leak (was '')
     objectiveOverride: '',    // v0.10.0: '' = CSV | OUTCOME_SALES | OUTCOME_LEADS | ... (needed for CSV-less)
     adsetSplitClusters: [],   // v0.10.0: GEO_PRESETS indices → one adset per cluster (waterfall in one click)
+    adsetCountOverride: '',   // v0.12.0: CSV-less only — N identical synthetic adsets (''/1 = single). Ignored when CSV loaded or cluster-split active.
     startDate: '',            // v0.10.0: datetime-local; adset start_time (delayed start / Kyiv→US timing)
     dryRun: false,            // v0.10.0: build + log payloads without POSTing
     sacOverride: '',          // v0.9.0: '' = CSV | NONE | FINANCIAL_PRODUCTS_SERVICES | HOUSING | EMPLOYMENT | CREDIT | ISSUES_ELECTIONS_POLITICS | ONLINE_GAMBLING_AND_GAMING
@@ -612,6 +616,7 @@
       sacOverride: state.sacOverride,
       objectiveOverride: state.objectiveOverride,
       adsetSplitClusters: state.adsetSplitClusters,
+      adsetCountOverride: state.adsetCountOverride,
       startDate: state.startDate,
       placementPlatforms: state.placementPlatforms,
       placementPositionGroups: state.placementPositionGroups,
@@ -688,6 +693,7 @@
     state.sacOverride = s.sacOverride || '';
     state.objectiveOverride = s.objectiveOverride || '';
     state.adsetSplitClusters = Array.isArray(s.adsetSplitClusters) ? s.adsetSplitClusters : [];
+    state.adsetCountOverride = s.adsetCountOverride || '';
     state.startDate = s.startDate || '';
     state.placementPlatforms = Array.isArray(s.placementPlatforms) ? s.placementPlatforms : [];
     state.placementPositionGroups = Array.isArray(s.placementPositionGroups) ? s.placementPositionGroups : [];
@@ -1491,7 +1497,13 @@
         groups.get(key).push(r);
       }
     } else {
-      groups.set('__default__', [{}]);
+      // v0.12.0: CSV-less — N identical synthetic adsets; UI targeting/budget overrides apply to each.
+      const nAdsets = Math.max(1, Math.min(50, parseInt(state.adsetCountOverride, 10) || 1));
+      if (nAdsets === 1) {
+        groups.set('__default__', [{}]);
+      } else {
+        for (let i = 1; i <= nAdsets; i++) groups.set(`Ad Set ${i}`, [{}]);
+      }
     }
 
     // Budget mode — CSV auto-detect, then v0.7.0 UI override (mode forces CBO/ABO + amount).
@@ -3044,6 +3056,14 @@
             <div style="font-size:10px;color:#fbbf24;margin-top:4px">↑ single Countries / US-states fields below are ignored while split is on. Click a chip again to remove.</div>
           </div>` : ''}
         </div>
+        <div class="field">
+          <label>Or — number of ad sets <span style="color:#6e7681">${
+            !plan?.csvless ? '(driven by CSV ad-set names — ignored here)'
+            : splitActive ? '(ignored — cluster split defines ad sets)'
+            : '— CSV-less: make N identical ad sets (same targeting). Distribute creatives in 6.5 below.'
+          }</span></label>
+          <input type="number" min="1" max="50" id="fbl-adset-count" value="${esc(state.adsetCountOverride)}" placeholder="1"${(!plan?.csvless || splitActive) ? ' disabled style="opacity:.4"' : ''}>
+        </div>
         <div class="grid2" style="margin-top:10px">
           <div class="field">
             <label>Countries <span style="color:#6e7681">${splitActive ? '(ignored — cluster split on)' : '(codes, e.g. US,CA)'}</span></label>
@@ -3221,6 +3241,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
         <div style="margin-top:6px;display:flex;gap:5px;flex-wrap:wrap">
           <button id="fbl-assign-fill" style="font-size:11px;padding:3px 8px">✓ Fill all</button>
           <button id="fbl-assign-clear" style="font-size:11px;padding:3px 8px">○ Clear all</button>
+          <button id="fbl-assign-roundrobin" style="font-size:11px;padding:3px 8px" title="Round-robin: ad set 1 → creative 1, ad set 2 → creative 2, … cycling. One creative per ad set.">↔ 1 per ad set</button>
           <button id="fbl-assign-reset" style="font-size:11px;padding:3px 8px" title="Drops all per-adset customization → defaults to 'all creatives to all adsets'">↺ Reset to default</button>
         </div>
         ` : ''}
@@ -3410,6 +3431,14 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     };
     document.getElementById('fbl-assign-fill')?.addEventListener('click', () => bulkApply(true));
     document.getElementById('fbl-assign-clear')?.addEventListener('click', () => bulkApply(false));
+    // v0.12.0: round-robin — ad set i gets creative (i mod total). One creative per ad set, cycling.
+    document.getElementById('fbl-assign-roundrobin')?.addEventListener('click', () => {
+      const p = analyzePlan();
+      if (!p?.adsMode) return;
+      const total = p.adsModeItems.length;
+      [...p.groups.keys()].forEach((adsetName, i) => { state.adsetAssignments[adsetName] = [i % total]; });
+      render();
+    });
 
     // Helper: is a cell currently checked? Reads state directly so paint-drag sees fresh values.
     const isCellChecked = (adsetName, idx, total) => {
@@ -3632,6 +3661,8 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     });
     // v0.10.0: objective / start time / dry run
     document.getElementById('fbl-objective')?.addEventListener('change', e => { state.objectiveOverride = e.target.value; render(); });
+    // v0.12.0: CSV-less adset count — re-render to update preview + show/hide the 6.5 distribution matrix
+    document.getElementById('fbl-adset-count')?.addEventListener('input', e => { state.adsetCountOverride = e.target.value.trim(); render(); });
     document.getElementById('fbl-start-date')?.addEventListener('input', e => { state.startDate = e.target.value; });
     document.getElementById('fbl-dry-run')?.addEventListener('change', e => { state.dryRun = e.target.checked; render(); });
     // v0.8.0: placement preset fills the checkbox arrays
