@@ -21,9 +21,10 @@
 
 /* -------------------- CONFIG -------------------- */
 // v24.2 — Cyberpunk HUD visual skin (matches FB Launcher v0.18.0): teal palette, cyan corner brackets, glowing primary/tabs, segmented progress, telemetry logbox. CSS/skin pass only.
+// v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v24.2',
+  APP_VERSION: 'v24.3',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -598,34 +599,28 @@ if (!document.getElementById('ar-styles')) {
     .ar-sec-hdr .ar-sec-ico   { font-size:15px; filter:drop-shadow(0 0 5px rgba(56,189,248,.4)); }
     .ar-sec-hdr .ar-chev      { color:var(--cyan); font-size:10px; transition:transform .2s; opacity:.8; }
     .ar-sec-hdr.open .ar-chev { transform:rotate(180deg); }
-    /* HUD: section body = framed module with faint cyan corner brackets (matches launcher .field::after). Lever: alpha .4 / legs 16px. */
+    /* HUD: section body = plain padded module. v24.3 de-clutter: dropped per-section corner brackets —
+       on this dense nested form they stacked into boxes-in-boxes. The .ar-sec-hdr (cyan ▸ + UPPERCASE + bottom border)
+       is the only framing device per section now; the form breathes. Lever: re-add brackets here only if a section reads flat. */
     .ar-sec-body { position:relative; padding:12px 12px 4px; margin-top:2px; }
-    .ar-sec-body::before { content:''; position:absolute; inset:0; pointer-events:none; z-index:0;
-      background:
-        linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) left 0 top 0/16px 2px no-repeat,
-        linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) left 0 top 0/2px 16px no-repeat,
-        linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) right 0 top 0/16px 2px no-repeat,
-        linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) right 0 top 0/2px 16px no-repeat,
-        linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) left 0 bottom 0/16px 2px no-repeat,
-        linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) left 0 bottom 0/2px 16px no-repeat,
-        linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) right 0 bottom 0/16px 2px no-repeat,
-        linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) right 0 bottom 0/2px 16px no-repeat; }
     .ar-sec-body > * { position:relative; z-index:1; }
     .ar-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px 16px; }
     .ar-grid .col2 { grid-column:span 2; }
     .ar-field { display:flex; flex-direction:column; }
     .ar-rule-new { font-size:10px; font-weight:700; color:#fbbf24; background:rgba(251,191,36,.14); padding:1px 5px; border-radius:4px; margin-left:5px; vertical-align:middle; }
     .ar-preset-row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
-    /* HUD: preset pills = cyan HUD pills (read-only-style chrome), hover brightens. */
-    .ar-preset-btn { padding:5px 13px; border:1px solid rgba(56,189,248,.35); border-radius:6px; background:rgba(56,189,248,.05); color:#9fd9f5; font-size:12px; font-weight:600; cursor:pointer; transition:all .15s; }
+    /* HUD: preset pills. v24.3 de-clutter: resting = neutral teal hairline (recedes); hover = bright cyan lock-on.
+       Cyan now marks the touched pill, not every resting one. Lever: resting border #1a4a5a→rgba(56,189,248,.35) to brighten. */
+    .ar-preset-btn { padding:5px 13px; border:1px solid #1a4a5a; border-radius:6px; background:rgba(56,189,248,.03); color:#9fd9f5; font-size:12px; font-weight:600; cursor:pointer; transition:all .15s; }
     .ar-preset-btn:hover { border-color:var(--cyan); color:#cffafe; background:rgba(56,189,248,.14); box-shadow:0 0 8px rgba(56,189,248,.25); }
     .ar-entity-row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:4px; }
     /* HUD: entity pills resting = dim teal cell; .sel = bright blue active (a selected state → action accent). */
     .ar-entity-pill { padding:6px 16px; border:1px solid #1a4a5a; border-radius:20px; background:#06222d; color:var(--muted); font-size:13px; font-weight:600; cursor:pointer; transition:all .15s; }
     .ar-entity-pill:hover { border-color:#2b6e8a; color:#cbd5e1; }
     .ar-entity-pill.sel { background:linear-gradient(100deg,#2563eb,#3b82f6); color:#fff; border-color:transparent; box-shadow:0 0 10px rgba(56,189,248,.4); }
-    /* HUD: info panel = teal telemetry panel with cyan hairline. */
-    .ar-info { background:rgba(56,189,248,.06); border:1px solid rgba(56,189,248,.25); border-radius:8px; padding:10px 14px; font-size:12px; color:#a7c3cd; line-height:1.6; }
+    /* HUD: info panel = recessive telemetry panel. v24.3 de-clutter: dim hairline + near-flat bg + muted text so info
+       boxes recede instead of competing with active controls. Lever: raise border alpha .12→.25 to make it pop again. */
+    .ar-info { background:rgba(56,189,248,.03); border:1px solid rgba(56,189,248,.12); border-radius:8px; padding:10px 14px; font-size:12px; color:#8aa0a8; line-height:1.6; }
     .ar-divider { border:none; border-top:1px solid var(--bdr); margin:12px 0; }
     /* HUD: logbox = telemetry feed — darkest surface, cyan mono, faint scanline (matches launcher .log). */
     .ar-logbox { background:#020a10;
@@ -656,9 +651,13 @@ function makeModal() {
   const wrap = document.createElement('div');
   wrap.id = 'ar-modal';
   // HUD: dark-teal console bg + brighter cyan border + inset cyan rim (matches launcher panel). Brackets via #ar-modal::before (CSS).
+  // v24.3 fix: modal is a NON-scrolling flex column (overflow:hidden) at fixed max-height. Header + tab-bar stay pinned (flex-shrink:0);
+  // the 7 tab divs live inside #ar-scroll (flex:1; overflow:auto) which scrolls. So #ar-modal::before brackets frame the fixed
+  // shell and no longer ride away on long tabs. (mirrors the launcher header→body→scroll structure)
   Object.assign(wrap.style, {
     position:'fixed', top:'50%', left:'50%', transform:'translate(-50%,-50%)',
-    width:'1040px', maxWidth:'97vw', maxHeight:'93vh', overflow:'auto',
+    width:'1040px', maxWidth:'97vw', height:'93vh', maxHeight:'93vh', overflow:'hidden',
+    display:'flex', flexDirection:'column',
     background:'linear-gradient(180deg,#061a22 0%,#04141a 100%)', color:'var(--txt)', borderRadius:'14px',
     padding:'20px 22px', boxShadow:'0 24px 70px rgba(0,0,0,.6),inset 0 0 0 1px rgba(56,189,248,.1)',
     zIndex:'2000000001', fontFamily:'system-ui,-apple-system,Segoe UI,Roboto,Arial',
@@ -667,7 +666,7 @@ function makeModal() {
 
   // HUD: header → mono command-bar. Status LED (green) + "METACTRL // PRO" uppercase tracked title. Version/host badges kept.
   wrap.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding:11px 14px;background:#02101a;border:1px solid #0e3a47;border-radius:10px;box-shadow:inset 0 1px 0 rgba(56,189,248,.1)">
+    <div style="flex-shrink:0;display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding:11px 14px;background:#02101a;border:1px solid #0e3a47;border-radius:10px;box-shadow:inset 0 1px 0 rgba(56,189,248,.1)">
       <div style="display:flex;align-items:center;gap:11px">
         <span style="width:9px;height:9px;border-radius:50%;background:#22c55e;box-shadow:0 0 8px #22c55e;flex-shrink:0;display:inline-block"></span>
         <h2 style="margin:0;font-size:15px;font-weight:700;color:#e8eef7;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px">METACTRL <span style="color:#38bdf8;text-shadow:0 0 7px rgba(56,189,248,.6)">//</span> PRO</h2>
@@ -676,7 +675,7 @@ function makeModal() {
       </div>
       <button id="ar-close" class="ar-btn ar-btn-danger ar-btn-sm">✕ Close</button>
     </div>
-    <div style="display:flex;gap:8px;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--bdr)">
+    <div style="flex-shrink:0;display:flex;gap:8px;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--bdr);flex-wrap:wrap">
       <button id="tab-ar"    class="ar-tab">⚙️ Autorules</button>
       <button id="tab-col"   class="ar-tab">📋 Column Presets</button>
       <button id="tab-anl"   class="ar-tab">📊 Analytics</button>
@@ -687,6 +686,12 @@ function makeModal() {
     </div>
   `;
 
+  // v24.3 fix: single inner scroll container holds all 7 tab divs. It (not #ar-modal) scrolls, so the modal's corner
+  // brackets stay fixed. setTab toggles display on the divs by reference — still valid inside the wrapper; ids unchanged.
+  const scroll = document.createElement('div');
+  scroll.id = 'ar-scroll';
+  Object.assign(scroll.style, { flex:'1', minHeight:'0', overflow:'auto' });
+
   const ar    = document.createElement('div'); ar.id    = 'ar-ar';
   const col   = document.createElement('div'); col.id   = 'ar-col';
   const anl   = document.createElement('div'); anl.id   = 'ar-anl';
@@ -694,13 +699,14 @@ function makeModal() {
   const px    = document.createElement('div'); px.id    = 'ar-px';
   const ops   = document.createElement('div'); ops.id   = 'ar-ops';
   const links = document.createElement('div'); links.id = 'ar-links';
-  wrap.appendChild(ar);
-  wrap.appendChild(col);
-  wrap.appendChild(anl);
-  wrap.appendChild(insp);
-  wrap.appendChild(px);
-  wrap.appendChild(ops);
-  wrap.appendChild(links);
+  scroll.appendChild(ar);
+  scroll.appendChild(col);
+  scroll.appendChild(anl);
+  scroll.appendChild(insp);
+  scroll.appendChild(px);
+  scroll.appendChild(ops);
+  scroll.appendChild(links);
+  wrap.appendChild(scroll);
   document.body.appendChild(wrap);
 
   wrap.querySelector('#ar-close').onclick    = () => wrap.remove();
@@ -4072,7 +4078,7 @@ function miniBar(spentN, capN, cur, label) {
     + '<span style="color:#22c55e;font-weight:700;font-size:13px">' + spentFmt + '</span>'
     + '<span style="color:#64748b;font-size:11px"> / ' + capFmt + '</span>'
     + '</div>'
-    + '<div style="background:#374151;border-radius:3px;height:5px;width:140px;margin-bottom:2px">'
+    + '<div style="background:#0a2c38;border-radius:3px;height:5px;width:140px;margin-bottom:2px">'
     + '<div style="height:5px;border-radius:3px;background:' + barColor + ';width:' + pct + '%"></div>'
     + '</div>'
     + '<div style="font-size:10px;color:' + barColor + '">' + pct + '% used &middot; left: ' + remFmt + '</div>'
@@ -4085,38 +4091,41 @@ function miniBar(spentN, capN, cur, label) {
   if (_inspSt) _inspSt.remove();
   const _st = document.createElement('style');
   _st.id = 'fbi-style';
+  // v24.3 de-navy: this whole tab was a navy island (#1f2937/#374151) inside the teal HUD frame. Retuned surfaces to the
+  // teal palette — tiles/cards #082530/#06222d, borders teal #103a47, search/headers #082530. Semantic value colors
+  // (green balance, red disabled, amber appeal, blue accent) kept. Skin only — no data/logic touched.
   _st.textContent = [
     '#ar-insp *{box-sizing:border-box;margin:0;padding:0;font-family:inherit}',
     '#ar-insp{color:#e2e8f0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;padding:4px 0}',
-    '#ar-insp .fbi-tabs{display:flex;gap:2px;padding-bottom:12px;margin-bottom:16px;border-bottom:1px solid #1f2937;flex-shrink:0;flex-wrap:wrap}',
-    '#ar-insp .fbi-tab{padding:7px 18px;border:none;border-radius:8px 8px 0 0;background:transparent;color:#64748b;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;border-bottom:2px solid transparent}',
-    '#ar-insp .fbi-tab.active{color:#fff;border-bottom-color:#3b82f6;background:#1f2937}',
-    '#ar-insp .fbi-tab:hover:not(.active){color:#94a3b8;background:#1a2433}',
-    '#ar-insp .fbi-body{overflow:auto;max-height:70vh;padding:4px 2px}',
+    '#ar-insp .fbi-tabs{display:flex;gap:2px;padding-bottom:12px;margin-bottom:16px;border-bottom:1px solid #103a47;flex-shrink:0;flex-wrap:wrap}',
+    '#ar-insp .fbi-tab{padding:7px 18px;border:none;border-radius:8px 8px 0 0;background:transparent;color:#8aa0a8;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;border-bottom:2px solid transparent}',
+    '#ar-insp .fbi-tab.active{color:#fff;border-bottom-color:#3b82f6;background:#082530}',
+    '#ar-insp .fbi-tab:hover:not(.active){color:#cbd5e1;background:rgba(56,189,248,.06)}',
+    '#ar-insp .fbi-body{padding:4px 2px}',
     '#ar-insp .fbi-stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px}',
-    '#ar-insp .fbi-stat{background:#1f2937;border:1px solid #374151;border-radius:10px;padding:12px 18px;min-width:130px}',
+    '#ar-insp .fbi-stat{background:#082530;border:1px solid #103a47;border-radius:10px;padding:12px 18px;min-width:130px}',
     '#ar-insp .fbi-stat-v{font-size:28px;font-weight:700;color:#fff;line-height:1}',
-    '#ar-insp .fbi-stat-l{font-size:11px;color:#64748b;margin-top:5px}',
+    '#ar-insp .fbi-stat-l{font-size:11px;color:#8aa0a8;margin-top:5px}',
     '#ar-insp .fbi-warn-box{background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:8px;padding:9px 13px;font-size:12px;color:#f59e0b;margin-bottom:10px}',
-    '#ar-insp .fbi-info-box{background:#1f2937;border-radius:10px;padding:13px 16px;margin-bottom:14px;display:flex;align-items:center;gap:14px}',
-    '#ar-insp .fbi-avatar{width:40px;height:40px;border-radius:50%;background:#374151;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}',
+    '#ar-insp .fbi-info-box{background:#082530;border:1px solid #103a47;border-radius:10px;padding:13px 16px;margin-bottom:14px;display:flex;align-items:center;gap:14px}',
+    '#ar-insp .fbi-avatar{width:40px;height:40px;border-radius:50%;background:#06222d;border:1px solid #103a47;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}',
     '#ar-insp .fbi-table-wrap{overflow-x:auto}',
     '#ar-insp .fbi-table{width:100%;border-collapse:collapse;font-size:13px}',
-    '#ar-insp .fbi-table th{text-align:left;padding:9px 12px;background:#1f2937;color:#64748b;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em;position:sticky;top:0;z-index:1;white-space:nowrap}',
-    '#ar-insp .fbi-table td{padding:10px 12px;border-bottom:1px solid #1f2937;color:#e2e8f0;vertical-align:middle}',
-    '#ar-insp .fbi-table tr:hover td{background:rgba(59,130,246,.05)}',
+    '#ar-insp .fbi-table th{text-align:left;padding:9px 12px;background:#082530;color:#8aa0a8;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em;position:sticky;top:0;z-index:1;white-space:nowrap}',
+    '#ar-insp .fbi-table td{padding:10px 12px;border-bottom:1px solid #103a47;color:#e2e8f0;vertical-align:middle}',
+    '#ar-insp .fbi-table tr:hover td{background:rgba(56,189,248,.05)}',
     '#ar-insp .fbi-name{font-weight:500}',
-    '#ar-insp .fbi-sub{font-size:11px;color:#64748b;margin-top:2px}',
-    '#ar-insp .fbi-link{color:#3b82f6;text-decoration:none;font-size:11px;font-weight:600;padding:3px 8px;border:1px solid rgba(59,130,246,.3);border-radius:5px;transition:all .12s;white-space:nowrap}',
-    '#ar-insp .fbi-link:hover{background:rgba(59,130,246,.12)}',
+    '#ar-insp .fbi-sub{font-size:11px;color:#8aa0a8;margin-top:2px}',
+    '#ar-insp .fbi-link{color:#7dd3fc;text-decoration:none;font-size:11px;font-weight:600;padding:3px 8px;border:1px solid rgba(56,189,248,.3);border-radius:5px;transition:all .12s;white-space:nowrap}',
+    '#ar-insp .fbi-link:hover{background:rgba(56,189,248,.12);border-color:var(--cyan)}',
     '#ar-insp .fbi-links{display:flex;gap:5px;flex-wrap:wrap}',
-    '#ar-insp .fbi-empty{color:#64748b;font-size:13px;padding:24px;text-align:center}',
-    '#ar-insp .fbi-search{width:100%;background:#1f2937;border:1px solid #374151;border-radius:7px;padding:7px 11px;color:#e2e8f0;font-size:13px;margin-bottom:10px;outline:none}',
-    '#ar-insp .fbi-search:focus{border-color:#3b82f6}',
-    '#ar-insp #fbi-loader{position:absolute;inset:0;background:rgba(17,24,39,.85);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;z-index:10;border-radius:10px}',
-    '#ar-insp .fbi-spinner{width:32px;height:32px;border:3px solid #374151;border-top-color:#3b82f6;border-radius:50%;animation:fbi-spin .8s linear infinite}',
+    '#ar-insp .fbi-empty{color:#8aa0a8;font-size:13px;padding:24px;text-align:center}',
+    '#ar-insp .fbi-search{width:100%;background:#06222d;border:1px solid #1a4a5a;border-radius:7px;padding:7px 11px;color:#e2e8f0;font-size:13px;margin-bottom:10px;outline:none}',
+    '#ar-insp .fbi-search:focus{border-color:#38bdf8;box-shadow:0 0 0 2px rgba(56,189,248,.25),0 0 10px rgba(56,189,248,.15)}',
+    '#ar-insp #fbi-loader{position:absolute;inset:0;background:rgba(4,20,26,.88);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;z-index:10;border-radius:10px}',
+    '#ar-insp .fbi-spinner{width:32px;height:32px;border:3px solid #103a47;border-top-color:#38bdf8;border-radius:50%;animation:fbi-spin .8s linear infinite}',
     '@keyframes fbi-spin{to{transform:rotate(360deg)}}',
-    '#ar-insp #fbi-loader p{color:#94a3b8;font-size:13px}'
+    '#ar-insp #fbi-loader p{color:#8aa0a8;font-size:13px}'
   ].join(' ');
   document.head.appendChild(_st);
 
@@ -4327,7 +4336,7 @@ function getCurrentActId() {
       var cCapFmt   = cCapN   > 0 ? cCapN.toLocaleString('en-US',{style:'currency',currency:cCur,maximumFractionDigits:0}) : 'no limit';
       var cBalFmt   = cBalN.toLocaleString('en-US',{style:'currency',currency:cCur,maximumFractionDigits:2});
       var cDayFmt   = cDayCapN > 0 ? cDayCapN.toLocaleString('en-US',{style:'currency',currency:cCur,maximumFractionDigits:0}) : null;
-      curHtml = '<div style="background:linear-gradient(135deg,#1e3a5f 0%,#1f2937 100%);border:1px solid #2563eb;border-radius:12px;padding:16px 20px;margin-bottom:18px">'
+      curHtml = '<div style="background:linear-gradient(135deg,#0c3550 0%,#082530 100%);border:1px solid #2563eb;border-radius:12px;padding:16px 20px;margin-bottom:18px">'
         + '<div style="font-size:11px;font-weight:700;color:#3b82f6;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Current Account</div>'
         + '<div style="display:flex;align-items:flex-start;gap:20px;flex-wrap:wrap">'
         /* left: name + status + tz */
@@ -4341,7 +4350,7 @@ function getCurrentActId() {
         + '<div style="flex:1;min-width:200px">'
         + '<div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Account Limit</div>'
         + '<div style="margin-bottom:4px"><span style="font-size:16px;font-weight:700;color:#22c55e">' + cSpentFmt + '</span><span style="color:#64748b;font-size:12px"> / ' + cCapFmt + '</span></div>'
-        + (cCapN > 0 ? '<div style="background:#374151;border-radius:4px;height:6px;margin-bottom:3px"><div style="height:6px;border-radius:4px;background:' + cBarC + ';width:' + cPct + '%"></div></div>'
+        + (cCapN > 0 ? '<div style="background:#0a2c38;border-radius:4px;height:6px;margin-bottom:3px"><div style="height:6px;border-radius:4px;background:' + cBarC + ';width:' + cPct + '%"></div></div>'
           + '<div style="font-size:11px;color:' + cBarC + '">' + cPct + '% used</div>' : '')
         + (cDayFmt ? '<div style="margin-top:10px"><div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Daily Limit</div>'
           + '<div style="font-size:14px;font-weight:700;color:#f59e0b">' + cDayFmt + '</div></div>' : '')
@@ -4359,7 +4368,7 @@ function getCurrentActId() {
         + '</div>'
         + '</div>';
     } else if (curActId) {
-      curHtml = '<div style="background:#1f2937;border:1px solid #374151;border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:12px;color:#64748b">Current account: act_' + curActId + ' (not in accessible accounts list)</div>';
+      curHtml = '<div style="background:#082530;border:1px solid #103a47;border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:12px;color:#8aa0a8">Current account: act_' + curActId + ' (not in accessible accounts list)</div>';
     }
 
     let html = curHtml + '<div class="fbi-info-box">'
@@ -4381,19 +4390,19 @@ function getCurrentActId() {
       + '<div class="fbi-stat"><div class="fbi-stat-v" style="color:#22c55e">$' + Math.round(totalBal).toLocaleString()   + '</div><div class="fbi-stat-l">Total Balance</div></div>'
       + (totalCap > 0 ? '<div class="fbi-stat"><div class="fbi-stat-v" style="color:' + (capPct >= 90 ? '#ef4444' : capPct >= 70 ? '#f59e0b' : '#e2e8f0') + '">' + capPct + '%</div><div class="fbi-stat-l">Cap used (avg)</div></div>' : '')
       + '</div>'
-      + (totalCap > 0 ? '<div style="background:#1f2937;border-radius:8px;padding:10px 16px;margin-bottom:16px">'
-        + '<div style="display:flex;justify-content:space-between;font-size:12px;color:#64748b;margin-bottom:6px"><span>Total spend vs cap</span><span>$' + Math.round(totalSpent).toLocaleString() + ' / $' + Math.round(totalCap).toLocaleString() + '</span></div>'
-        + '<div style="background:#374151;border-radius:4px;height:6px"><div style="height:6px;border-radius:4px;background:' + (capPct >= 90 ? '#ef4444' : capPct >= 70 ? '#f59e0b' : '#3b82f6') + ';width:' + capPct + '%"></div></div>'
+      + (totalCap > 0 ? '<div style="background:#082530;border:1px solid #103a47;border-radius:8px;padding:10px 16px;margin-bottom:16px">'
+        + '<div style="display:flex;justify-content:space-between;font-size:12px;color:#8aa0a8;margin-bottom:6px"><span>Total spend vs cap</span><span>$' + Math.round(totalSpent).toLocaleString() + ' / $' + Math.round(totalCap).toLocaleString() + '</span></div>'
+        + '<div style="background:#0a2c38;border-radius:4px;height:6px"><div style="height:6px;border-radius:4px;background:' + (capPct >= 90 ? '#ef4444' : capPct >= 70 ? '#f59e0b' : '#3b82f6') + ';width:' + capPct + '%"></div></div>'
         + '</div>' : '');
 
     if (disabled.length > 0) {
-      html += '<div style="margin-top:4px"><div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Disabled Accounts</div>';
+      html += '<div style="margin-top:4px"><div style="font-size:11px;font-weight:700;color:#8aa0a8;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Disabled Accounts</div>';
       disabled.forEach(function(a) {
         const actId = a.id.replace('act_','');
-        html += '<div style="display:flex;align-items:center;gap:10px;padding:7px 10px;background:#1f2937;border-radius:7px;margin-bottom:5px;font-size:12px">'
+        html += '<div style="display:flex;align-items:center;gap:10px;padding:7px 10px;background:#06222d;border:1px solid #103a47;border-radius:7px;margin-bottom:5px;font-size:12px">'
           + '<span style="color:#ef4444">[X]</span>'
           + '<span style="flex:1;font-weight:500">' + esc(a.name) + '</span>'
-          + '<span style="color:#64748b;font-size:11px">' + a.id + '</span>'
+          + '<span style="color:#8aa0a8;font-size:11px">' + a.id + '</span>'
           + '<a class="fbi-link" href="https://www.facebook.com/accountquality?act=' + actId + '" target="_blank" style="color:#f59e0b;border-color:rgba(245,158,11,.3)">Appeal</a>'
           + '</div>';
       });
