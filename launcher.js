@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.11.0 — Bookmarklet
+ * FB Launcher v0.12.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -23,6 +23,8 @@
  * v0.11.0: IG identity fix — resolve the Page's connected IG FIRST (was account-actor first),
  *          post-create readback that flags FB silently dropping an unusable instagram_user_id,
  *          no more empty-IG cache poisoning (terminal vs retryable), actionable PBIA #10 log.
+ * v0.12.0: manual attribution window — dropdown in step 4 (1d/7d click ± 1d view). Was hardcoded
+ *          to 1-day click. UI override > CSV "Attribution Spec" column > 1-day click default.
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -246,6 +248,7 @@
     bidAmountOverride: '',    // bid/cost cap $ (only used when strategy is COST_CAP or BID_CAP)
     budgetTypeOverride: '',   // v0.8.0: '' = CSV (daily) | 'daily' | 'lifetime'
     budgetEndDate: '',        // v0.8.0: datetime-local string; required for lifetime budget (end_time)
+    attributionOverride: '',  // v0.12.0: '' = CSV/default (1d click) | '1d_click' | '7d_click' | '1d_click_1d_view' | '7d_click_1d_view'
     // v0.8.0: placements — checkboxes (platforms + position groups). Presets fill both. Empty = CSV.
     placementPlatforms: [],   // subset of facebook/instagram/audience_network/messenger
     placementPositionGroups: [], // subset of PLACEMENT_POSITION_GROUPS keys; empty = all positions
@@ -619,6 +622,7 @@
       bidAmountOverride: state.bidAmountOverride,
       budgetTypeOverride: state.budgetTypeOverride,
       budgetEndDate: state.budgetEndDate,
+      attributionOverride: state.attributionOverride,
       descriptionOverride: state.descriptionOverride,
       phraseVertical: state.phraseVertical,
     };
@@ -694,6 +698,7 @@
     state.bidAmountOverride = s.bidAmountOverride || '';
     state.budgetTypeOverride = s.budgetTypeOverride || '';
     state.budgetEndDate = s.budgetEndDate || '';
+    state.attributionOverride = s.attributionOverride || '';
     state.descriptionOverride = s.descriptionOverride || '';
     state.phraseVertical = s.phraseVertical || 'insurance';
     state.selectedPresetId = presetId;
@@ -1605,6 +1610,18 @@
     return state.bidStrategyOverride || mapBidStrategy(row && row['Campaign Bid Strategy']);
   }
 
+  // v0.12.0: adset attribution_spec. UI override > CSV "Attribution Spec" column > 1-day click default.
+  const ATTRIBUTION_SPECS = {
+    '1d_click': '[{"event_type":"CLICK_THROUGH","window_days":1}]',
+    '7d_click': '[{"event_type":"CLICK_THROUGH","window_days":7}]',
+    '1d_click_1d_view': '[{"event_type":"CLICK_THROUGH","window_days":1},{"event_type":"VIEW_THROUGH","window_days":1}]',
+    '7d_click_1d_view': '[{"event_type":"CLICK_THROUGH","window_days":7},{"event_type":"VIEW_THROUGH","window_days":1}]',
+  };
+  function attributionSpec(row) {
+    if (state.attributionOverride) return ATTRIBUTION_SPECS[state.attributionOverride] || ATTRIBUTION_SPECS['1d_click'];
+    return (row && row['Attribution Spec']) || ATTRIBUTION_SPECS['1d_click'];
+  }
+
   // v0.8.0: lifetime vs daily budget. Lifetime requires an end_time on the budget-carrying entity
   // (campaign for CBO, adset for ABO); FB also needs end_time on adsets when CBO uses a lifetime budget.
   function isLifetimeBudget() { return state.budgetTypeOverride === 'lifetime'; }
@@ -2255,7 +2272,7 @@
         billing_event: billingEvent,
         targeting: JSON.stringify(targeting),
         promoted_object: JSON.stringify(promoted),
-        attribution_spec: aFirst['Attribution Spec'] || '[{"event_type":"CLICK_THROUGH","window_days":1}]',
+        attribution_spec: attributionSpec(aFirst),
       };
       // EU DSA on adset level — required for some EU geos (esp. CEE: PL/CZ/HU/...)
       if (state.dsaBeneficiary) {
@@ -2974,6 +2991,14 @@
           <option value="SEARCH" ${state.customEventOverride === 'SEARCH' ? 'selected' : ''}>SEARCH</option>
           <option value="CONTACT" ${state.customEventOverride === 'CONTACT' ? 'selected' : ''}>CONTACT</option>
         </select>
+        <label style="margin-top:6px">Attribution window <span style="color:#6e7681">— how FB credits conversions to clicks/views</span></label>
+        <select id="fbl-attribution">
+          <option value="" ${state.attributionOverride === '' ? 'selected' : ''}>— CSV / default (1-day click) —</option>
+          <option value="1d_click" ${state.attributionOverride === '1d_click' ? 'selected' : ''}>1-day click</option>
+          <option value="7d_click" ${state.attributionOverride === '7d_click' ? 'selected' : ''}>7-day click</option>
+          <option value="1d_click_1d_view" ${state.attributionOverride === '1d_click_1d_view' ? 'selected' : ''}>1-day click + 1-day view</option>
+          <option value="7d_click_1d_view" ${state.attributionOverride === '7d_click_1d_view' ? 'selected' : ''}>7-day click + 1-day view</option>
+        </select>
       </div>
       </div>
 
@@ -3656,6 +3681,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       render();  // enable/disable bid-amount field
     });
     document.getElementById('fbl-bid-amount')?.addEventListener('input', e => { state.bidAmountOverride = e.target.value.trim(); });
+    document.getElementById('fbl-attribution')?.addEventListener('change', e => { state.attributionOverride = e.target.value; });
     const creativesEl = document.getElementById('fbl-creatives');
     if (creativesEl) {
       creativesEl.addEventListener('input', e => {
