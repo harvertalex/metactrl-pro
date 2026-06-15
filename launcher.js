@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.15.0 — Bookmarklet
+ * FB Launcher v0.16.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -37,6 +37,14 @@
  *          no representative). On per-ad IG rejection, fall back straight to PBIA (always
  *          promotable) instead of re-laddering to the same rejected page IG. If no IG can be
  *          secured and IG placements are targeted → loud warning, IG kept in targeting (no block).
+ * v0.16.0: "Ops Cockpit" visual refresh (no logic change). Header → black command bar with a
+ *          monospaced "FB LAUNCHER // v0.16.0" title and a status LED (green/amber/red, pulsing,
+ *          driven by state.status.type). Cards → instrument panels (#0d1626 on #1a2740 hairlines)
+ *          with a cyan telemetry tick (#38bdf8, NEW token = read-only/state, never on clickables).
+ *          Log rail → "◉ LIVE FEED" telemetry feed: darkest surface #05080f, cyan timestamps,
+ *          faint scanline texture, segmented glowing progress strip. Metrics/counts/budgets get
+ *          tabular mono numerals (preview readout). Launch button → "🚀 LAUNCH ▸", loud action-blue
+ *          gradient kept (the one allowed accent on a clickable) + confirm-feel :active inset.
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -2613,23 +2621,31 @@
       /* v0.14.0: two-column body — left log rail, right scrolling form. Header spans both. */
       #${PANEL_ID} .fbl-cols { display:flex; flex:1; min-height:0; overflow:hidden; }
       #${PANEL_ID} .fbl-lograil { width:330px; flex-shrink:0; display:flex; flex-direction:column;
-        border-right:1px solid #1e2a44; background:rgba(0,0,0,.22); transition:width .15s; }
+        border-right:1px solid #1a2740; background:#080d18; transition:width .15s; }
       #${PANEL_ID} .fbl-lograil.collapsed { width:38px; }
       #${PANEL_ID} .fbl-railhead { flex-shrink:0; display:flex; align-items:center; justify-content:space-between;
-        padding:9px 11px; font-size:12px; font-weight:700; color:#cbd5e1; border-bottom:1px solid #1e2a44; }
+        padding:9px 11px; font-size:12px; font-weight:700; color:#cbd5e1; border-bottom:1px solid #1a2740;
+        font-family:ui-monospace,monospace; letter-spacing:.5px; }
       #${PANEL_ID} .fbl-railbody { flex:1; min-height:0; display:flex; flex-direction:column; padding:10px 11px; overflow:hidden; }
       #${PANEL_ID} .fbl-lograil.collapsed .fbl-railbody, #${PANEL_ID} .fbl-lograil.collapsed .fbl-railhead .ttl { display:none; }
       #${PANEL_ID} .fbl-main { flex:1; min-width:0; overflow-y:auto; padding:0 18px 18px; }
-      /* header bar — full-bleed gradient */
-      #${PANEL_ID} h2 { margin:0; padding:15px 18px; font-size:15px; font-weight:700; color:#fff; flex-shrink:0;
-        background:linear-gradient(100deg,#1d4ed8 0%,#3b82f6 60%,#6366f1 100%);
+      /* v0.16.0 Ops Cockpit: header → black command bar, mono title, status LED */
+      #${PANEL_ID} h2 { margin:0; padding:14px 18px; font-size:14px; font-weight:700; color:#e8eef7; flex-shrink:0;
+        background:#080d18; border-bottom:1px solid #1a2740;
+        font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
         display:flex; align-items:center; justify-content:space-between; z-index:5;
-        box-shadow:0 2px 12px rgba(29,78,216,.35); letter-spacing:.3px; }
+        box-shadow:0 2px 12px rgba(0,0,0,.4); letter-spacing:1px; }
+      #${PANEL_ID} h2 .fbl-title { display:flex; align-items:center; gap:9px; }
+      #${PANEL_ID} .fbl-led { width:9px; height:9px; border-radius:50%; flex-shrink:0;
+        background:#22c55e; box-shadow:0 0 6px currentColor; animation:fbl-led-pulse 2.4s ease-in-out infinite; }
+      #${PANEL_ID} .fbl-led.warn { background:#fbbf24; }
+      #${PANEL_ID} .fbl-led.err { background:#ef4444; }
+      @keyframes fbl-led-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
       #${PANEL_ID} .sub { color:#94a3b8; font-size:11px; margin:14px 0; }
-      /* v0.9.0: each numbered step = a card with a left accent; nested fields stay plain */
-      #${PANEL_ID} .field { background:#131d31; border:1px solid #233148; border-left:3px solid #3b82f6;
+      /* v0.16.0 Ops Cockpit: cards = instrument panels. Cyan (#38bdf8) telemetry tick = read-only/state, NOT clickable. */
+      #${PANEL_ID} .field { background:#0d1626; border:1px solid #1a2740; border-left:3px solid #38bdf8;
         border-radius:9px; padding:11px 13px; margin-bottom:11px; transition:border-color .15s; }
-      #${PANEL_ID} .field:hover { border-left-color:#60a5fa; }
+      #${PANEL_ID} .field:hover, #${PANEL_ID} .field:focus-within { border-left-color:#7dd3fc; }
       #${PANEL_ID} .field .field { background:none; border:none; border-radius:0; padding:0; margin:0; }
       #${PANEL_ID} .field > label { font-size:12px; font-weight:600; color:#e8eef7; margin-bottom:7px; letter-spacing:.2px; }
       #${PANEL_ID} label { display:block; font-size:11px; color:#94a3b8; margin-bottom:3px; }
@@ -2641,25 +2657,33 @@
       #${PANEL_ID} button { padding:7px 12px; border-radius:6px; border:1px solid #2b3a55;
         background:#1a2740; color:#e2e8f0; font-size:12px; cursor:pointer; font-family:inherit; transition:background .12s; }
       #${PANEL_ID} button:hover { background:#26344f; }
-      #${PANEL_ID} button.primary { background:linear-gradient(100deg,#2563eb,#3b82f6); border:none; color:#fff; font-weight:700; box-shadow:0 2px 10px rgba(37,99,235,.4); }
+      #${PANEL_ID} button.primary { background:linear-gradient(100deg,#2563eb,#3b82f6); border:none; color:#fff; font-weight:700;
+        letter-spacing:.6px; box-shadow:0 2px 10px rgba(37,99,235,.4); transition:background .12s,box-shadow .1s,transform .05s; }
       #${PANEL_ID} button.primary:hover { background:linear-gradient(100deg,#1d4ed8,#2563eb); }
+      /* v0.16.0: confirm-feel press on the launch trigger */
+      #${PANEL_ID} button.primary:active:not(:disabled) { transform:translateY(1px); box-shadow:inset 0 2px 8px rgba(0,0,0,.45); }
       #${PANEL_ID} button:disabled { opacity:.4; cursor:not-allowed; }
       #${PANEL_ID} .close { background:rgba(255,255,255,.12); border:none; color:#fff; font-size:18px; padding:0 8px; line-height:1.4; border-radius:5px; cursor:pointer; }
       #${PANEL_ID} .close:hover { background:rgba(255,255,255,.25); }
       #${PANEL_ID} .preview { background:linear-gradient(100deg,rgba(59,130,246,.1),rgba(99,102,241,.06)); border:1px solid #2f4a7a;
         border-left:3px solid #22c55e; border-radius:9px; padding:9px 12px; font-size:11px; color:#cbd5e1; line-height:1.6;
         margin-bottom:11px; }
-      #${PANEL_ID} .preview b { color:#fff; }
-      #${PANEL_ID} .log { flex:1; min-height:0; overflow-y:auto; background:rgba(0,0,0,.25);
-        border:1px solid #233148; border-radius:6px; padding:8px 10px;
-        font-family:ui-monospace,monospace; font-size:11px; }
+      /* v0.16.0: preview = readout — metrics/counts/budgets align like an instrument */
+      #${PANEL_ID} .preview b { color:#fff; font-family:ui-monospace,monospace; font-variant-numeric:tabular-nums; }
+      /* v0.16.0 Ops Cockpit: log rail = telemetry feed (the hero). Darkest surface + faint scanlines. */
+      #${PANEL_ID} .log { flex:1; min-height:0; overflow-y:auto; background:#05080f;
+        background-image:repeating-linear-gradient(0deg, rgba(56,189,248,.03) 0, rgba(56,189,248,.03) 1px, transparent 1px, transparent 3px);
+        border:1px solid #1a2740; border-radius:6px; padding:8px 10px;
+        font-family:ui-monospace,monospace; font-size:11px; font-variant-numeric:tabular-nums; }
       #${PANEL_ID} .log div { word-break:break-word; line-height:1.45; margin-bottom:2px;
         padding:1px 0; }
       #${PANEL_ID} .log div.error-line { background:rgba(239,68,68,.08);
         border-left:2px solid #ef4444; padding-left:4px; margin:2px 0; }
-      #${PANEL_ID} .log .ts { opacity:.5; margin-right:6px; }
-      #${PANEL_ID} .progress { height:5px; border-radius:3px; background:#334155; overflow:hidden; margin:6px 0; }
-      #${PANEL_ID} .progress > div { height:100%; background:#3b82f6; transition:width .3s; }
+      #${PANEL_ID} .log .ts { color:#38bdf8; opacity:.85; margin-right:6px; }
+      /* segmented glowing telemetry strip */
+      #${PANEL_ID} .progress { height:6px; border-radius:3px; background:#0d1626; border:1px solid #1a2740; overflow:hidden; margin:6px 0; }
+      #${PANEL_ID} .progress > div { height:100%; background:linear-gradient(90deg,#2563eb,#3b82f6,#6366f1);
+        background-size:14px 100%; box-shadow:0 0 8px rgba(59,130,246,.6); transition:width .3s; }
       #${PANEL_ID} .status { padding:8px 10px; border-radius:6px; font-size:12px; margin:8px 0;
         background:rgba(59,130,246,.1); border:1px solid rgba(59,130,246,.3); color:#dbeafe; }
       #${PANEL_ID} .status.success { background:rgba(34,197,94,.1); border-color:rgba(34,197,94,.3); color:#bbf7d0; }
@@ -2832,18 +2856,20 @@
     const buttonLabel = blockReason
       ? blockReason
       : isMulti
-        ? `🚀 Launch ${totalAds} ads × ${state.targetAccIds.length} accounts (${totalAds * state.targetAccIds.length} ops)`
-        : `🚀 Launch ${totalAds} ads to ${esc(selectedAccs[0]?.name || 'account')}`;
+        ? `🚀 LAUNCH ▸ ${totalAds} ads × ${state.targetAccIds.length} accounts (${totalAds * state.targetAccIds.length} ops)`
+        : `🚀 LAUNCH ▸ ${totalAds} ads to ${esc(selectedAccs[0]?.name || 'account')}`;
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
+    const ledClass = state.status.type === 'error' ? 'err' : state.status.type === 'warning' ? 'warn' : '';
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.15.0
+      <h2>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>FB LAUNCHER // v0.16.0</span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
         <aside class="fbl-lograil${state.logRailCollapsed ? ' collapsed' : ''}">
           <div class="fbl-railhead">
-            <span class="ttl">📋 Activity log${state.log.length ? ` · ${state.log.length}` : ''}</span>
+            <span class="ttl">◉ LIVE FEED${state.log.length ? ` · ${state.log.length}` : ''}</span>
             <button id="fbl-rail-toggle" title="${state.logRailCollapsed ? 'Expand log' : 'Collapse log'}" style="padding:1px 7px;font-size:12px;border-radius:5px">${state.logRailCollapsed ? '▶' : '◀'}</button>
           </div>
           <div class="fbl-railbody">
