@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.17.0 — Bookmarklet
+ * FB Launcher v0.17.1 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -51,6 +51,12 @@
  *          Animated cyan dot-grid mesh drifts behind the right form column (.fbl-main only, ~30s, very
  *          low opacity — inputs/cards sit on solid bg so text stays crisp). Input/select :focus glow
  *          re-tuned to cyan HUD lock-on (telemetry accent; launch button stays action-blue).
+ * v0.17.1: HUD dialed up — brackets visible at rest on all step cards, grid + panel brackets stronger;
+ *          v0.17.0 was too subtle. Corner brackets now sit on EVERY top-level .field at rest (faint
+ *          rgba(56,189,248,.4), 15px legs, no glow) and brighten to full #38bdf8 + glow on :focus-within,
+ *          so the form reads as a stack of framed HUD modules at a glance. Dot-grid alpha .06→.13 + dot
+ *          1px→1.4px (clearly visible in the gaps). Panel frame brackets 18px→26px legs, alpha .45→.7,
+ *          glow .4→.6. Subtle cyan inset top hairline on cards at rest. No logic change.
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -2619,15 +2625,16 @@
         border-left:1px solid #1e2a44; box-shadow:-10px 0 30px rgba(0,0,0,.5);
         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         font-size:13px; display:flex; flex-direction:column; overflow:hidden; box-sizing:border-box; }
-      /* v0.17.0 Holographic HUD: faint cyan interior corner brackets framing the console (TL + BL,
-         left edge only — right edge hugs the screen). pointer-events:none, clear of header close button (top-right). */
+      /* v0.17.1 Holographic HUD: cyan interior corner brackets framing the console (TL + BL, left edge only —
+         right edge hugs the screen). Bigger (26px legs) + brighter so the whole console reads as framed.
+         pointer-events:none, clear of header close button + rail toggle (both top-right / inner). */
       #${PANEL_ID}::before { content:''; position:absolute; inset:0; pointer-events:none; z-index:6;
         background:
-          linear-gradient(rgba(56,189,248,.45),rgba(56,189,248,.45)) left 8px top 8px/18px 1.5px no-repeat,
-          linear-gradient(rgba(56,189,248,.45),rgba(56,189,248,.45)) left 8px top 8px/1.5px 18px no-repeat,
-          linear-gradient(rgba(56,189,248,.45),rgba(56,189,248,.45)) left 8px bottom 8px/18px 1.5px no-repeat,
-          linear-gradient(rgba(56,189,248,.45),rgba(56,189,248,.45)) left 8px bottom 8px/1.5px 18px no-repeat;
-        filter:drop-shadow(0 0 4px rgba(56,189,248,.4)); }
+          linear-gradient(rgba(56,189,248,.7),rgba(56,189,248,.7)) left 8px top 8px/26px 1.5px no-repeat,
+          linear-gradient(rgba(56,189,248,.7),rgba(56,189,248,.7)) left 8px top 8px/1.5px 26px no-repeat,
+          linear-gradient(rgba(56,189,248,.7),rgba(56,189,248,.7)) left 8px bottom 8px/26px 1.5px no-repeat,
+          linear-gradient(rgba(56,189,248,.7),rgba(56,189,248,.7)) left 8px bottom 8px/1.5px 26px no-repeat;
+        filter:drop-shadow(0 0 6px rgba(56,189,248,.6)); }
       /* v0.14.0: custom scrollbar on the inner scroll panes (left log rail + right form) */
       #${PANEL_ID} .fbl-scroll::-webkit-scrollbar { width:10px; }
       #${PANEL_ID} .fbl-scroll::-webkit-scrollbar-track { background:transparent; }
@@ -2643,10 +2650,11 @@
         font-family:ui-monospace,monospace; letter-spacing:.5px; }
       #${PANEL_ID} .fbl-railbody { flex:1; min-height:0; display:flex; flex-direction:column; padding:10px 11px; overflow:hidden; }
       #${PANEL_ID} .fbl-lograil.collapsed .fbl-railbody, #${PANEL_ID} .fbl-lograil.collapsed .fbl-railhead .ttl { display:none; }
-      /* v0.17.0 Holographic HUD: faint animated cyan dot-grid mesh behind the right form column only
-         (rail stays #05080f telemetry). Cards/inputs have solid bg, so labels/values stay crisp over it. */
+      /* v0.17.1 Holographic HUD: cyan dot-grid mesh behind the right form column only — clearly visible
+         in the gaps between cards (rail stays #05080f telemetry). Cards/inputs have solid bg, so
+         labels/values stay crisp over it; the grid only reads in the negative space. */
       #${PANEL_ID} .fbl-main { flex:1; min-width:0; overflow-y:auto; padding:0 18px 18px;
-        background-image:radial-gradient(circle, rgba(56,189,248,.06) 1px, transparent 1px);
+        background-image:radial-gradient(circle, rgba(56,189,248,.13) 1.4px, transparent 1.4px);
         background-size:22px 22px; animation:fbl-mesh-drift 36s linear infinite; }
       @keyframes fbl-mesh-drift { from { background-position:0 0; } to { background-position:22px 44px; } }
       /* v0.16.0 Ops Cockpit: header → black command bar, mono title, status LED */
@@ -2662,26 +2670,42 @@
       #${PANEL_ID} .fbl-led.err { background:#ef4444; }
       @keyframes fbl-led-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
       #${PANEL_ID} .sub { color:#94a3b8; font-size:11px; margin:14px 0; }
-      /* v0.16.0 Ops Cockpit: cards = instrument panels. Cyan (#38bdf8) telemetry tick = read-only/state, NOT clickable. */
+      /* v0.16.0 Ops Cockpit: cards = instrument panels. Cyan (#38bdf8) telemetry tick = read-only/state, NOT clickable.
+         v0.17.1: faint cyan inset top hairline at rest = "instrument module" edge (reinforces the framed read under the brackets). */
       #${PANEL_ID} .field { position:relative; background:#0d1626; border:1px solid #1a2740; border-left:3px solid #38bdf8;
-        border-radius:9px; padding:11px 13px; margin-bottom:11px; transition:border-color .15s,box-shadow .15s; }
+        border-radius:9px; padding:11px 13px; margin-bottom:11px; transition:border-color .15s,box-shadow .15s;
+        box-shadow:inset 0 1px 0 rgba(56,189,248,.08); }
       #${PANEL_ID} .field:hover { border-left-color:#7dd3fc; }
-      /* v0.17.0 Holographic HUD: active step card = lock-on. Brighter lift + glowing cyan L-corner brackets. */
-      #${PANEL_ID} .field:focus-within { border-color:#2b5e7a; border-left-color:#7dd3fc; box-shadow:0 0 14px rgba(56,189,248,.1); }
-      #${PANEL_ID} .field:focus-within::after { content:''; position:absolute; inset:-1px; border-radius:9px; pointer-events:none; z-index:2;
+      /* v0.17.1 Holographic HUD: EVERY step card carries cyan L-corner brackets AT REST (faint, no glow) so the
+         whole form reads as a stack of framed HUD modules even when nothing is focused. Legs ~15px for legibility. */
+      #${PANEL_ID} .field::after { content:''; position:absolute; inset:-1px; border-radius:9px; pointer-events:none; z-index:2;
+        transition:filter .15s;
         background:
-          linear-gradient(#38bdf8,#38bdf8) left 0 top 0/12px 2px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) left 0 top 0/2px 12px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) right 0 top 0/12px 2px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) right 0 top 0/2px 12px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) left 0 bottom 0/12px 2px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) left 0 bottom 0/2px 12px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) right 0 bottom 0/12px 2px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) right 0 bottom 0/2px 12px no-repeat;
+          linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) left 0 top 0/15px 2px no-repeat,
+          linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) left 0 top 0/2px 15px no-repeat,
+          linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) right 0 top 0/15px 2px no-repeat,
+          linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) right 0 top 0/2px 15px no-repeat,
+          linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) left 0 bottom 0/15px 2px no-repeat,
+          linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) left 0 bottom 0/2px 15px no-repeat,
+          linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) right 0 bottom 0/15px 2px no-repeat,
+          linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) right 0 bottom 0/2px 15px no-repeat; }
+      /* v0.17.1 Holographic HUD: active step card = lock-on. Brackets brighten to full #38bdf8 + glow, border lifts. */
+      #${PANEL_ID} .field:focus-within { border-color:#2b5e7a; border-left-color:#7dd3fc; box-shadow:0 0 14px rgba(56,189,248,.1); }
+      #${PANEL_ID} .field:focus-within::after {
+        background:
+          linear-gradient(#38bdf8,#38bdf8) left 0 top 0/15px 2px no-repeat,
+          linear-gradient(#38bdf8,#38bdf8) left 0 top 0/2px 15px no-repeat,
+          linear-gradient(#38bdf8,#38bdf8) right 0 top 0/15px 2px no-repeat,
+          linear-gradient(#38bdf8,#38bdf8) right 0 top 0/2px 15px no-repeat,
+          linear-gradient(#38bdf8,#38bdf8) left 0 bottom 0/15px 2px no-repeat,
+          linear-gradient(#38bdf8,#38bdf8) left 0 bottom 0/2px 15px no-repeat,
+          linear-gradient(#38bdf8,#38bdf8) right 0 bottom 0/15px 2px no-repeat,
+          linear-gradient(#38bdf8,#38bdf8) right 0 bottom 0/2px 15px no-repeat;
         filter:drop-shadow(0 0 6px rgba(56,189,248,.7)); }
-      #${PANEL_ID} .field .field { position:static; background:none; border:none; border-radius:0; padding:0; margin:0; }
+      /* nested .field stays bracket-free + edge-free — only the outer numbered step cards get the HUD frame */
+      #${PANEL_ID} .field .field { position:static; background:none; border:none; border-radius:0; padding:0; margin:0; box-shadow:none; }
+      #${PANEL_ID} .field .field::after { content:none; }
       #${PANEL_ID} .field .field:focus-within { box-shadow:none; }
-      #${PANEL_ID} .field .field:focus-within::after { content:none; }
       #${PANEL_ID} .field > label { font-size:12px; font-weight:600; color:#e8eef7; margin-bottom:7px; letter-spacing:.2px; }
       #${PANEL_ID} label { display:block; font-size:11px; color:#94a3b8; margin-bottom:3px; }
       #${PANEL_ID} input[type=text], #${PANEL_ID} input[type=file], #${PANEL_ID} input[type=datetime-local], #${PANEL_ID} select, #${PANEL_ID} textarea {
@@ -2899,7 +2923,7 @@
     const ledClass = state.status.type === 'error' ? 'err' : state.status.type === 'warning' ? 'warn' : '';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>FB LAUNCHER // v0.17.0</span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>FB LAUNCHER // v0.17.1</span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
