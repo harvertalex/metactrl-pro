@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.13.0 — Bookmarklet
+ * FB Launcher v0.14.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -28,6 +28,9 @@
  * v0.13.0: CSV-less adset count — "number of ad sets" field makes N identical adsets without CSV
  *          (same targeting on each); unlocks the 6.5 creative-distribution matrix for CSV-less
  *          launches + adds a "1 per ad set" round-robin button (ad set i → creative i, cycling).
+ * v0.14.0: layout — two-column body. Logs moved from a cramped strip at the bottom into a
+ *          full-height left rail (collapsible, auto-sticks to newest line); form scrolls on the
+ *          right. Header spans both columns. Wider panel (1140px). In-panel version label fixed.
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -214,6 +217,7 @@
     autoSavePreset: false,    // v0.5: when true, success launch creates a timestamped preset
     adsetAssignments: {},     // v0.4: { adsetName: [creativeIndex, ...] } — empty = all creatives go to all adsets
     showAssignments: false,   // v0.4: collapse state for per-adset assignment UI
+    logRailCollapsed: false,  // v0.14.0: left log rail collapse toggle (session-only UI pref)
     matrixPaintValue: null,   // v0.5.3: paint-drag value (true=set, false=unset) while mouse button held over cells
     creativesInput: '',       // v0.2: raw user input (textarea)
     creativesParsed: null,    // v0.2: { mode: 'list'|'map'|'single', list?, map?, value? }
@@ -2565,21 +2569,32 @@
     const style = document.createElement('style');
     style.id = '__fb_launcher_styles__';
     style.textContent = `
-      #${PANEL_ID} { position:fixed; top:0; right:0; width:920px; max-width:94vw; height:100vh;
+      #${PANEL_ID} { position:fixed; top:0; right:0; width:1140px; max-width:96vw; height:100vh;
         background:linear-gradient(180deg,#0d1526 0%,#0a0f1c 100%); color:#e2e8f0; z-index:2147483646;
         border-left:1px solid #1e2a44; box-shadow:-10px 0 30px rgba(0,0,0,.5);
         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-        font-size:13px; overflow-y:auto; padding:0 18px 16px; box-sizing:border-box; }
-      #${PANEL_ID}::-webkit-scrollbar { width:10px; }
-      #${PANEL_ID}::-webkit-scrollbar-track { background:transparent; }
-      #${PANEL_ID}::-webkit-scrollbar-thumb { background:#243049; border-radius:5px; border:2px solid #0a0f1c; }
-      #${PANEL_ID}::-webkit-scrollbar-thumb:hover { background:#3b4a66; }
-      /* v0.9.0: header bar — full-bleed gradient */
-      #${PANEL_ID} h2 { margin:0 -18px 14px; padding:15px 18px; font-size:15px; font-weight:700; color:#fff;
+        font-size:13px; display:flex; flex-direction:column; overflow:hidden; box-sizing:border-box; }
+      /* v0.14.0: custom scrollbar on the inner scroll panes (left log rail + right form) */
+      #${PANEL_ID} .fbl-scroll::-webkit-scrollbar { width:10px; }
+      #${PANEL_ID} .fbl-scroll::-webkit-scrollbar-track { background:transparent; }
+      #${PANEL_ID} .fbl-scroll::-webkit-scrollbar-thumb { background:#243049; border-radius:5px; border:2px solid #0a0f1c; }
+      #${PANEL_ID} .fbl-scroll::-webkit-scrollbar-thumb:hover { background:#3b4a66; }
+      /* v0.14.0: two-column body — left log rail, right scrolling form. Header spans both. */
+      #${PANEL_ID} .fbl-cols { display:flex; flex:1; min-height:0; overflow:hidden; }
+      #${PANEL_ID} .fbl-lograil { width:330px; flex-shrink:0; display:flex; flex-direction:column;
+        border-right:1px solid #1e2a44; background:rgba(0,0,0,.22); transition:width .15s; }
+      #${PANEL_ID} .fbl-lograil.collapsed { width:38px; }
+      #${PANEL_ID} .fbl-railhead { flex-shrink:0; display:flex; align-items:center; justify-content:space-between;
+        padding:9px 11px; font-size:12px; font-weight:700; color:#cbd5e1; border-bottom:1px solid #1e2a44; }
+      #${PANEL_ID} .fbl-railbody { flex:1; min-height:0; display:flex; flex-direction:column; padding:10px 11px; overflow:hidden; }
+      #${PANEL_ID} .fbl-lograil.collapsed .fbl-railbody, #${PANEL_ID} .fbl-lograil.collapsed .fbl-railhead .ttl { display:none; }
+      #${PANEL_ID} .fbl-main { flex:1; min-width:0; overflow-y:auto; padding:0 18px 18px; }
+      /* header bar — full-bleed gradient */
+      #${PANEL_ID} h2 { margin:0; padding:15px 18px; font-size:15px; font-weight:700; color:#fff; flex-shrink:0;
         background:linear-gradient(100deg,#1d4ed8 0%,#3b82f6 60%,#6366f1 100%);
-        display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:5;
+        display:flex; align-items:center; justify-content:space-between; z-index:5;
         box-shadow:0 2px 12px rgba(29,78,216,.35); letter-spacing:.3px; }
-      #${PANEL_ID} .sub { color:#94a3b8; font-size:11px; margin-bottom:14px; }
+      #${PANEL_ID} .sub { color:#94a3b8; font-size:11px; margin:14px 0; }
       /* v0.9.0: each numbered step = a card with a left accent; nested fields stay plain */
       #${PANEL_ID} .field { background:#131d31; border:1px solid #233148; border-left:3px solid #3b82f6;
         border-radius:9px; padding:11px 13px; margin-bottom:11px; transition:border-color .15s; }
@@ -2604,9 +2619,9 @@
         border-left:3px solid #22c55e; border-radius:9px; padding:9px 12px; font-size:11px; color:#cbd5e1; line-height:1.6;
         margin-bottom:11px; }
       #${PANEL_ID} .preview b { color:#fff; }
-      #${PANEL_ID} .log { background:rgba(0,0,0,.3); border:1px solid #334155; border-radius:6px;
-        padding:8px 10px; max-height:240px; overflow-y:auto; font-family:ui-monospace,monospace;
-        font-size:11px; }
+      #${PANEL_ID} .log { flex:1; min-height:0; overflow-y:auto; background:rgba(0,0,0,.25);
+        border:1px solid #233148; border-radius:6px; padding:8px 10px;
+        font-family:ui-monospace,monospace; font-size:11px; }
       #${PANEL_ID} .log div { word-break:break-word; line-height:1.45; margin-bottom:2px;
         padding:1px 0; }
       #${PANEL_ID} .log div.error-line { background:rgba(239,68,68,.08);
@@ -2627,6 +2642,9 @@
       #${PANEL_ID} .grid2 > .field, #${PANEL_ID} .grid3 > .field { margin-bottom:0; min-width:0; }
       @media (max-width:760px) {
         #${PANEL_ID} .grid2, #${PANEL_ID} .grid3 { grid-template-columns:1fr; }
+        #${PANEL_ID} .fbl-cols { flex-direction:column; }
+        #${PANEL_ID} .fbl-lograil { width:auto; max-height:30vh; border-right:none; border-bottom:1px solid #1e2a44; }
+        #${PANEL_ID} .fbl-lograil.collapsed { width:auto; }
       }
       /* v0.7.0: marker chips */
       #${PANEL_ID} .chips { display:flex; flex-wrap:wrap; gap:5px; }
@@ -2714,8 +2732,9 @@
         scrollSnapshot.set(el.id, { left: el.scrollLeft, top: el.scrollTop });
       }
     });
-    // Also snapshot panel's own scroll (the right-side side panel itself)
-    const panelScrollTop = panel.scrollTop;
+    // v0.14.0: keep the log rail pinned to the newest line unless the user scrolled up to read history
+    const logEl0 = document.getElementById('fbl-log');
+    const logStick = logEl0 ? (logEl0.scrollHeight - logEl0.scrollTop - logEl0.clientHeight < 60) : true;
 
     const plan = analyzePlan();
     const accFilter = state.accFilter.toLowerCase();
@@ -2787,9 +2806,21 @@
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
 
     panel.innerHTML = `
-      <h2>🚀 FB Launcher v0.11.0
+      <h2>🚀 FB Launcher v0.14.0
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
+      <div class="fbl-cols">
+        <aside class="fbl-lograil${state.logRailCollapsed ? ' collapsed' : ''}">
+          <div class="fbl-railhead">
+            <span class="ttl">📋 Activity log${state.log.length ? ` · ${state.log.length}` : ''}</span>
+            <button id="fbl-rail-toggle" title="${state.logRailCollapsed ? 'Expand log' : 'Collapse log'}" style="padding:1px 7px;font-size:12px;border-radius:5px">${state.logRailCollapsed ? '▶' : '◀'}</button>
+          </div>
+          <div class="fbl-railbody">
+            ${state.progress.total ? `<div class="progress" style="margin:0 0 8px"><div style="width:${progressPct}%"></div></div>` : ''}
+            <div class="log fbl-scroll" id="fbl-log">${state.log.length ? logHtml() : '<div style="color:#475569">Logs appear here when you launch.<br><br>Build &amp; preview the campaign on the right →</div>'}</div>
+          </div>
+        </aside>
+        <div class="fbl-main fbl-scroll" id="fbl-main">
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
 
       <div class="status ${state.status.type}">${esc(state.status.text)}</div>
@@ -3343,10 +3374,8 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       <button class="primary" id="fbl-run" ${runDisabled ? 'disabled' : ''} style="width:100%">
         ${state.dryRun && !runDisabled ? '🟦 DRY RUN — ' : ''}${buttonLabel}
       </button>
-
-      ${state.progress.total ? `<div class="progress"><div style="width:${progressPct}%"></div></div>` : ''}
-
-      ${state.log.length ? `<div style="margin-top:12px"><div class="log">${logHtml()}</div></div>` : ''}
+        </div>
+      </div>
     `;
 
     bindEvents();
@@ -3360,7 +3389,9 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
         if (pos.top) el.scrollTop = pos.top;
       }
     });
-    if (panelScrollTop) panel.scrollTop = panelScrollTop;
+    // v0.14.0: log auto-stick to bottom (overrides the generic restore above for #fbl-log)
+    const logEl = document.getElementById('fbl-log');
+    if (logEl && logStick) logEl.scrollTop = logEl.scrollHeight;
 
     // Restore focus + cursor position to the same input/textarea after re-render
     if (activeId) {
@@ -3382,6 +3413,11 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     document.getElementById('fbl-close')?.addEventListener('click', () => {
       panel.remove();
       document.getElementById('__fb_launcher_styles__')?.remove();
+    });
+    // v0.14.0: collapse/expand the left log rail
+    document.getElementById('fbl-rail-toggle')?.addEventListener('click', () => {
+      state.logRailCollapsed = !state.logRailCollapsed;
+      render();
     });
     document.getElementById('fbl-csv')?.addEventListener('change', e => {
       const f = e.target.files?.[0];
