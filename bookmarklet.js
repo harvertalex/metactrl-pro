@@ -20,9 +20,10 @@
    ========================================================= */
 
 /* -------------------- CONFIG -------------------- */
+// v24.2 — Cyberpunk HUD visual skin (matches FB Launcher v0.18.0): teal palette, cyan corner brackets, glowing primary/tabs, segmented progress, telemetry logbox. CSS/skin pass only.
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v24.1',
+  APP_VERSION: 'v24.2',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -544,50 +545,104 @@ if (!document.getElementById('ar-styles')) {
   const st = document.createElement('style');
   st.id = 'ar-styles';
   st.textContent = `
-    #ar-modal { --bg:#0f172a; --surf:#1e293b; --card:#162032; --bdr:#334155; --txt:#e2e8f0; --muted:#94a3b8; --acc:#3b82f6; --ok:#22c55e; --warn:#f59e0b; --err:#ef4444; }
+    /* === Cyberpunk HUD skin (matches FB Launcher v0.18.0). CSS/skin pass only — no markup/handler ids renamed. ===
+       Accent split: cyan #38bdf8 = HUD chrome/brackets/headers/readouts/logbox (telemetry, read-only state);
+       blue --acc #3b82f6 = primary action + active tab + focus-able interactive. Dial-back levers noted inline. */
+    #ar-modal { --bg:#04141a; --surf:#082530; --card:#06222d; --bdr:#103a47; --txt:#e2e8f0; --muted:#8aa0a8; --acc:#3b82f6; --cyan:#38bdf8; --ok:#22c55e; --warn:#fbbf24; --err:#ef4444; }
     #ar-modal,#ar-modal * { box-sizing:border-box; }
-    #ar-modal input,#ar-modal select { background:var(--card); color:var(--txt); border:1px solid var(--bdr); border-radius:8px; padding:7px 10px; font-size:13px; outline:none; width:100%; transition:border-color .15s; }
+    /* HUD: BOLD cyan corner brackets framing the whole console, all 4 corners. Top legs start ~58px down so they
+       frame the body and clear the header / close button. 34px legs / 2.5px / glow. Lever: alpha .9 / glow 8px / leg 34px. */
+    #ar-modal::before { content:''; position:absolute; left:0; right:0; top:58px; bottom:0; pointer-events:none; z-index:6;
+      background:
+        linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) left 8px top 6px/34px 2.5px no-repeat,
+        linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) left 8px top 6px/2.5px 34px no-repeat,
+        linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) right 8px top 6px/34px 2.5px no-repeat,
+        linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) right 8px top 6px/2.5px 34px no-repeat,
+        linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) left 8px bottom 8px/34px 2.5px no-repeat,
+        linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) left 8px bottom 8px/2.5px 34px no-repeat,
+        linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) right 8px bottom 8px/34px 2.5px no-repeat,
+        linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) right 8px bottom 8px/2.5px 34px no-repeat;
+      filter:drop-shadow(0 0 8px rgba(56,189,248,.7)); }
+    /* HUD: faint cyan dot-grid behind the modal body (optional, GPU-cheap). Solid card bgs keep text crisp over it. Lever: alpha .06→.03. */
+    #ar-modal::after { content:''; position:absolute; inset:0; pointer-events:none; z-index:0; border-radius:14px;
+      background-image:radial-gradient(circle, rgba(56,189,248,.06) 1.2px, transparent 1.2px); background-size:22px 22px; }
+    #ar-modal > * { position:relative; z-index:1; }
+    #ar-modal input,#ar-modal select { background:var(--card); color:var(--txt); border:1px solid #1a4a5a; border-radius:8px; padding:7px 10px; font-size:13px; outline:none; width:100%; transition:border-color .15s,box-shadow .15s; }
     #ar-modal input[type="checkbox"],#ar-modal input[type="radio"] { width:auto; padding:0; background:transparent; border:none; border-radius:0; flex-shrink:0; }
-    #ar-modal input:focus,#ar-modal select:focus { border-color:var(--acc); box-shadow:0 0 0 2px rgba(59,130,246,.18); }
+    /* HUD: focus = cyan lock-on ring (telemetry state). Primary action stays action-blue. */
+    #ar-modal input:focus,#ar-modal select:focus { border-color:var(--cyan); box-shadow:0 0 0 2px rgba(56,189,248,.25),0 0 10px rgba(56,189,248,.15); }
     #ar-modal input::placeholder { color:var(--muted); }
     #ar-modal select option { background:var(--surf); }
     .ar-label { font-size:12px; color:var(--muted); display:block; margin-bottom:4px; }
-    .ar-btn { padding:9px 16px; border:none; border-radius:8px; font-weight:600; font-size:13px; cursor:pointer; transition:opacity .15s,transform .1s; }
-    .ar-btn:hover { opacity:.85; } .ar-btn:active { transform:scale(.97); }
-    .ar-btn-primary { background:var(--acc); color:#fff; }
+    .ar-btn { padding:9px 16px; border:none; border-radius:8px; font-weight:600; font-size:13px; cursor:pointer; transition:opacity .15s,transform .1s,box-shadow .15s,background .15s; }
+    .ar-btn:hover { opacity:.92; } .ar-btn:active { transform:scale(.97); }
+    /* HUD: primary = glowing blue gradient hero action (the one allowed blue accent on a clickable). Lever: drop the outer two glow rings to calm it. */
+    .ar-btn-primary { background:linear-gradient(100deg,#2563eb,#3b82f6 55%,#4f8df9); color:#f0f7ff; letter-spacing:.4px;
+      box-shadow:0 0 0 1px rgba(125,211,252,.4),0 0 16px rgba(56,189,248,.4),0 0 32px rgba(37,99,235,.28); }
+    .ar-btn-primary:hover { background:linear-gradient(100deg,#3b82f6,#2563eb 55%,#5b95ff);
+      box-shadow:0 0 0 1px rgba(125,211,252,.6),0 0 22px rgba(56,189,248,.6),0 0 44px rgba(37,99,235,.4); }
     .ar-btn-danger  { background:var(--err); color:#fff; }
-    .ar-btn-ghost   { background:var(--surf); color:var(--txt); border:1px solid var(--bdr); }
+    /* HUD: ghost = thin cyan-outlined transparent. */
+    .ar-btn-ghost   { background:rgba(56,189,248,.05); color:#7dd3fc; border:1px solid rgba(56,189,248,.4); }
+    .ar-btn-ghost:hover { background:rgba(56,189,248,.12); border-color:var(--cyan); box-shadow:0 0 8px rgba(56,189,248,.25); }
     .ar-btn-success { background:#16a34a; color:#fff; }
     .ar-btn-sm      { padding:5px 12px; font-size:12px; }
-    .ar-tab { padding:8px 16px; border:none; border-radius:8px; background:transparent; color:var(--muted); font-weight:600; font-size:13px; cursor:pointer; transition:all .15s; }
-    .ar-tab:hover { color:var(--txt); background:var(--surf); }
-    .ar-tab.active { background:var(--acc); color:#fff; }
+    /* HUD: tabs = command nav. UPPERCASE + tracking; hover = thin cyan outline; active = blue glow (action). */
+    .ar-tab { padding:8px 16px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--muted); font-weight:600; font-size:12px; letter-spacing:.6px; text-transform:uppercase; cursor:pointer; transition:all .15s; }
+    .ar-tab:hover { color:#cbd5e1; background:rgba(56,189,248,.06); border-color:rgba(56,189,248,.35); }
+    .ar-tab.active { background:linear-gradient(100deg,#2563eb,#3b82f6); color:#fff; border-color:transparent; box-shadow:0 0 12px rgba(56,189,248,.45); }
+    /* HUD: section = framed module. UPPERCASE title + tracking + leading glowing cyan ▸ glyph. Collapse (.ar-chev) unchanged. */
     .ar-sec-hdr { display:flex; align-items:center; gap:8px; padding:10px 0 8px; margin-top:10px; border-bottom:1px solid var(--bdr); cursor:pointer; user-select:none; }
-    .ar-sec-hdr .ar-sec-title { flex:1; font-weight:700; font-size:13px; color:var(--txt); }
-    .ar-sec-hdr .ar-sec-ico   { font-size:15px; }
-    .ar-sec-hdr .ar-chev      { color:var(--muted); font-size:10px; transition:transform .2s; }
+    .ar-sec-hdr .ar-sec-title { flex:1; font-weight:700; font-size:12px; letter-spacing:.9px; text-transform:uppercase; color:#d6f3ff; display:flex; align-items:center; gap:6px; }
+    .ar-sec-hdr .ar-sec-title::before { content:'▸'; color:var(--cyan); font-weight:700; text-shadow:0 0 6px rgba(56,189,248,.7); }
+    .ar-sec-hdr .ar-sec-ico   { font-size:15px; filter:drop-shadow(0 0 5px rgba(56,189,248,.4)); }
+    .ar-sec-hdr .ar-chev      { color:var(--cyan); font-size:10px; transition:transform .2s; opacity:.8; }
     .ar-sec-hdr.open .ar-chev { transform:rotate(180deg); }
-    .ar-sec-body { padding-top:8px; }
+    /* HUD: section body = framed module with faint cyan corner brackets (matches launcher .field::after). Lever: alpha .4 / legs 16px. */
+    .ar-sec-body { position:relative; padding:12px 12px 4px; margin-top:2px; }
+    .ar-sec-body::before { content:''; position:absolute; inset:0; pointer-events:none; z-index:0;
+      background:
+        linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) left 0 top 0/16px 2px no-repeat,
+        linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) left 0 top 0/2px 16px no-repeat,
+        linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) right 0 top 0/16px 2px no-repeat,
+        linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) right 0 top 0/2px 16px no-repeat,
+        linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) left 0 bottom 0/16px 2px no-repeat,
+        linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) left 0 bottom 0/2px 16px no-repeat,
+        linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) right 0 bottom 0/16px 2px no-repeat,
+        linear-gradient(rgba(56,189,248,.4),rgba(56,189,248,.4)) right 0 bottom 0/2px 16px no-repeat; }
+    .ar-sec-body > * { position:relative; z-index:1; }
     .ar-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px 16px; }
     .ar-grid .col2 { grid-column:span 2; }
     .ar-field { display:flex; flex-direction:column; }
-    .ar-rule-new { font-size:10px; font-weight:700; color:#f59e0b; background:rgba(245,158,11,.12); padding:1px 5px; border-radius:4px; margin-left:5px; vertical-align:middle; }
+    .ar-rule-new { font-size:10px; font-weight:700; color:#fbbf24; background:rgba(251,191,36,.14); padding:1px 5px; border-radius:4px; margin-left:5px; vertical-align:middle; }
     .ar-preset-row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
-    .ar-preset-btn { padding:5px 13px; border:1px solid var(--bdr); border-radius:6px; background:var(--surf); color:var(--txt); font-size:12px; font-weight:600; cursor:pointer; transition:all .15s; }
-    .ar-preset-btn:hover { border-color:var(--acc); color:var(--acc); }
+    /* HUD: preset pills = cyan HUD pills (read-only-style chrome), hover brightens. */
+    .ar-preset-btn { padding:5px 13px; border:1px solid rgba(56,189,248,.35); border-radius:6px; background:rgba(56,189,248,.05); color:#9fd9f5; font-size:12px; font-weight:600; cursor:pointer; transition:all .15s; }
+    .ar-preset-btn:hover { border-color:var(--cyan); color:#cffafe; background:rgba(56,189,248,.14); box-shadow:0 0 8px rgba(56,189,248,.25); }
     .ar-entity-row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:4px; }
-    .ar-entity-pill { padding:6px 16px; border:1px solid var(--bdr); border-radius:20px; background:var(--surf); color:var(--muted); font-size:13px; font-weight:600; cursor:pointer; transition:all .15s; }
-    .ar-entity-pill.sel { background:var(--acc); color:#fff; border-color:var(--acc); }
-    .ar-info { background:rgba(59,130,246,.07); border:1px solid rgba(59,130,246,.25); border-radius:8px; padding:10px 14px; font-size:12px; color:var(--muted); line-height:1.6; }
+    /* HUD: entity pills resting = dim teal cell; .sel = bright blue active (a selected state → action accent). */
+    .ar-entity-pill { padding:6px 16px; border:1px solid #1a4a5a; border-radius:20px; background:#06222d; color:var(--muted); font-size:13px; font-weight:600; cursor:pointer; transition:all .15s; }
+    .ar-entity-pill:hover { border-color:#2b6e8a; color:#cbd5e1; }
+    .ar-entity-pill.sel { background:linear-gradient(100deg,#2563eb,#3b82f6); color:#fff; border-color:transparent; box-shadow:0 0 10px rgba(56,189,248,.4); }
+    /* HUD: info panel = teal telemetry panel with cyan hairline. */
+    .ar-info { background:rgba(56,189,248,.06); border:1px solid rgba(56,189,248,.25); border-radius:8px; padding:10px 14px; font-size:12px; color:#a7c3cd; line-height:1.6; }
     .ar-divider { border:none; border-top:1px solid var(--bdr); margin:12px 0; }
-    .ar-logbox { background:var(--card); border:1px solid var(--bdr); border-radius:8px; padding:8px 10px; height:120px; overflow:auto; font:11px/1.4 ui-monospace,monospace; color:var(--txt); }
-    .ar-badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; background:var(--surf); color:var(--muted); }
-    .ar-badge-ok   { background:rgba(34,197,94,.12); color:#22c55e; }
-    .ar-badge-warn { background:rgba(245,158,11,.12); color:#f59e0b; }
-    .ar-acc-item   { padding:9px 12px; border-radius:8px; border:1px solid var(--bdr); margin-bottom:6px; background:var(--card); cursor:pointer; display:flex; align-items:center; gap:10px; transition:border-color .15s; }
-    .ar-acc-item:hover,.ar-acc-item.sel { border-color:var(--acc); }
-    .ar-progress { height:3px; background:var(--bdr); border-radius:2px; overflow:hidden; margin-top:8px; }
-    .ar-progress-bar { height:100%; background:var(--acc); width:0%; transition:width .3s; }
+    /* HUD: logbox = telemetry feed — darkest surface, cyan mono, faint scanline (matches launcher .log). */
+    .ar-logbox { background:#020a10;
+      background-image:repeating-linear-gradient(0deg, rgba(56,189,248,.035) 0, rgba(56,189,248,.035) 1px, transparent 1px, transparent 3px);
+      border:1px solid #0e3a47; border-radius:8px; padding:8px 10px; height:120px; overflow:auto; font:11px/1.45 ui-monospace,monospace; font-variant-numeric:tabular-nums; color:#7dd3fc; }
+    /* HUD: badges = cyan-tinted readouts; semantic ok/warn keep their hue. */
+    .ar-badge { display:inline-block; padding:2px 8px; border-radius:6px; font-size:11px; font-weight:600; font-family:ui-monospace,monospace; background:rgba(56,189,248,.08); border:1px solid rgba(56,189,248,.28); color:#9fd9f5; }
+    .ar-badge-ok   { background:rgba(34,197,94,.12); border-color:rgba(34,197,94,.3); color:#4ade80; }
+    .ar-badge-warn { background:rgba(251,191,36,.12); border-color:rgba(251,191,36,.3); color:#fbbf24; }
+    /* HUD: account row selected = cyan border + glow (lock-on). */
+    .ar-acc-item   { padding:9px 12px; border-radius:8px; border:1px solid var(--bdr); margin-bottom:6px; background:var(--card); cursor:pointer; display:flex; align-items:center; gap:10px; transition:border-color .15s,box-shadow .15s; }
+    .ar-acc-item:hover { border-color:#2b6e8a; }
+    .ar-acc-item.sel { border-color:var(--cyan); box-shadow:0 0 12px rgba(56,189,248,.25); }
+    /* HUD: progress = segmented glowing cyan→blue meter (matches launcher .progress). The ::after stripes punch gaps between cells. */
+    .ar-progress { position:relative; height:6px; background:#031019; border:1px solid #103a47; border-radius:3px; overflow:hidden; margin-top:8px; box-shadow:inset 0 0 5px rgba(0,0,0,.5); }
+    .ar-progress-bar { height:100%; background:linear-gradient(90deg,#38bdf8,#2563eb); box-shadow:0 0 10px rgba(56,189,248,.7),inset 0 0 4px rgba(224,247,255,.5); width:0%; transition:width .3s; }
+    .ar-progress::after { content:''; position:absolute; inset:0; pointer-events:none; background:repeating-linear-gradient(90deg, transparent 0 9px, #031019 9px 12px); }
   `;
   document.head.appendChild(st);
 }
@@ -600,21 +655,24 @@ function makeModal() {
 
   const wrap = document.createElement('div');
   wrap.id = 'ar-modal';
+  // HUD: dark-teal console bg + brighter cyan border + inset cyan rim (matches launcher panel). Brackets via #ar-modal::before (CSS).
   Object.assign(wrap.style, {
     position:'fixed', top:'50%', left:'50%', transform:'translate(-50%,-50%)',
     width:'1040px', maxWidth:'97vw', maxHeight:'93vh', overflow:'auto',
-    background:'var(--bg)', color:'var(--txt)', borderRadius:'14px',
-    padding:'20px 22px', boxShadow:'0 24px 70px rgba(0,0,0,.6)',
+    background:'linear-gradient(180deg,#061a22 0%,#04141a 100%)', color:'var(--txt)', borderRadius:'14px',
+    padding:'20px 22px', boxShadow:'0 24px 70px rgba(0,0,0,.6),inset 0 0 0 1px rgba(56,189,248,.1)',
     zIndex:'2000000001', fontFamily:'system-ui,-apple-system,Segoe UI,Roboto,Arial',
-    border:'1px solid var(--bdr)'
+    border:'1px solid #0e3a47'
   });
 
+  // HUD: header → mono command-bar. Status LED (green) + "METACTRL // PRO" uppercase tracked title. Version/host badges kept.
   wrap.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-      <div style="display:flex;align-items:center;gap:10px">
-        <h2 style="margin:0;font-size:17px;font-weight:700;color:var(--txt)">MetaCtrl PRO</h2>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding:11px 14px;background:#02101a;border:1px solid #0e3a47;border-radius:10px;box-shadow:inset 0 1px 0 rgba(56,189,248,.1)">
+      <div style="display:flex;align-items:center;gap:11px">
+        <span style="width:9px;height:9px;border-radius:50%;background:#22c55e;box-shadow:0 0 8px #22c55e;flex-shrink:0;display:inline-block"></span>
+        <h2 style="margin:0;font-size:15px;font-weight:700;color:#e8eef7;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px">METACTRL <span style="color:#38bdf8;text-shadow:0 0 7px rgba(56,189,248,.6)">//</span> PRO</h2>
         <span class="ar-badge" style="font-size:10px">${CONFIG.APP_VERSION}</span>
-        <span class="ar-badge" style="font-size:10px;opacity:.6">${CONFIG.HOST.replace('https://','')}</span>
+        <span class="ar-badge" style="font-size:10px;opacity:.7">${CONFIG.HOST.replace('https://','')}</span>
       </div>
       <button id="ar-close" class="ar-btn ar-btn-danger ar-btn-sm">✕ Close</button>
     </div>
