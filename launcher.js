@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.18.0 — Bookmarklet
+ * FB Launcher v0.18.1 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -58,6 +58,9 @@
  *          1px→1.4px (clearly visible in the gaps). Panel frame brackets 18px→26px legs, alpha .45→.7,
  *          glow .4→.6. Subtle cyan inset top hairline on cards at rest. No logic change.
  * v0.18.0: FULL Cyberpunk HUD redesign (CSS/skin pass — no logic change, all form ids/handlers/DOM intact).
+ * v0.18.1: DSA payor fix — FB API field is `dsa_payor`, not `dsa_payer`. The typo was silently
+ *          dropped; once FB made payor mandatory (2026, EU/gambling) it rejected every adset with
+ *          [100/3858079] blame_field_specs:[["dsa_payor"]]. Fixed on adset + ad POST bodies.
  *          Matches the "Cyberpunk HUD control panel" reference, boldly this time. Six areas:
  *          (1) Palette shifted navy → dark teal-black (panel #061a22→#04141a, cards #082530, inputs #06222d);
  *              cyan accents brightened (#38bdf8 / #5eead4); green #22c55e kept for online/ok.
@@ -2356,9 +2359,11 @@
         attribution_spec: attributionSpec(aFirst),
       };
       // EU DSA on adset level — required for some EU geos (esp. CEE: PL/CZ/HU/...)
+      // FB API field is `dsa_payor` (American spelling). `dsa_payer` is silently
+      // ignored → FB then rejects with [100/3858079] blame_field_specs:[["dsa_payor"]].
       if (state.dsaBeneficiary) {
         adsetBody.dsa_beneficiary = state.dsaBeneficiary;
-        adsetBody.dsa_payer = state.dsaPayer || state.dsaBeneficiary;
+        adsetBody.dsa_payor = state.dsaPayer || state.dsaBeneficiary;
       }
       if (!plan.isCBO) {
         // v0.7.0: per-adset budget override applies to every adset; else CSV column.
@@ -2592,9 +2597,10 @@
             status: state.createStatus,
           };
           // EU DSA fields (required when targeting EU; safe to send for all)
+          // FB API field is `dsa_payor` (not `dsa_payer`) — see adset note above.
           if (state.dsaBeneficiary) {
             adBodyPost.dsa_beneficiary = state.dsaBeneficiary;
-            adBodyPost.dsa_payer = state.dsaPayer || state.dsaBeneficiary;  // payer defaults to beneficiary
+            adBodyPost.dsa_payor = state.dsaPayer || state.dsaBeneficiary;  // payor defaults to beneficiary
           }
           if (state.dryRun) {
             addLog('info', `[${accLabel}] 🟦 ad payload: ${JSON.stringify(adBodyPost)}`);
@@ -3009,7 +3015,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>FB LAUNCHER // v0.18.0</span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>FB LAUNCHER // v0.18.1</span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
