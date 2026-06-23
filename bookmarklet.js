@@ -21,10 +21,13 @@
 
 /* -------------------- CONFIG -------------------- */
 // v24.2 — Cyberpunk HUD visual skin (matches FB Launcher v0.18.0): teal palette, cyan corner brackets, glowing primary/tabs, segmented progress, telemetry logbox. CSS/skin pass only.
+// v24.4 — panel docked to the right edge (full-height side panel), away from centered modal.
+// v24.5 — widened to 1040px; action log moved from a separate floating panel into an integrated
+//         left "◉ LIVE FEED" rail (STATUS now mounts into #ar-feed). Mirrors FB Launcher's log rail.
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v24.4',
+  APP_VERSION: 'v24.5',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -46,84 +49,68 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 /* -------------------- STATUS CENTER -------------------- */
 function createStatusCenter() {
-  const wrap = document.createElement('div');
-  Object.assign(wrap.style, {
-    position:'fixed', right:'18px', bottom:'18px', width:'520px',
-    maxWidth:'96vw', maxHeight:'60vh', display:'none',
-    background:'#0f172a', color:'#e5e7eb', border:'1px solid #334155',
-    borderRadius:'12px', boxShadow:'0 14px 40px rgba(0,0,0,.5)', zIndex:'2000000002',
-    font:'12px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace'
-  });
-  wrap.innerHTML = `
-    <div id="sc-head" style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid #334155;cursor:move">
-      <strong id="sc-title" style="font-size:12px">Status</strong>
-      <span id="sc-count" style="opacity:.6;font-size:11px"></span>
-      <div style="margin-left:auto;display:flex;gap:6px">
-        <button id="sc-collapse" style="background:#1e293b;border:1px solid #334155;color:#e5e7eb;border-radius:6px;padding:2px 8px;cursor:pointer;font-size:12px">–</button>
-        <button id="sc-clear"    style="background:#1e293b;border:1px solid #334155;color:#e5e7eb;border-radius:6px;padding:2px 8px;cursor:pointer;font-size:12px">Clear</button>
-        <button id="sc-close"   style="background:#ef4444;border:1px solid #b91c1c;color:#fff;border-radius:6px;padding:2px 8px;cursor:pointer;font-size:12px">✕</button>
-      </div>
-    </div>
-    <div id="sc-body" style="padding:8px 10px;overflow:auto;max-height:40vh"></div>
-    <div id="sc-foot" style="padding:6px 10px;border-top:1px solid #334155;font-size:11px;opacity:.5">OK=green  WARN=orange  ERROR=red — drag by header</div>`;
-  document.body.appendChild(wrap);
-
-  const body   = wrap.querySelector('#sc-body');
-  const title  = wrap.querySelector('#sc-title');
-  const countEl= wrap.querySelector('#sc-count');
-  let total=0, ok=0, warn=0, err=0;
+  // v24.5: STATUS renders into the LIVE FEED rail docked inside #ar-modal (bound via
+  // mount() from makeModal) — no longer a separate floating panel. entries[] preserves
+  // the action log across panel close/reopen.
+  const entries = [];
+  let total = 0, ok = 0, warn = 0, err = 0;
+  let railBody = null, statusEl = null, countEl = null;
 
   const colorFor = t => t==='error'?'#fca5a5':t==='warning'?'#fcd34d':t==='success'?'#86efac':'#cbd5e1';
   const iconFor  = t => t==='error'?'⛔':t==='warning'?'⚠️':t==='success'?'✅':'·';
+  const PLACEHOLDER = '<div style="color:#475569">Действия появятся здесь при запуске правил.</div>';
+  const lineHtml = e => `<span style="opacity:.45">${e.ts}</span> ${iconFor(e.type)} <span style="color:${colorFor(e.type)}">${escapeHtml(e.msg)}</span>`;
+  function refreshHead(){
+    if (countEl) countEl.textContent = entries.length ? ` · ${entries.length}` : '';
+    if (statusEl){
+      statusEl.classList.remove('warn','err');
+      if (err>0) statusEl.classList.add('err'); else if (warn>0) statusEl.classList.add('warn');
+      const w = statusEl.querySelector('.ar-railword');
+      if (w) w.textContent = 'STATUS: ' + (err>0 ? 'ERRORS' : warn>0 ? 'WARNINGS' : 'ONLINE');
+    }
+  }
 
   const sc = {
-    show(t){ title.textContent=t||'Status'; wrap.style.display='block'; sc._upd(); },
-    hide(){ wrap.style.display='none'; },
-    clear(){ body.innerHTML=''; total=ok=warn=err=0; sc._upd(); },
-    setTitle(t){ title.textContent=t; },
-    _upd(){ countEl.textContent=`${ok}✅ ${warn}⚠️ ${err}⛔ / ${total} total`; },
+    // Bind to the rail DOM built by makeModal; re-render buffered history.
+    mount(feedEl, statusElRef, countElRef){
+      railBody = feedEl; statusEl = statusElRef; countEl = countElRef;
+      if (railBody){
+        railBody.innerHTML = entries.length
+          ? entries.map(e => `<div style="margin:3px 0;white-space:pre-wrap">${lineHtml(e)}</div>`).join('')
+          : PLACEHOLDER;
+        railBody.scrollTop = railBody.scrollHeight;
+      }
+      refreshHead();
+    },
+    show(){ /* rail is always visible — kept for API compatibility */ },
+    hide(){ /* no-op */ },
+    setTitle(){ /* no-op */ },
+    clear(){
+      entries.length = 0; total = ok = warn = err = 0;
+      if (railBody) railBody.innerHTML = PLACEHOLDER;
+      refreshHead();
+    },
     log(msg, type='info'){
       total++;
       if (type==='success') ok++; else if (type==='warning') warn++; else if (type==='error') err++;
-      const ln = document.createElement('div');
-      ln.style.cssText = 'margin:3px 0;white-space:pre-wrap';
-      ln.innerHTML = `<span style="opacity:.45">${new Date().toLocaleTimeString()}</span> ${iconFor(type)} <span style="color:${colorFor(type)}">${escapeHtml(msg)}</span>`;
-      body.appendChild(ln);
-      body.scrollTop = body.scrollHeight;
-      sc._upd();
-    },
-    mountDrag(){
-      const head = wrap.querySelector('#sc-head');
-      let sx=0,sy=0,ox=0,oy=0,dragging=false;
-      head.addEventListener('mousedown', e => {
-        dragging=true; sx=e.clientX; sy=e.clientY;
-        const r=wrap.getBoundingClientRect(); ox=r.left; oy=r.top; e.preventDefault();
-      });
-      window.addEventListener('mousemove', e => {
-        if (!dragging) return;
-        Object.assign(wrap.style, { left:(ox+e.clientX-sx)+'px', top:(oy+e.clientY-sy)+'px', right:'auto', bottom:'auto' });
-      });
-      window.addEventListener('mouseup', () => dragging=false);
-    },
-    mountButtons(){
-      wrap.querySelector('#sc-close').onclick = () => sc.hide();
-      wrap.querySelector('#sc-clear').onclick = () => sc.clear();
-      const bodyEl = wrap.querySelector('#sc-body');
-      const footEl = wrap.querySelector('#sc-foot');
-      let col = false;
-      wrap.querySelector('#sc-collapse').onclick = () => {
-        col = !col;
-        bodyEl.style.display = col ? 'none' : 'block';
-        footEl.style.display = col ? 'none' : 'block';
-      };
+      const e = { ts:new Date().toLocaleTimeString(), type, msg:String(msg) };
+      entries.push(e);
+      if (railBody){
+        if (entries.length === 1) railBody.innerHTML = '';   // drop placeholder on first line
+        const ln = document.createElement('div');
+        ln.style.cssText = 'margin:3px 0;white-space:pre-wrap';
+        ln.innerHTML = lineHtml(e);
+        railBody.appendChild(ln);
+        railBody.scrollTop = railBody.scrollHeight;
+      }
+      refreshHead();
     }
   };
   return sc;
 }
 
 const STATUS = createStatusCenter();
-STATUS.mountButtons();
-STATUS.mountDrag();
+let STATE_RAIL_COLLAPSED = false;  // v24.5: LIVE FEED rail collapse state (session-persistent)
 
 /* -------------------- CURRENCY -------------------- */
 const CURRENCY_FIELDS = [
@@ -639,6 +626,27 @@ if (!document.getElementById('ar-styles')) {
     .ar-progress { position:relative; height:6px; background:#031019; border:1px solid #103a47; border-radius:3px; overflow:hidden; margin-top:8px; box-shadow:inset 0 0 5px rgba(0,0,0,.5); }
     .ar-progress-bar { height:100%; background:linear-gradient(90deg,#38bdf8,#2563eb); box-shadow:0 0 10px rgba(56,189,248,.7),inset 0 0 4px rgba(224,247,255,.5); width:0%; transition:width .3s; }
     .ar-progress::after { content:''; position:absolute; inset:0; pointer-events:none; background:repeating-linear-gradient(90deg, transparent 0 9px, #031019 9px 12px); }
+    /* v24.5: two-column body + LIVE FEED rail (ported from FB Launcher's .fbl-lograil). */
+    #ar-modal .ar-body { display:flex; flex:1; min-height:0; gap:14px; overflow:hidden; }
+    #ar-modal #ar-right { flex:1; min-width:0; display:flex; flex-direction:column; overflow:hidden; }
+    #ar-modal .ar-lograil { width:300px; flex-shrink:0; display:flex; flex-direction:column; border:1px solid #0e3a47; border-radius:10px; background:#03101a; overflow:hidden; transition:width .15s; }
+    #ar-modal .ar-lograil.collapsed { width:40px; }
+    #ar-modal .ar-railhead { flex-shrink:0; display:flex; align-items:center; justify-content:space-between; gap:6px; padding:9px 11px; font-size:12px; font-weight:700; color:#7dd3fc; border-bottom:1px solid #0e3a47; font-family:ui-monospace,monospace; letter-spacing:.5px; text-shadow:0 0 7px rgba(56,189,248,.5); }
+    #ar-modal .ar-lograil.collapsed .ar-railhead { justify-content:center; padding:9px 0; }
+    #ar-modal .ar-railbtn { background:rgba(56,189,248,.06); border:1px solid rgba(56,189,248,.3); color:#7dd3fc; border-radius:5px; padding:1px 7px; font-size:12px; line-height:1.4; cursor:pointer; transition:all .15s; }
+    #ar-modal .ar-railbtn:hover { background:rgba(56,189,248,.14); border-color:var(--cyan); }
+    #ar-modal .ar-railstatus { flex-shrink:0; display:flex; align-items:center; gap:7px; padding:8px 11px 6px; font-family:ui-monospace,monospace; font-size:10.5px; font-weight:700; letter-spacing:1px; color:#4ade80; }
+    #ar-modal .ar-railstatus .dot { width:8px; height:8px; border-radius:50%; background:#22c55e; box-shadow:0 0 8px #22c55e; animation:ar-led-pulse 2.4s ease-in-out infinite; }
+    #ar-modal .ar-railstatus.warn { color:#fbbf24; } #ar-modal .ar-railstatus.warn .dot { background:#fbbf24; box-shadow:0 0 8px #fbbf24; }
+    #ar-modal .ar-railstatus.err  { color:#f87171; } #ar-modal .ar-railstatus.err .dot { background:#ef4444; box-shadow:0 0 8px #ef4444; }
+    #ar-modal .ar-railbody { flex:1; min-height:0; overflow:auto; padding:8px 10px; font:11px/1.45 ui-monospace,monospace; font-variant-numeric:tabular-nums; color:#7dd3fc; background:#020a10; background-image:repeating-linear-gradient(0deg, rgba(56,189,248,.035) 0, rgba(56,189,248,.035) 1px, transparent 1px, transparent 3px); }
+    #ar-modal .ar-lograil.collapsed .ttl, #ar-modal .ar-lograil.collapsed .ar-railstatus, #ar-modal .ar-lograil.collapsed .ar-railbody, #ar-modal .ar-lograil.collapsed #ar-feed-clear { display:none; }
+    @keyframes ar-led-pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+    @media (max-width:880px){
+      #ar-modal .ar-body { flex-direction:column; gap:10px; }
+      #ar-modal .ar-lograil { width:auto !important; max-height:24vh; }
+      #ar-modal .ar-lograil.collapsed { width:auto !important; max-height:36px; }
+    }
   `;
   document.head.appendChild(st);
 }
@@ -655,13 +663,13 @@ function makeModal() {
   // v24.3 fix: modal is a NON-scrolling flex column (overflow:hidden) at fixed max-height. Header + tab-bar stay pinned (flex-shrink:0);
   // the 7 tab divs live inside #ar-scroll (flex:1; overflow:auto) which scrolls. So #ar-modal::before brackets frame the fixed
   // shell and no longer ride away on long tabs. (mirrors the launcher header→body→scroll structure)
-  // v24.4 dock: right-fixed full-height side panel (bookmarklet canonical layout).
-  // Width 640px — wide enough for 7-tab dense form (Analytics/Accounts tables need room),
-  // narrow enough that FB Ads Manager stays usable on the left at ≥1280px viewport.
+  // v24.5 dock: right-fixed full-height side panel with an integrated LIVE FEED rail.
+  // Width 1040px — left log rail (~300px) + tab content. Was 640px (too cramped, and the
+  // action log used to float as a separate panel; now it lives inside the rail).
   // Left corners only (14px 0 0 14px) — right edge is flush to screen.
   Object.assign(wrap.style, {
     position:'fixed', top:'0', right:'0', left:'auto', transform:'none',
-    width:'640px', maxWidth:'95vw', height:'100vh', maxHeight:'100vh', overflow:'hidden',
+    width:'1040px', maxWidth:'96vw', height:'100vh', maxHeight:'100vh', overflow:'hidden',
     display:'flex', flexDirection:'column',
     background:'linear-gradient(180deg,#061a22 0%,#04141a 100%)', color:'var(--txt)', borderRadius:'14px 0 0 14px',
     padding:'20px 22px', boxShadow:'-8px 0 40px rgba(0,0,0,.7),inset 0 0 0 1px rgba(56,189,248,.1)',
@@ -680,7 +688,31 @@ function makeModal() {
       </div>
       <button id="ar-close" class="ar-btn ar-btn-danger ar-btn-sm">✕ Close</button>
     </div>
-    <div style="flex-shrink:0;display:flex;gap:8px;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--bdr);flex-wrap:wrap">
+  `;
+
+  // v24.5: two-column body — left LIVE FEED rail (the action log; was a separate floating
+  // panel) + right column holding the tab bar and the scrolling tab content.
+  const bodyRow = document.createElement('div');
+  bodyRow.className = 'ar-body';
+
+  const rail = document.createElement('aside');
+  rail.id = 'ar-lograil';
+  rail.className = 'ar-lograil' + (STATE_RAIL_COLLAPSED ? ' collapsed' : '');
+  rail.innerHTML = `
+    <div class="ar-railhead">
+      <span class="ttl">◉ LIVE FEED<span id="ar-feed-count" style="opacity:.55;font-weight:400"></span></span>
+      <span style="display:flex;gap:5px">
+        <button id="ar-feed-clear" class="ar-railbtn" title="Clear feed">⟲</button>
+        <button id="ar-rail-toggle" class="ar-railbtn" title="Collapse">${STATE_RAIL_COLLAPSED ? '▶' : '◀'}</button>
+      </span>
+    </div>
+    <div class="ar-railstatus" id="ar-railstatus"><span class="dot"></span><span class="ar-railword">STATUS: ONLINE</span></div>
+    <div class="ar-railbody" id="ar-feed"></div>`;
+
+  const right = document.createElement('div');
+  right.id = 'ar-right';
+  right.innerHTML = `
+    <div class="ar-tabbar" style="flex-shrink:0;display:flex;gap:8px;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--bdr);flex-wrap:wrap">
       <button id="tab-ar"    class="ar-tab">⚙️ Autorules</button>
       <button id="tab-col"   class="ar-tab">📋 Column Presets</button>
       <button id="tab-anl"   class="ar-tab">📊 Analytics</button>
@@ -711,8 +743,20 @@ function makeModal() {
   scroll.appendChild(px);
   scroll.appendChild(ops);
   scroll.appendChild(links);
-  wrap.appendChild(scroll);
+  right.appendChild(scroll);
+  bodyRow.appendChild(rail);
+  bodyRow.appendChild(right);
+  wrap.appendChild(bodyRow);
   document.body.appendChild(wrap);
+
+  // v24.5: mount the action log into the rail + wire its controls (clear / collapse).
+  STATUS.mount(rail.querySelector('#ar-feed'), rail.querySelector('#ar-railstatus'), rail.querySelector('#ar-feed-count'));
+  rail.querySelector('#ar-feed-clear').onclick = () => STATUS.clear();
+  rail.querySelector('#ar-rail-toggle').onclick = () => {
+    STATE_RAIL_COLLAPSED = !STATE_RAIL_COLLAPSED;
+    rail.classList.toggle('collapsed', STATE_RAIL_COLLAPSED);
+    rail.querySelector('#ar-rail-toggle').textContent = STATE_RAIL_COLLAPSED ? '▶' : '◀';
+  };
 
   wrap.querySelector('#ar-close').onclick    = () => wrap.remove();
   wrap.querySelector('#tab-ar').onclick      = () => { setTab('ar'); };
