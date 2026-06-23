@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>MetaCtrl PRO — visual harness</title>
+<style>html,body{margin:0;padding:0;background:#0a0f14;width:100%;height:100%;overflow:hidden}</style>
+</head>
+<body>
+<script>
+  // Visual layout test harness — renders the bookmarklet panel standalone, no FB needed.
+  // 1) token global so boot() mounts the authed tabs (TOKEN = __accessToken, bookmarklet.js:43)
+  var __accessToken = 'VISUAL_TEST_TOKEN';
+  // 2) neutralise async I/O so the synchronous panel render isn't disturbed and nothing hangs the page
+  window.fetch = function () { return new Promise(function () {}); };           // never resolves; layout renders sync
+  window.alert = function () {};
+  window.confirm = function () { return false; };
+</script>
+<script src="../bookmarklet.js"></script>
+</body>
+</html>

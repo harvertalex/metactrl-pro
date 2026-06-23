@@ -30,7 +30,7 @@
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v24.6',
+  APP_VERSION: 'v24.7',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -541,19 +541,7 @@ if (!document.getElementById('ar-styles')) {
        blue --acc #3b82f6 = primary action + active tab + focus-able interactive. Dial-back levers noted inline. */
     #ar-modal { --bg:#04141a; --surf:#082530; --card:#06222d; --bdr:#103a47; --txt:#e2e8f0; --muted:#8aa0a8; --acc:#3b82f6; --cyan:#38bdf8; --ok:#22c55e; --warn:#fbbf24; --err:#ef4444; }
     #ar-modal,#ar-modal * { box-sizing:border-box; }
-    /* HUD: BOLD cyan corner brackets framing the whole console, all 4 corners. Top legs start ~58px down so they
-       frame the body and clear the header / close button. 34px legs / 2.5px / glow. Lever: alpha .9 / glow 8px / leg 34px. */
-    #ar-modal::before { content:''; position:absolute; left:0; right:0; top:58px; bottom:0; pointer-events:none; z-index:6;
-      background:
-        linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) left 8px top 6px/34px 2.5px no-repeat,
-        linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) left 8px top 6px/2.5px 34px no-repeat,
-        linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) right 8px top 6px/34px 2.5px no-repeat,
-        linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) right 8px top 6px/2.5px 34px no-repeat,
-        linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) left 8px bottom 8px/34px 2.5px no-repeat,
-        linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) left 8px bottom 8px/2.5px 34px no-repeat,
-        linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) right 8px bottom 8px/34px 2.5px no-repeat,
-        linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) right 8px bottom 8px/2.5px 34px no-repeat;
-      filter:drop-shadow(0 0 8px rgba(56,189,248,.7)); }
+    /* v24.7: removed the cyan corner brackets (#ar-modal::before) — Alexander found them ugly. */
     /* HUD: faint cyan dot-grid behind the modal body (optional, GPU-cheap). Solid card bgs keep text crisp over it. Lever: alpha .06→.03. */
     /* v25.0: border-radius matches dock shape (14px 0 0 14px — left corners only, right flush to screen). */
     #ar-modal::after { content:''; position:absolute; inset:0; pointer-events:none; z-index:0; border-radius:14px 0 0 14px;
@@ -663,7 +651,7 @@ function makeModal() {
 
   const wrap = document.createElement('div');
   wrap.id = 'ar-modal';
-  // HUD: dark-teal console bg + brighter cyan border + inset cyan rim (matches launcher panel). Brackets via #ar-modal::before (CSS).
+  // HUD: dark-teal console bg + brighter cyan border + inset cyan rim (matches launcher panel). v24.7: corner brackets removed.
   // v24.3 fix: modal is a NON-scrolling flex column (overflow:hidden) at fixed max-height. Header + tab-bar stay pinned (flex-shrink:0);
   // the 7 tab divs live inside #ar-scroll (flex:1; overflow:auto) which scrolls. So #ar-modal::before brackets frame the fixed
   // shell and no longer ride away on long tabs. (mirrors the launcher header→body→scroll structure)
@@ -731,7 +719,9 @@ function makeModal() {
   // brackets stay fixed. setTab toggles display on the divs by reference — still valid inside the wrapper; ids unchanged.
   const scroll = document.createElement('div');
   scroll.id = 'ar-scroll';
-  Object.assign(scroll.style, { flex:'1', minHeight:'0', overflow:'auto' });
+  // v24.7: padding so the last row's glow (Generate Rules button) isn't clipped by overflow:auto
+  // and content has breathing room at the bottom (matches FB Launcher's .fbl-main padding).
+  Object.assign(scroll.style, { flex:'1', minHeight:'0', overflow:'auto', padding:'2px 10px 24px 10px' });
 
   const ar    = document.createElement('div'); ar.id    = 'ar-ar';
   const col   = document.createElement('div'); col.id   = 'ar-col';
