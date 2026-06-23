@@ -24,7 +24,7 @@
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v24.3',
+  APP_VERSION: 'v24.4',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -565,7 +565,8 @@ if (!document.getElementById('ar-styles')) {
         linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) right 8px bottom 8px/2.5px 34px no-repeat;
       filter:drop-shadow(0 0 8px rgba(56,189,248,.7)); }
     /* HUD: faint cyan dot-grid behind the modal body (optional, GPU-cheap). Solid card bgs keep text crisp over it. Lever: alpha .06→.03. */
-    #ar-modal::after { content:''; position:absolute; inset:0; pointer-events:none; z-index:0; border-radius:14px;
+    /* v25.0: border-radius matches dock shape (14px 0 0 14px — left corners only, right flush to screen). */
+    #ar-modal::after { content:''; position:absolute; inset:0; pointer-events:none; z-index:0; border-radius:14px 0 0 14px;
       background-image:radial-gradient(circle, rgba(56,189,248,.06) 1.2px, transparent 1.2px); background-size:22px 22px; }
     #ar-modal > * { position:relative; z-index:1; }
     #ar-modal input,#ar-modal select { background:var(--card); color:var(--txt); border:1px solid #1a4a5a; border-radius:8px; padding:7px 10px; font-size:13px; outline:none; width:100%; transition:border-color .15s,box-shadow .15s; }
@@ -654,14 +655,18 @@ function makeModal() {
   // v24.3 fix: modal is a NON-scrolling flex column (overflow:hidden) at fixed max-height. Header + tab-bar stay pinned (flex-shrink:0);
   // the 7 tab divs live inside #ar-scroll (flex:1; overflow:auto) which scrolls. So #ar-modal::before brackets frame the fixed
   // shell and no longer ride away on long tabs. (mirrors the launcher header→body→scroll structure)
+  // v24.4 dock: right-fixed full-height side panel (bookmarklet canonical layout).
+  // Width 640px — wide enough for 7-tab dense form (Analytics/Accounts tables need room),
+  // narrow enough that FB Ads Manager stays usable on the left at ≥1280px viewport.
+  // Left corners only (14px 0 0 14px) — right edge is flush to screen.
   Object.assign(wrap.style, {
-    position:'fixed', top:'50%', left:'50%', transform:'translate(-50%,-50%)',
-    width:'1040px', maxWidth:'97vw', height:'93vh', maxHeight:'93vh', overflow:'hidden',
+    position:'fixed', top:'0', right:'0', left:'auto', transform:'none',
+    width:'640px', maxWidth:'95vw', height:'100vh', maxHeight:'100vh', overflow:'hidden',
     display:'flex', flexDirection:'column',
-    background:'linear-gradient(180deg,#061a22 0%,#04141a 100%)', color:'var(--txt)', borderRadius:'14px',
-    padding:'20px 22px', boxShadow:'0 24px 70px rgba(0,0,0,.6),inset 0 0 0 1px rgba(56,189,248,.1)',
+    background:'linear-gradient(180deg,#061a22 0%,#04141a 100%)', color:'var(--txt)', borderRadius:'14px 0 0 14px',
+    padding:'20px 22px', boxShadow:'-8px 0 40px rgba(0,0,0,.7),inset 0 0 0 1px rgba(56,189,248,.1)',
     zIndex:'2000000001', fontFamily:'system-ui,-apple-system,Segoe UI,Roboto,Arial',
-    border:'1px solid #0e3a47'
+    border:'1px solid #0e3a47', borderRight:'none'
   });
 
   // HUD: header → mono command-bar. Status LED (green) + "METACTRL // PRO" uppercase tracked title. Version/host badges kept.
