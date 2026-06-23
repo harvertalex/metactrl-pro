@@ -24,10 +24,13 @@
 // v24.4 — panel docked to the right edge (full-height side panel), away from centered modal.
 // v24.5 — widened to 1040px; action log moved from a separate floating panel into an integrated
 //         left "◉ LIVE FEED" rail (STATUS now mounts into #ar-feed). Mirrors FB Launcher's log rail.
+// v24.6 — rail layout fix to match FB Launcher exactly: stack breakpoint 880->760px (was dropping the
+//         rail to the top on the user's display), panel 1040->1140px, rail 300->330px, progress bar
+//         moved into the rail (was hidden in the tab body), rail header buttons de-cramped.
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v24.5',
+  APP_VERSION: 'v24.6',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -629,22 +632,23 @@ if (!document.getElementById('ar-styles')) {
     /* v24.5: two-column body + LIVE FEED rail (ported from FB Launcher's .fbl-lograil). */
     #ar-modal .ar-body { display:flex; flex:1; min-height:0; gap:14px; overflow:hidden; }
     #ar-modal #ar-right { flex:1; min-width:0; display:flex; flex-direction:column; overflow:hidden; }
-    #ar-modal .ar-lograil { width:300px; flex-shrink:0; display:flex; flex-direction:column; border:1px solid #0e3a47; border-radius:10px; background:#03101a; overflow:hidden; transition:width .15s; }
+    #ar-modal .ar-lograil { width:330px; flex-shrink:0; display:flex; flex-direction:column; border:1px solid #0e3a47; border-radius:10px; background:#03101a; overflow:hidden; transition:width .15s; }
     #ar-modal .ar-lograil.collapsed { width:40px; }
     #ar-modal .ar-railhead { flex-shrink:0; display:flex; align-items:center; justify-content:space-between; gap:6px; padding:9px 11px; font-size:12px; font-weight:700; color:#7dd3fc; border-bottom:1px solid #0e3a47; font-family:ui-monospace,monospace; letter-spacing:.5px; text-shadow:0 0 7px rgba(56,189,248,.5); }
     #ar-modal .ar-lograil.collapsed .ar-railhead { justify-content:center; padding:9px 0; }
-    #ar-modal .ar-railbtn { background:rgba(56,189,248,.06); border:1px solid rgba(56,189,248,.3); color:#7dd3fc; border-radius:5px; padding:1px 7px; font-size:12px; line-height:1.4; cursor:pointer; transition:all .15s; }
+    #ar-modal .ar-railhead-btns { display:flex; gap:6px; flex-shrink:0; }
+    #ar-modal .ar-railbtn { display:inline-flex; align-items:center; justify-content:center; min-width:24px; height:22px; padding:0 7px; background:rgba(56,189,248,.06); border:1px solid rgba(56,189,248,.3); color:#7dd3fc; border-radius:5px; font-size:12px; line-height:1; cursor:pointer; transition:all .15s; }
     #ar-modal .ar-railbtn:hover { background:rgba(56,189,248,.14); border-color:var(--cyan); }
     #ar-modal .ar-railstatus { flex-shrink:0; display:flex; align-items:center; gap:7px; padding:8px 11px 6px; font-family:ui-monospace,monospace; font-size:10.5px; font-weight:700; letter-spacing:1px; color:#4ade80; }
     #ar-modal .ar-railstatus .dot { width:8px; height:8px; border-radius:50%; background:#22c55e; box-shadow:0 0 8px #22c55e; animation:ar-led-pulse 2.4s ease-in-out infinite; }
     #ar-modal .ar-railstatus.warn { color:#fbbf24; } #ar-modal .ar-railstatus.warn .dot { background:#fbbf24; box-shadow:0 0 8px #fbbf24; }
     #ar-modal .ar-railstatus.err  { color:#f87171; } #ar-modal .ar-railstatus.err .dot { background:#ef4444; box-shadow:0 0 8px #ef4444; }
     #ar-modal .ar-railbody { flex:1; min-height:0; overflow:auto; padding:8px 10px; font:11px/1.45 ui-monospace,monospace; font-variant-numeric:tabular-nums; color:#7dd3fc; background:#020a10; background-image:repeating-linear-gradient(0deg, rgba(56,189,248,.035) 0, rgba(56,189,248,.035) 1px, transparent 1px, transparent 3px); }
-    #ar-modal .ar-lograil.collapsed .ttl, #ar-modal .ar-lograil.collapsed .ar-railstatus, #ar-modal .ar-lograil.collapsed .ar-railbody, #ar-modal .ar-lograil.collapsed #ar-feed-clear { display:none; }
+    #ar-modal .ar-lograil.collapsed .ttl, #ar-modal .ar-lograil.collapsed .ar-railstatus, #ar-modal .ar-lograil.collapsed .ar-railbody, #ar-modal .ar-lograil.collapsed #ar-feed-clear, #ar-modal .ar-lograil.collapsed #ar-progress { display:none; }
     @keyframes ar-led-pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
-    @media (max-width:880px){
+    @media (max-width:760px){
       #ar-modal .ar-body { flex-direction:column; gap:10px; }
-      #ar-modal .ar-lograil { width:auto !important; max-height:24vh; }
+      #ar-modal .ar-lograil { width:auto !important; max-height:30vh; }
       #ar-modal .ar-lograil.collapsed { width:auto !important; max-height:36px; }
     }
   `;
@@ -663,13 +667,12 @@ function makeModal() {
   // v24.3 fix: modal is a NON-scrolling flex column (overflow:hidden) at fixed max-height. Header + tab-bar stay pinned (flex-shrink:0);
   // the 7 tab divs live inside #ar-scroll (flex:1; overflow:auto) which scrolls. So #ar-modal::before brackets frame the fixed
   // shell and no longer ride away on long tabs. (mirrors the launcher header→body→scroll structure)
-  // v24.5 dock: right-fixed full-height side panel with an integrated LIVE FEED rail.
-  // Width 1040px — left log rail (~300px) + tab content. Was 640px (too cramped, and the
-  // action log used to float as a separate panel; now it lives inside the rail).
+  // v24.6 dock: right-fixed full-height side panel with an integrated LIVE FEED rail.
+  // Width 1140px — left log rail (330px) + tab content (matches FB Launcher's panel width).
   // Left corners only (14px 0 0 14px) — right edge is flush to screen.
   Object.assign(wrap.style, {
     position:'fixed', top:'0', right:'0', left:'auto', transform:'none',
-    width:'1040px', maxWidth:'96vw', height:'100vh', maxHeight:'100vh', overflow:'hidden',
+    width:'1140px', maxWidth:'96vw', height:'100vh', maxHeight:'100vh', overflow:'hidden',
     display:'flex', flexDirection:'column',
     background:'linear-gradient(180deg,#061a22 0%,#04141a 100%)', color:'var(--txt)', borderRadius:'14px 0 0 14px',
     padding:'20px 22px', boxShadow:'-8px 0 40px rgba(0,0,0,.7),inset 0 0 0 1px rgba(56,189,248,.1)',
@@ -701,12 +704,13 @@ function makeModal() {
   rail.innerHTML = `
     <div class="ar-railhead">
       <span class="ttl">◉ LIVE FEED<span id="ar-feed-count" style="opacity:.55;font-weight:400"></span></span>
-      <span style="display:flex;gap:5px">
+      <span class="ar-railhead-btns">
         <button id="ar-feed-clear" class="ar-railbtn" title="Clear feed">⟲</button>
         <button id="ar-rail-toggle" class="ar-railbtn" title="Collapse">${STATE_RAIL_COLLAPSED ? '▶' : '◀'}</button>
       </span>
     </div>
     <div class="ar-railstatus" id="ar-railstatus"><span class="dot"></span><span class="ar-railword">STATUS: ONLINE</span></div>
+    <div class="ar-progress" id="ar-progress" style="display:none;margin:0 11px 8px"><div class="ar-progress-bar" id="ar-progress-bar"></div></div>
     <div class="ar-railbody" id="ar-feed"></div>`;
 
   const right = document.createElement('div');
@@ -1605,12 +1609,7 @@ function mountGenerator(container) {
   btnGen.className = 'ar-btn ar-btn-primary';
   btnGen.style.minWidth = '140px';
   btnGen.textContent = '⚡ Generate Rules';
-  const progress = document.createElement('div');
-  progress.className = 'ar-progress';
-  progress.style.cssText = 'flex:1;display:none';
-  const progressBar = document.createElement('div');
-  progressBar.className = 'ar-progress-bar';
-  progress.appendChild(progressBar);
+  // v24.6: progress bar moved into the LIVE FEED rail (built in makeModal); resolved by id in btnGen.onclick.
   const clearCb = document.createElement('input');
   clearCb.type = 'checkbox'; clearCb.id = 'ar-clear-existing';
   const clearLbl = document.createElement('label');
@@ -1620,7 +1619,6 @@ function mountGenerator(container) {
   actRow.appendChild(btnGen);
   actRow.appendChild(clearCb);
   actRow.appendChild(clearLbl);
-  actRow.appendChild(progress);
   container.appendChild(actRow);
 
   // ---- wire up presets ----
@@ -1747,8 +1745,11 @@ function mountGenerator(container) {
 
     btnGen.disabled = true;
     btnGen.textContent = '⏳ Working…';
-    progress.style.display = 'block';
-    progressBar.style.width = '0%';
+    // v24.6: progress bar lives in the LIVE FEED rail (built by makeModal) — resolve by id.
+    const progress = document.getElementById('ar-progress');
+    const progressBar = document.getElementById('ar-progress-bar');
+    if (progress) progress.style.display = 'block';
+    if (progressBar) progressBar.style.width = '0%';
 
     try {
       const ctx = {
@@ -1882,7 +1883,7 @@ function mountGenerator(container) {
     } finally {
       btnGen.disabled = false;
       btnGen.textContent = '⚡ Generate Rules';
-      setTimeout(() => { progress.style.display = 'none'; progressBar.style.width = '0%'; }, 1500);
+      setTimeout(() => { if (progress) progress.style.display = 'none'; if (progressBar) progressBar.style.width = '0%'; }, 1500);
     }
   };
 }
