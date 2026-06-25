@@ -20,6 +20,7 @@
    ========================================================= */
 
 /* -------------------- CONFIG -------------------- */
+// v25.7 — Custom Metrics: drop Intent Share (pinned ~100% for direct-response — outbound≈post_engagement; no signal). 14 metrics.
 // v25.6 — Custom Metrics: Creative Efficiency Index → PERCENT (per spec; was FLOAT). 12 PERCENT, 3 FLOAT (ROAS/EPC/Cost per LPV).
 // v25.5 — Custom Metrics: localStorage memory of created metrics per business (FB GET is eventually-consistent
 //         and under-reports fresh creates). Status merges GET ∪ memory → reliable + no dup creation. Rebuild
@@ -47,7 +48,7 @@
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v25.6',
+  APP_VERSION: 'v25.7',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -2809,7 +2810,6 @@ const CM_METRICS = [
   { key:'shook',    name:'Static Hook Rate',          desc:'Насколько картинка останавливает скролл (thumbstop)', formula:'actions:post_engagement / impressions',                  format:'PERCENT' },
   { key:'ushook',   name:'Unique Static Hook Rate',   desc:'Реальный охват хука без повторных реакций',           formula:'unique_actions:post_engagement / impressions',           format:'PERCENT' },
   { key:'ictr',     name:'Intent CTR',                desc:'Доля пользователей, реально перешедших с платформы',  formula:'outbound_clicks:outbound_click / impressions',                   format:'PERCENT' },
-  { key:'ishare',   name:'Intent Share',              desc:'Насколько engagement превращается в клики',           formula:'outbound_clicks:outbound_click / actions:post_engagement',       format:'PERCENT' },
   { key:'lpctr',    name:'LP CTR',                    desc:'Эффективность перехода после клика',                  formula:'actions:landing_page_view / actions:link_click',         format:'PERCENT' },
   { key:'lpvrate',  name:'LPV Rate',                  desc:'Качество outbound-кликов (дошли до ленда)',           formula:'actions:landing_page_view / outbound_clicks:outbound_click',     format:'PERCENT' },
   { key:'cplpv',    name:'Cost per LPV',              desc:'Стоимость реального визита на сайт',                   formula:'spend / actions:landing_page_view',                            format:'FLOAT' },
