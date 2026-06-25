@@ -20,6 +20,8 @@
    ========================================================= */
 
 /* -------------------- CONFIG -------------------- */
+// v24.8 — Custom Metrics tab: per-metric create buttons for 16 custom derived metrics via first-party
+//         edge {business_id}/ad_custom_derived_metrics (Business-scoped). Status/dedup by name, delete, bulk-missing.
 // v24.2 — Cyberpunk HUD visual skin (matches FB Launcher v0.18.0): teal palette, cyan corner brackets, glowing primary/tabs, segmented progress, telemetry logbox. CSS/skin pass only.
 // v24.4 — panel docked to the right edge (full-height side panel), away from centered modal.
 // v24.5 — widened to 1040px; action log moved from a separate floating panel into an integrated
@@ -30,7 +32,7 @@
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v24.7',
+  APP_VERSION: 'v24.8',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -708,6 +710,7 @@ function makeModal() {
       <button id="tab-ar"    class="ar-tab">⚙️ Autorules</button>
       <button id="tab-col"   class="ar-tab">📋 Column Presets</button>
       <button id="tab-anl"   class="ar-tab">📊 Analytics</button>
+      <button id="tab-met"   class="ar-tab">📐 Custom Metrics</button>
       <button id="tab-insp"  class="ar-tab">🔎 Accounts</button>
       <button id="tab-px"    class="ar-tab">🔗 Pixel Manager</button>
       <button id="tab-ops"   class="ar-tab">🛠 Ops</button>
@@ -726,6 +729,7 @@ function makeModal() {
   const ar    = document.createElement('div'); ar.id    = 'ar-ar';
   const col   = document.createElement('div'); col.id   = 'ar-col';
   const anl   = document.createElement('div'); anl.id   = 'ar-anl';
+  const met   = document.createElement('div'); met.id   = 'ar-met';
   const insp  = document.createElement('div'); insp.id  = 'ar-insp';
   const px    = document.createElement('div'); px.id    = 'ar-px';
   const ops   = document.createElement('div'); ops.id   = 'ar-ops';
@@ -733,6 +737,7 @@ function makeModal() {
   scroll.appendChild(ar);
   scroll.appendChild(col);
   scroll.appendChild(anl);
+  scroll.appendChild(met);
   scroll.appendChild(insp);
   scroll.appendChild(px);
   scroll.appendChild(ops);
@@ -757,6 +762,7 @@ function makeModal() {
   wrap.querySelector('#tab-col').onclick     = () => { setTab('col'); };
   wrap.querySelector('#tab-anl').onclick     = () => { setTab('anl'); };
   wrap.querySelector('#tab-insp').onclick    = () => { setTab('insp'); };
+  wrap.querySelector('#tab-met').onclick     = () => { setTab('met'); };
   wrap.querySelector('#tab-px').onclick      = () => { setTab('px'); };
   wrap.querySelector('#tab-ops').onclick     = () => { setTab('ops'); };
   wrap.querySelector('#tab-links').onclick   = () => { setTab('links'); };
@@ -765,6 +771,7 @@ function makeModal() {
     ar.style.display    = t === 'ar'    ? 'block' : 'none';
     col.style.display   = t === 'col'   ? 'block' : 'none';
     anl.style.display   = t === 'anl'   ? 'block' : 'none';
+    met.style.display   = t === 'met'   ? 'block' : 'none';
     insp.style.display  = t === 'insp'  ? 'block' : 'none';
     px.style.display    = t === 'px'    ? 'block' : 'none';
     ops.style.display   = t === 'ops'   ? 'block' : 'none';
@@ -772,12 +779,13 @@ function makeModal() {
     wrap.querySelector('#tab-ar').classList.toggle('active',    t === 'ar');
     wrap.querySelector('#tab-col').classList.toggle('active',   t === 'col');
     wrap.querySelector('#tab-anl').classList.toggle('active',   t === 'anl');
+    wrap.querySelector('#tab-met').classList.toggle('active',   t === 'met');
     wrap.querySelector('#tab-insp').classList.toggle('active',  t === 'insp');
     wrap.querySelector('#tab-px').classList.toggle('active',    t === 'px');
     wrap.querySelector('#tab-ops').classList.toggle('active',   t === 'ops');
     wrap.querySelector('#tab-links').classList.toggle('active', t === 'links');
   }
-  return { wrap, ar, col, anl, insp, px, ops, links, setTab };
+  return { wrap, ar, col, anl, met, insp, px, ops, links, setTab };
 }
 
 
@@ -2771,6 +2779,190 @@ function mountManager(container) {
       buildExport();
       buildImport();
     }
+  })();
+}
+
+/* ================== CUSTOM METRICS MODULE ================== */
+/* Custom derived metrics — first-party edge {business_id}/ad_custom_derived_metrics.
+   Created once per Business → visible in all its ad accounts. Auth = same cookie path as
+   Column Presets (Ads Manager app context has the write capability; our own API token does not). */
+
+const CM_METRICS = [
+  { key:'hook',     name:'Hook Rate (Video)',         desc:'Захватываемость креатива в первые 3 секунды',        formula:'actions:video_view / impressions * 100',                      format:'FLOAT', ok:true },
+  { key:'hold',     name:'Hold Rate (Video)',         desc:'Удержание после крючка',                              formula:'actions:video_thruplay_watched / actions:video_view * 100',   format:'FLOAT' },
+  { key:'shook',    name:'Static Hook Rate',          desc:'Насколько картинка останавливает скролл (thumbstop)', formula:'actions:post_engagement / impressions * 100',                  format:'FLOAT' },
+  { key:'ushook',   name:'Unique Static Hook Rate',   desc:'Реальный охват хука без повторных реакций',           formula:'unique_actions:post_engagement / impressions * 100',           format:'FLOAT' },
+  { key:'ictr',     name:'Intent CTR',                desc:'Доля пользователей, реально перешедших с платформы',  formula:'actions:outbound_click / impressions * 100',                   format:'FLOAT' },
+  { key:'ishare',   name:'Intent Share',              desc:'Насколько engagement превращается в клики',           formula:'actions:outbound_click / actions:post_engagement * 100',       format:'FLOAT' },
+  { key:'lpctr',    name:'LP CTR',                    desc:'Эффективность перехода после клика',                  formula:'actions:landing_page_view / actions:link_click * 100',         format:'FLOAT' },
+  { key:'lpvrate',  name:'LPV Rate',                  desc:'Качество outbound-кликов (дошли до ленда)',           formula:'actions:landing_page_view / actions:outbound_click * 100',     format:'FLOAT' },
+  { key:'cplpv',    name:'Cost per LPV',              desc:'Стоимость реального визита на сайт',                   formula:'spend / actions:landing_page_view',                            format:'FLOAT' },
+  { key:'regrate',  name:'Reg Rate (from LPV)',       desc:'Конверсия ленда в регистрацию',                       formula:'actions:complete_registration / actions:landing_page_view * 100', format:'FLOAT' },
+  { key:'leadrate', name:'Lead Rate (from LPV)',      desc:'Конверсия ленда в лид',                               formula:'actions:lead / actions:landing_page_view * 100',               format:'FLOAT' },
+  { key:'instrate', name:'Install Rate (from LPV)',   desc:'Конверсия ленда в установку',                         formula:'actions:mobile_app_install / actions:landing_page_view * 100', format:'FLOAT' },
+  { key:'epc',      name:'EPC (Earnings Per Click)',  desc:'Сколько зарабатываешь с клика',                       formula:'action_values:purchase / actions:link_click',                  format:'FLOAT' },
+  { key:'roas',     name:'ROAS (Custom)',             desc:'Возврат инвестиций',                                  formula:'action_values:purchase / spend',                               format:'FLOAT' },
+  { key:'roi',      name:'ROI (%)',                   desc:'Чистая прибыльность',                                 formula:'(action_values:purchase - spend) / spend * 100',               format:'FLOAT' },
+  { key:'cei',      name:'Creative Efficiency Index', desc:'Скоринговая оценка креатива',                         formula:'(actions:post_engagement * actions:outbound_click) / impressions', format:'FLOAT' },
+];
+
+async function cmDetectBiz() {
+  try { const c = require('BusinessUnifiedNavigationContext'); if (c?.businessID) return String(c.businessID); } catch {}
+  const m = location.href.match(/business_id=(\d+)/); if (m) return m[1];
+  try {
+    const accId = await cpGetAccountId();
+    if (accId) { const js = await API.getRaw(`act_${accId}`, `fields=["business"]`); if (js?.business?.id) return js.business.id; }
+  } catch {}
+  const mm = document.documentElement.innerHTML.match(/"business_id":"(\d+)"/); if (mm) return mm[1];
+  return '';
+}
+
+function mountMetrics(container) {
+  container.innerHTML = '';
+  const log = (m, t = 'info') => STATUS.log(m, t);
+  const existing = new Map(); // name -> metric obj
+
+  const head = document.createElement('div');
+  head.className = 'ar-sec-body';
+  head.style.paddingTop = '14px';
+  head.innerHTML = `
+    <div class="ar-info" style="margin-bottom:10px">
+      <b>Custom Derived Metrics</b> — формульные метрики уровня <b>Business</b>: создаются один раз → видны во всех кабах бизнеса.
+      Пишутся через first-party edge <code>{business_id}/ad_custom_derived_metrics</code> (контекст приложения Ads Manager).
+      Видимость задаёт <code>permission</code>. <code>FLOAT</code> + <code>*100</code> в формуле = проценты.
+    </div>
+    <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:6px">
+      <div class="ar-field" style="flex:1;min-width:220px">
+        <label class="ar-label">Business ID</label>
+        <input id="cm-biz" placeholder="определяю…">
+      </div>
+      <div class="ar-field" style="width:170px">
+        <label class="ar-label">Видимость</label>
+        <select id="cm-perm"><option value="private">private (только я)</option><option value="everyone">everyone (все)</option></select>
+      </div>
+      <button id="cm-refresh" class="ar-btn ar-btn-ghost ar-btn-sm">⟲ Обновить статус</button>
+      <button id="cm-all" class="ar-btn ar-btn-ghost ar-btn-sm">＋ Создать все недостающие</button>
+    </div>`;
+  container.appendChild(head);
+
+  const list = document.createElement('div');
+  list.style.marginTop = '8px';
+  container.appendChild(list);
+
+  const bizInp  = head.querySelector('#cm-biz');
+  const permSel = head.querySelector('#cm-perm');
+
+  function applyStatus(ref) {
+    const ex = existing.get(ref.m.name);
+    if (ex) {
+      ref.id = ex.id;
+      ref.st.innerHTML = `<span class="ar-badge ar-badge-ok">✓ создана</span>`;
+      ref.bC.style.display = 'none';
+      ref.bD.style.display = '';
+      ref.bD.disabled = false;
+    } else {
+      ref.id = null;
+      ref.st.textContent = '— нет';
+      ref.bC.style.display = '';
+      ref.bC.disabled = false;
+      ref.bC.textContent = '＋ Создать';
+      ref.bD.style.display = 'none';
+    }
+  }
+
+  async function cmCreate(ref) {
+    const biz = (bizInp.value || '').trim();
+    if (!biz) { log('Custom Metrics: укажи Business ID.', 'error'); return; }
+    ref.bC.disabled = true; ref.bC.textContent = '…';
+    try {
+      const js = await API.post(`${biz}/ad_custom_derived_metrics`, {
+        business_id: biz,
+        name:        ref.m.name,
+        description: ref.m.desc,
+        format_type: ref.m.format,
+        formula:     ref.m.formula,
+        permission:  permSel.value,
+        fields:      '["id","name","formula","format_type","permission","description"]',
+        ads_manager_write_regions: 'true',
+      });
+      if (js?.id) {
+        existing.set(ref.m.name, js);
+        applyStatus(ref);
+        log(`✓ Создана метрика "${ref.m.name}" (id ${js.id})`, 'success');
+      } else {
+        ref.bC.disabled = false; ref.bC.textContent = '↻ Повторить';
+        ref.st.innerHTML = `<span class="ar-badge ar-badge-warn">ошибка</span>`;
+        log(`✗ "${ref.m.name}": ${js?.error?.message || JSON.stringify(js)}`, 'error');
+      }
+    } catch (e) {
+      ref.bC.disabled = false; ref.bC.textContent = '↻ Повторить';
+      log(`✗ "${ref.m.name}": ${e.message}`, 'error');
+    }
+  }
+
+  async function cmRemove(ref) {
+    if (!ref.id) return;
+    if (!confirm(`Удалить метрику "${ref.m.name}"?`)) return;
+    ref.bD.disabled = true;
+    try {
+      const js = await API.del(ref.id);
+      if (js?.error) { log(`✗ delete "${ref.m.name}": ${js.error.message}`, 'error'); ref.bD.disabled = false; return; }
+      existing.delete(ref.m.name);
+      applyStatus(ref);
+      log(`🗑 Удалена "${ref.m.name}"`, 'warning');
+    } catch (e) { log(`✗ delete "${ref.m.name}": ${e.message}`, 'error'); ref.bD.disabled = false; }
+  }
+
+  const rowRefs = CM_METRICS.map(m => {
+    const el = document.createElement('div');
+    el.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--bdr);border-radius:8px;background:var(--card);margin-bottom:6px';
+    el.innerHTML = `
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;color:var(--txt);font-size:13px">${m.name}${m.ok ? ' <span class="ar-badge ar-badge-ok" style="font-size:9px;padding:1px 5px">подтв.</span>' : ''}</div>
+        <div style="font:11px/1.4 ui-monospace,monospace;color:#7dd3fc;margin-top:3px;word-break:break-all">${m.formula}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">${m.desc}</div>
+      </div>
+      <span class="cm-st" style="font-size:11px;color:var(--muted);white-space:nowrap">…</span>
+      <button class="cm-create ar-btn ar-btn-primary ar-btn-sm" style="white-space:nowrap">＋ Создать</button>
+      <button class="cm-del ar-btn ar-btn-danger ar-btn-sm" style="display:none">🗑</button>`;
+    list.appendChild(el);
+    const ref = { m, el, st: el.querySelector('.cm-st'), bC: el.querySelector('.cm-create'), bD: el.querySelector('.cm-del'), id: null };
+    ref.bC.onclick = () => cmCreate(ref);
+    ref.bD.onclick = () => cmRemove(ref);
+    return ref;
+  });
+
+  async function refresh() {
+    const biz = (bizInp.value || '').trim();
+    if (!biz) { log('Custom Metrics: не указан Business ID.', 'error'); return; }
+    log(`Custom Metrics: тяну существующие для business ${biz}…`);
+    existing.clear();
+    try {
+      const js = await API.getRaw(`${biz}/ad_custom_derived_metrics`, `fields=["id","name","formula","format_type","permission"]&limit=200`);
+      if (js?.error) log(`Custom Metrics GET error: ${js.error.message}`, 'error');
+      (js?.data || []).forEach(x => existing.set(x.name, x));
+      log(`Custom Metrics: найдено ${existing.size} существующих.`, 'success');
+    } catch (e) { log(`Custom Metrics GET fail: ${e.message}`, 'error'); }
+    rowRefs.forEach(applyStatus);
+  }
+
+  async function createAllMissing() {
+    const missing = rowRefs.filter(r => !existing.has(r.m.name));
+    if (!missing.length) { log('Custom Metrics: всё уже создано.', 'success'); return; }
+    log(`Custom Metrics: создаю ${missing.length} недостающих…`);
+    for (const ref of missing) { await cmCreate(ref); await new Promise(r => setTimeout(r, 700)); }
+    log('Custom Metrics: пакетное создание завершено.', 'success');
+  }
+
+  head.querySelector('#cm-refresh').onclick = refresh;
+  head.querySelector('#cm-all').onclick     = createAllMissing;
+
+  (async () => {
+    bizInp.value = 'определяю…';
+    const biz = await cmDetectBiz();
+    bizInp.value = biz || '';
+    if (biz) refresh();
+    else log('Custom Metrics: не определила Business ID — впиши вручную и жми «Обновить статус».', 'warning');
   })();
 }
 
@@ -6265,6 +6457,7 @@ function mountQuickLinks(container) {
     mountAutorules(ui.ar);
     mountColumnManager(ui.col);
     mountAnalytics(ui.anl);
+    mountMetrics(ui.met);
     mountInspector(ui.insp);
     mountPixelManager(ui.px);
     ui.setTab('ar');
@@ -6275,7 +6468,7 @@ function mountQuickLinks(container) {
       <div style="font-size:12px;line-height:1.6">This tab requires a Facebook access token.<br>
       Open <a href="https://adsmanager.facebook.com/adsmanager" target="_blank" style="color:var(--acc)">Ads Manager</a> and run the bookmarklet there.</div>
     </div>`;
-    [ui.ar, ui.col, ui.anl, ui.insp, ui.px].forEach(el => { el.innerHTML = notice; });
+    [ui.ar, ui.col, ui.anl, ui.met, ui.insp, ui.px].forEach(el => { el.innerHTML = notice; });
     ui.setTab('ops');
   }
 })();
