@@ -20,6 +20,8 @@
    ========================================================= */
 
 /* -------------------- CONFIG -------------------- */
+// v25.2 — Custom Metrics: drop ROI (ROAS covers it); de-paren CEI (formula engine rejects parentheses — only
+//         the 2 paren'd formulas failed). 15 metrics. omni_purchase confirmed working (ROAS/EPC created).
 // v25.1 — Custom Metrics: corrected formula tokens from FB insights enumeration —
 //         outbound_clicks:outbound_click, video_thruplay_watched_actions:video_view, action_values:omni_purchase.
 // v25.0 — Custom Metrics: lazy-load — no FB GET on boot; existing-metrics fetch fires only on first tab open.
@@ -37,7 +39,7 @@
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v25.1',
+  APP_VERSION: 'v25.2',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -2808,8 +2810,7 @@ const CM_METRICS = [
   { key:'instrate', name:'Install Rate (from LPV)',   desc:'Конверсия ленда в установку',                         formula:'actions:mobile_app_install / actions:landing_page_view * 100', format:'FLOAT' },
   { key:'epc',      name:'EPC (Earnings Per Click)',  desc:'Сколько зарабатываешь с клика',                       formula:'action_values:omni_purchase / actions:link_click',                  format:'FLOAT' },
   { key:'roas',     name:'ROAS (Custom)',             desc:'Возврат инвестиций',                                  formula:'action_values:omni_purchase / spend',                               format:'FLOAT' },
-  { key:'roi',      name:'ROI (%)',                   desc:'Чистая прибыльность',                                 formula:'(action_values:omni_purchase - spend) / spend * 100',               format:'FLOAT' },
-  { key:'cei',      name:'Creative Efficiency Index', desc:'Скоринговая оценка креатива',                         formula:'(actions:post_engagement * outbound_clicks:outbound_click) / impressions', format:'FLOAT' },
+  { key:'cei',      name:'Creative Efficiency Index', desc:'Скоринговая оценка креатива',                         formula:'actions:post_engagement * outbound_clicks:outbound_click / impressions', format:'FLOAT' },
 ];
 
 async function cmDetectBiz() {
