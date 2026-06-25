@@ -20,6 +20,8 @@
    ========================================================= */
 
 /* -------------------- CONFIG -------------------- */
+// v25.4 — Custom Metrics: 11 rate metrics → format_type=PERCENT (confirmed enum) + formula without *100
+//         (PERCENT auto-×100 + %). + "Пересоздать" button (delete our metrics incl old formats/dupes, recreate clean).
 // v25.3 — Custom Metrics: paginate the existing-metrics GET (dedup was under-reporting → duplicate creation)
 //         + "Удалить дубли" cleanup button (keeps one per name, deletes the rest).
 // v25.2 — Custom Metrics: drop ROI (ROAS covers it); de-paren CEI (formula engine rejects parentheses — only
@@ -41,7 +43,7 @@
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v25.3',
+  APP_VERSION: 'v25.4',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -2798,18 +2800,18 @@ function mountManager(container) {
    Column Presets (Ads Manager app context has the write capability; our own API token does not). */
 
 const CM_METRICS = [
-  { key:'hook',     name:'Hook Rate (Video)',         desc:'Захватываемость креатива в первые 3 секунды',        formula:'actions:video_view / impressions * 100',                      format:'FLOAT', ok:true },
-  { key:'hold',     name:'Hold Rate (Video)',         desc:'Удержание после крючка',                              formula:'video_thruplay_watched_actions:video_view / actions:video_view * 100',   format:'FLOAT' },
-  { key:'shook',    name:'Static Hook Rate',          desc:'Насколько картинка останавливает скролл (thumbstop)', formula:'actions:post_engagement / impressions * 100',                  format:'FLOAT' },
-  { key:'ushook',   name:'Unique Static Hook Rate',   desc:'Реальный охват хука без повторных реакций',           formula:'unique_actions:post_engagement / impressions * 100',           format:'FLOAT' },
-  { key:'ictr',     name:'Intent CTR',                desc:'Доля пользователей, реально перешедших с платформы',  formula:'outbound_clicks:outbound_click / impressions * 100',                   format:'FLOAT' },
-  { key:'ishare',   name:'Intent Share',              desc:'Насколько engagement превращается в клики',           formula:'outbound_clicks:outbound_click / actions:post_engagement * 100',       format:'FLOAT' },
-  { key:'lpctr',    name:'LP CTR',                    desc:'Эффективность перехода после клика',                  formula:'actions:landing_page_view / actions:link_click * 100',         format:'FLOAT' },
-  { key:'lpvrate',  name:'LPV Rate',                  desc:'Качество outbound-кликов (дошли до ленда)',           formula:'actions:landing_page_view / outbound_clicks:outbound_click * 100',     format:'FLOAT' },
+  { key:'hook',     name:'Hook Rate (Video)',         desc:'Захватываемость креатива в первые 3 секунды',        formula:'actions:video_view / impressions',                      format:'PERCENT', ok:true },
+  { key:'hold',     name:'Hold Rate (Video)',         desc:'Удержание после крючка',                              formula:'video_thruplay_watched_actions:video_view / actions:video_view',   format:'PERCENT' },
+  { key:'shook',    name:'Static Hook Rate',          desc:'Насколько картинка останавливает скролл (thumbstop)', formula:'actions:post_engagement / impressions',                  format:'PERCENT' },
+  { key:'ushook',   name:'Unique Static Hook Rate',   desc:'Реальный охват хука без повторных реакций',           formula:'unique_actions:post_engagement / impressions',           format:'PERCENT' },
+  { key:'ictr',     name:'Intent CTR',                desc:'Доля пользователей, реально перешедших с платформы',  formula:'outbound_clicks:outbound_click / impressions',                   format:'PERCENT' },
+  { key:'ishare',   name:'Intent Share',              desc:'Насколько engagement превращается в клики',           formula:'outbound_clicks:outbound_click / actions:post_engagement',       format:'PERCENT' },
+  { key:'lpctr',    name:'LP CTR',                    desc:'Эффективность перехода после клика',                  formula:'actions:landing_page_view / actions:link_click',         format:'PERCENT' },
+  { key:'lpvrate',  name:'LPV Rate',                  desc:'Качество outbound-кликов (дошли до ленда)',           formula:'actions:landing_page_view / outbound_clicks:outbound_click',     format:'PERCENT' },
   { key:'cplpv',    name:'Cost per LPV',              desc:'Стоимость реального визита на сайт',                   formula:'spend / actions:landing_page_view',                            format:'FLOAT' },
-  { key:'regrate',  name:'Reg Rate (from LPV)',       desc:'Конверсия ленда в регистрацию',                       formula:'actions:complete_registration / actions:landing_page_view * 100', format:'FLOAT' },
-  { key:'leadrate', name:'Lead Rate (from LPV)',      desc:'Конверсия ленда в лид',                               formula:'actions:lead / actions:landing_page_view * 100',               format:'FLOAT' },
-  { key:'instrate', name:'Install Rate (from LPV)',   desc:'Конверсия ленда в установку',                         formula:'actions:mobile_app_install / actions:landing_page_view * 100', format:'FLOAT' },
+  { key:'regrate',  name:'Reg Rate (from LPV)',       desc:'Конверсия ленда в регистрацию',                       formula:'actions:complete_registration / actions:landing_page_view', format:'PERCENT' },
+  { key:'leadrate', name:'Lead Rate (from LPV)',      desc:'Конверсия ленда в лид',                               formula:'actions:lead / actions:landing_page_view',               format:'PERCENT' },
+  { key:'instrate', name:'Install Rate (from LPV)',   desc:'Конверсия ленда в установку',                         formula:'actions:mobile_app_install / actions:landing_page_view', format:'PERCENT' },
   { key:'epc',      name:'EPC (Earnings Per Click)',  desc:'Сколько зарабатываешь с клика',                       formula:'action_values:omni_purchase / actions:link_click',                  format:'FLOAT' },
   { key:'roas',     name:'ROAS (Custom)',             desc:'Возврат инвестиций',                                  formula:'action_values:omni_purchase / spend',                               format:'FLOAT' },
   { key:'cei',      name:'Creative Efficiency Index', desc:'Скоринговая оценка креатива',                         formula:'actions:post_engagement * outbound_clicks:outbound_click / impressions', format:'FLOAT' },
@@ -2852,6 +2854,7 @@ function mountMetrics(container) {
       <button id="cm-refresh" class="ar-btn ar-btn-ghost ar-btn-sm">⟲ Обновить статус</button>
       <button id="cm-all" class="ar-btn ar-btn-ghost ar-btn-sm">＋ Создать все недостающие</button>
       <button id="cm-dedupe" class="ar-btn ar-btn-danger ar-btn-sm">🧹 Удалить дубли</button>
+      <button id="cm-rebuild" class="ar-btn ar-btn-danger ar-btn-sm">🔄 Пересоздать</button>
     </div>`;
   container.appendChild(head);
 
@@ -3010,9 +3013,32 @@ function mountMetrics(container) {
     log('Custom Metrics: пакетное создание завершено.', 'success');
   }
 
+  async function cmRebuildAll() {
+    const biz = (bizInp.value || '').trim();
+    if (!biz) { log('Custom Metrics: укажи Business ID.', 'error'); return; }
+    log('Custom Metrics: пересоздание — тяну текущие…');
+    const { all, error } = await cmFetchAll(biz);
+    if (error) { log(`Custom Metrics rebuild GET error: ${error.message}`, 'error'); return; }
+    const names = new Set(CM_METRICS.map(m => m.name));
+    const mine = all.filter(m => names.has(m.name));
+    if (!confirm(`Пересоздать набор на business ${biz}?\nУдалю ${mine.length} наших метрик (вкл. старые форматы и дубли) и создам заново ${CM_METRICS.length}.`)) return;
+    log(`Custom Metrics: удаляю ${mine.length}…`, 'warning');
+    let del = 0;
+    for (const m of mine) {
+      try { const r = await API.del(m.id); if (!(r && r.error)) del++; } catch (e) { log(`✗ del "${m.name}": ${e.message}`, 'error'); }
+      await new Promise(r => setTimeout(r, 350));
+    }
+    log(`Custom Metrics: удалено ${del}/${mine.length}. Создаю заново…`, 'success');
+    existing.clear();
+    rowRefs.forEach(applyStatus);
+    await createAllMissing();
+    await refresh();
+  }
+
   head.querySelector('#cm-refresh').onclick = refresh;
   head.querySelector('#cm-all').onclick     = createAllMissing;
   head.querySelector('#cm-dedupe').onclick  = cmDedupe;
+  head.querySelector('#cm-rebuild').onclick = cmRebuildAll;
 
   // Lazy: no network on boot. First time the tab is opened, setTab() calls __cmInit (detect biz + GET existing).
   let inited = false;
