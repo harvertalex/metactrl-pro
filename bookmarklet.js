@@ -20,6 +20,8 @@
    ========================================================= */
 
 /* -------------------- CONFIG -------------------- */
+// v25.1 — Custom Metrics: corrected formula tokens from FB insights enumeration —
+//         outbound_clicks:outbound_click, video_thruplay_watched_actions:video_view, action_values:omni_purchase.
 // v25.0 — Custom Metrics: lazy-load — no FB GET on boot; existing-metrics fetch fires only on first tab open.
 // v24.9 — Custom Metrics: per-row EDITABLE formula input (fix invalid machine-key tokens inline, no redeploy)
 //         + surface FB error_user_title/subcode in log on failure (1359174 = invalid formula).
@@ -35,7 +37,7 @@
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v25.0',
+  APP_VERSION: 'v25.1',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -2793,21 +2795,21 @@ function mountManager(container) {
 
 const CM_METRICS = [
   { key:'hook',     name:'Hook Rate (Video)',         desc:'Захватываемость креатива в первые 3 секунды',        formula:'actions:video_view / impressions * 100',                      format:'FLOAT', ok:true },
-  { key:'hold',     name:'Hold Rate (Video)',         desc:'Удержание после крючка',                              formula:'actions:video_thruplay_watched / actions:video_view * 100',   format:'FLOAT' },
+  { key:'hold',     name:'Hold Rate (Video)',         desc:'Удержание после крючка',                              formula:'video_thruplay_watched_actions:video_view / actions:video_view * 100',   format:'FLOAT' },
   { key:'shook',    name:'Static Hook Rate',          desc:'Насколько картинка останавливает скролл (thumbstop)', formula:'actions:post_engagement / impressions * 100',                  format:'FLOAT' },
   { key:'ushook',   name:'Unique Static Hook Rate',   desc:'Реальный охват хука без повторных реакций',           formula:'unique_actions:post_engagement / impressions * 100',           format:'FLOAT' },
-  { key:'ictr',     name:'Intent CTR',                desc:'Доля пользователей, реально перешедших с платформы',  formula:'actions:outbound_click / impressions * 100',                   format:'FLOAT' },
-  { key:'ishare',   name:'Intent Share',              desc:'Насколько engagement превращается в клики',           formula:'actions:outbound_click / actions:post_engagement * 100',       format:'FLOAT' },
+  { key:'ictr',     name:'Intent CTR',                desc:'Доля пользователей, реально перешедших с платформы',  formula:'outbound_clicks:outbound_click / impressions * 100',                   format:'FLOAT' },
+  { key:'ishare',   name:'Intent Share',              desc:'Насколько engagement превращается в клики',           formula:'outbound_clicks:outbound_click / actions:post_engagement * 100',       format:'FLOAT' },
   { key:'lpctr',    name:'LP CTR',                    desc:'Эффективность перехода после клика',                  formula:'actions:landing_page_view / actions:link_click * 100',         format:'FLOAT' },
-  { key:'lpvrate',  name:'LPV Rate',                  desc:'Качество outbound-кликов (дошли до ленда)',           formula:'actions:landing_page_view / actions:outbound_click * 100',     format:'FLOAT' },
+  { key:'lpvrate',  name:'LPV Rate',                  desc:'Качество outbound-кликов (дошли до ленда)',           formula:'actions:landing_page_view / outbound_clicks:outbound_click * 100',     format:'FLOAT' },
   { key:'cplpv',    name:'Cost per LPV',              desc:'Стоимость реального визита на сайт',                   formula:'spend / actions:landing_page_view',                            format:'FLOAT' },
   { key:'regrate',  name:'Reg Rate (from LPV)',       desc:'Конверсия ленда в регистрацию',                       formula:'actions:complete_registration / actions:landing_page_view * 100', format:'FLOAT' },
   { key:'leadrate', name:'Lead Rate (from LPV)',      desc:'Конверсия ленда в лид',                               formula:'actions:lead / actions:landing_page_view * 100',               format:'FLOAT' },
   { key:'instrate', name:'Install Rate (from LPV)',   desc:'Конверсия ленда в установку',                         formula:'actions:mobile_app_install / actions:landing_page_view * 100', format:'FLOAT' },
-  { key:'epc',      name:'EPC (Earnings Per Click)',  desc:'Сколько зарабатываешь с клика',                       formula:'action_values:purchase / actions:link_click',                  format:'FLOAT' },
-  { key:'roas',     name:'ROAS (Custom)',             desc:'Возврат инвестиций',                                  formula:'action_values:purchase / spend',                               format:'FLOAT' },
-  { key:'roi',      name:'ROI (%)',                   desc:'Чистая прибыльность',                                 formula:'(action_values:purchase - spend) / spend * 100',               format:'FLOAT' },
-  { key:'cei',      name:'Creative Efficiency Index', desc:'Скоринговая оценка креатива',                         formula:'(actions:post_engagement * actions:outbound_click) / impressions', format:'FLOAT' },
+  { key:'epc',      name:'EPC (Earnings Per Click)',  desc:'Сколько зарабатываешь с клика',                       formula:'action_values:omni_purchase / actions:link_click',                  format:'FLOAT' },
+  { key:'roas',     name:'ROAS (Custom)',             desc:'Возврат инвестиций',                                  formula:'action_values:omni_purchase / spend',                               format:'FLOAT' },
+  { key:'roi',      name:'ROI (%)',                   desc:'Чистая прибыльность',                                 formula:'(action_values:omni_purchase - spend) / spend * 100',               format:'FLOAT' },
+  { key:'cei',      name:'Creative Efficiency Index', desc:'Скоринговая оценка креатива',                         formula:'(actions:post_engagement * outbound_clicks:outbound_click) / impressions', format:'FLOAT' },
 ];
 
 async function cmDetectBiz() {
