@@ -20,6 +20,8 @@
    ========================================================= */
 
 /* -------------------- CONFIG -------------------- */
+// v24.9 — Custom Metrics: per-row EDITABLE formula input (fix invalid machine-key tokens inline, no redeploy)
+//         + surface FB error_user_title/subcode in log on failure (1359174 = invalid formula).
 // v24.8 — Custom Metrics tab: per-metric create buttons for 16 custom derived metrics via first-party
 //         edge {business_id}/ad_custom_derived_metrics (Business-scoped). Status/dedup by name, delete, bulk-missing.
 // v24.2 — Cyberpunk HUD visual skin (matches FB Launcher v0.18.0): teal palette, cyan corner brackets, glowing primary/tabs, segmented progress, telemetry logbox. CSS/skin pass only.
@@ -32,7 +34,7 @@
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v24.8',
+  APP_VERSION: 'v24.9',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -2873,6 +2875,8 @@ function mountMetrics(container) {
   async function cmCreate(ref) {
     const biz = (bizInp.value || '').trim();
     if (!biz) { log('Custom Metrics: укажи Business ID.', 'error'); return; }
+    const formula = (ref.fInp.value || '').trim();
+    if (!formula) { log(`Custom Metrics: пустая формула у "${ref.m.name}".`, 'error'); return; }
     ref.bC.disabled = true; ref.bC.textContent = '…';
     try {
       const js = await API.post(`${biz}/ad_custom_derived_metrics`, {
@@ -2880,7 +2884,7 @@ function mountMetrics(container) {
         name:        ref.m.name,
         description: ref.m.desc,
         format_type: ref.m.format,
-        formula:     ref.m.formula,
+        formula:     formula,
         permission:  permSel.value,
         fields:      '["id","name","formula","format_type","permission","description"]',
         ads_manager_write_regions: 'true',
@@ -2892,7 +2896,9 @@ function mountMetrics(container) {
       } else {
         ref.bC.disabled = false; ref.bC.textContent = '↻ Повторить';
         ref.st.innerHTML = `<span class="ar-badge ar-badge-warn">ошибка</span>`;
-        log(`✗ "${ref.m.name}": ${js?.error?.message || JSON.stringify(js)}`, 'error');
+        const e = js?.error || {};
+        const msg = e.error_user_title || e.error_user_msg || e.message || JSON.stringify(js);
+        log(`✗ "${ref.m.name}": ${msg}${e.error_subcode ? ` [${e.error_subcode}]` : ''}`, 'error');
       }
     } catch (e) {
       ref.bC.disabled = false; ref.bC.textContent = '↻ Повторить';
@@ -2915,18 +2921,18 @@ function mountMetrics(container) {
 
   const rowRefs = CM_METRICS.map(m => {
     const el = document.createElement('div');
-    el.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--bdr);border-radius:8px;background:var(--card);margin-bottom:6px';
+    el.style.cssText = 'border:1px solid var(--bdr);border-radius:8px;background:var(--card);margin-bottom:6px;padding:10px 12px';
     el.innerHTML = `
-      <div style="flex:1;min-width:0">
-        <div style="font-weight:600;color:var(--txt);font-size:13px">${m.name}${m.ok ? ' <span class="ar-badge ar-badge-ok" style="font-size:9px;padding:1px 5px">подтв.</span>' : ''}</div>
-        <div style="font:11px/1.4 ui-monospace,monospace;color:#7dd3fc;margin-top:3px;word-break:break-all">${m.formula}</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:2px">${m.desc}</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:7px">
+        <div style="flex:1;min-width:0;font-weight:600;color:var(--txt);font-size:13px">${m.name}${m.ok ? ' <span class="ar-badge ar-badge-ok" style="font-size:9px;padding:1px 5px">подтв.</span>' : ''}
+          <span style="font-weight:400;color:var(--muted);font-size:11px">— ${m.desc}</span></div>
+        <span class="cm-st" style="font-size:11px;color:var(--muted);white-space:nowrap">…</span>
+        <button class="cm-create ar-btn ar-btn-primary ar-btn-sm" style="white-space:nowrap">＋ Создать</button>
+        <button class="cm-del ar-btn ar-btn-danger ar-btn-sm" style="display:none">🗑</button>
       </div>
-      <span class="cm-st" style="font-size:11px;color:var(--muted);white-space:nowrap">…</span>
-      <button class="cm-create ar-btn ar-btn-primary ar-btn-sm" style="white-space:nowrap">＋ Создать</button>
-      <button class="cm-del ar-btn ar-btn-danger ar-btn-sm" style="display:none">🗑</button>`;
+      <input class="cm-formula" spellcheck="false" title="Машинная формула — правь и жми «Создать» если ключ не подошёл" value="${m.formula.replace(/"/g, '&quot;')}" style="font:12px/1.4 ui-monospace,monospace;color:#7dd3fc">`;
     list.appendChild(el);
-    const ref = { m, el, st: el.querySelector('.cm-st'), bC: el.querySelector('.cm-create'), bD: el.querySelector('.cm-del'), id: null };
+    const ref = { m, el, st: el.querySelector('.cm-st'), bC: el.querySelector('.cm-create'), bD: el.querySelector('.cm-del'), fInp: el.querySelector('.cm-formula'), id: null };
     ref.bC.onclick = () => cmCreate(ref);
     ref.bD.onclick = () => cmRemove(ref);
     return ref;
