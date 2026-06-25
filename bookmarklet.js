@@ -20,6 +20,8 @@
    ========================================================= */
 
 /* -------------------- CONFIG -------------------- */
+// v25.3 — Custom Metrics: paginate the existing-metrics GET (dedup was under-reporting → duplicate creation)
+//         + "Удалить дубли" cleanup button (keeps one per name, deletes the rest).
 // v25.2 — Custom Metrics: drop ROI (ROAS covers it); de-paren CEI (formula engine rejects parentheses — only
 //         the 2 paren'd formulas failed). 15 metrics. omni_purchase confirmed working (ROAS/EPC created).
 // v25.1 — Custom Metrics: corrected formula tokens from FB insights enumeration —
@@ -39,7 +41,7 @@
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v25.2',
+  APP_VERSION: 'v25.3',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -2849,6 +2851,7 @@ function mountMetrics(container) {
       </div>
       <button id="cm-refresh" class="ar-btn ar-btn-ghost ar-btn-sm">⟲ Обновить статус</button>
       <button id="cm-all" class="ar-btn ar-btn-ghost ar-btn-sm">＋ Создать все недостающие</button>
+      <button id="cm-dedupe" class="ar-btn ar-btn-danger ar-btn-sm">🧹 Удалить дубли</button>
     </div>`;
   container.appendChild(head);
 
@@ -2949,12 +2952,54 @@ function mountMetrics(container) {
     log(`Custom Metrics: тяну существующие для business ${biz}…`);
     existing.clear();
     try {
-      const js = await API.getRaw(`${biz}/ad_custom_derived_metrics`, `fields=["id","name","formula","format_type","permission"]&limit=200`);
-      if (js?.error) log(`Custom Metrics GET error: ${js.error.message}`, 'error');
-      (js?.data || []).forEach(x => existing.set(x.name, x));
-      log(`Custom Metrics: найдено ${existing.size} существующих.`, 'success');
+      let page = await API.getRaw(`${biz}/ad_custom_derived_metrics`, `fields=["id","name","formula","format_type","permission"]&limit=500`);
+      let guard = 0, pages = 0;
+      while (page && !page.error) {
+        (page.data || []).forEach(x => existing.set(x.name, x));
+        pages++;
+        if (page.paging && page.paging.next && guard++ < 30) page = await API.get(page.paging.next);
+        else break;
+      }
+      if (page && page.error) log(`Custom Metrics GET error: ${page.error.message}`, 'error');
+      log(`Custom Metrics: найдено ${existing.size} существующих (страниц: ${pages}).`, 'success');
     } catch (e) { log(`Custom Metrics GET fail: ${e.message}`, 'error'); }
     rowRefs.forEach(applyStatus);
+  }
+
+  async function cmFetchAll(biz) {
+    const all = [];
+    let page = await API.getRaw(`${biz}/ad_custom_derived_metrics`, `fields=["id","name"]&limit=500`);
+    let guard = 0;
+    while (page && !page.error) {
+      (page.data || []).forEach(x => all.push(x));
+      if (page.paging && page.paging.next && guard++ < 30) page = await API.get(page.paging.next);
+      else break;
+    }
+    return { all, error: page && page.error ? page.error : null };
+  }
+
+  async function cmDedupe() {
+    const biz = (bizInp.value || '').trim();
+    if (!biz) { log('Custom Metrics: укажи Business ID.', 'error'); return; }
+    log('Custom Metrics: ищу дубли…');
+    const { all, error } = await cmFetchAll(biz);
+    if (error) { log(`Custom Metrics dedupe GET error: ${error.message}`, 'error'); return; }
+    const seen = new Set(), dupes = [];
+    for (const m of all) { if (seen.has(m.name)) dupes.push(m); else seen.add(m.name); }
+    if (!dupes.length) { log(`Custom Metrics: дублей нет (всего ${all.length}).`, 'success'); return; }
+    if (!confirm(`Найдено ${dupes.length} дублей из ${all.length} метрик. Удалить лишние (оставив по одной каждой)?`)) return;
+    log(`Custom Metrics: удаляю ${dupes.length} дублей…`);
+    let ok = 0;
+    for (const d of dupes) {
+      try {
+        const r = await API.del(d.id);
+        if (r && r.error) log(`✗ дубль "${d.name}": ${r.error.message}`, 'error');
+        else { ok++; log(`🗑 дубль "${d.name}"`, 'warning'); }
+      } catch (e) { log(`✗ дубль "${d.name}": ${e.message}`, 'error'); }
+      await new Promise(r => setTimeout(r, 400));
+    }
+    log(`Custom Metrics: удалено ${ok}/${dupes.length} дублей.`, 'success');
+    await refresh();
   }
 
   async function createAllMissing() {
@@ -2967,6 +3012,7 @@ function mountMetrics(container) {
 
   head.querySelector('#cm-refresh').onclick = refresh;
   head.querySelector('#cm-all').onclick     = createAllMissing;
+  head.querySelector('#cm-dedupe').onclick  = cmDedupe;
 
   // Lazy: no network on boot. First time the tab is opened, setTab() calls __cmInit (detect biz + GET existing).
   let inited = false;
