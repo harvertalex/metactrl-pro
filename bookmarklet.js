@@ -20,6 +20,9 @@
    ========================================================= */
 
 /* -------------------- CONFIG -------------------- */
+// v25.5 — Custom Metrics: localStorage memory of created metrics per business (FB GET is eventually-consistent
+//         and under-reports fresh creates). Status merges GET ∪ memory → reliable + no dup creation. Rebuild
+//         deletes GET ∪ memory ids (no stragglers under GET lag), then resets memory.
 // v25.4 — Custom Metrics: 11 rate metrics → format_type=PERCENT (confirmed enum) + formula without *100
 //         (PERCENT auto-×100 + %). + "Пересоздать" button (delete our metrics incl old formats/dupes, recreate clean).
 // v25.3 — Custom Metrics: paginate the existing-metrics GET (dedup was under-reporting → duplicate creation)
@@ -43,7 +46,7 @@
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v25.4',
+  APP_VERSION: 'v25.5',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -2865,6 +2868,14 @@ function mountMetrics(container) {
   const bizInp  = head.querySelector('#cm-biz');
   const permSel = head.querySelector('#cm-perm');
 
+  // Local memory of what THIS tool created (per business) — FB's GET on this edge is eventually-consistent
+  // and under-reports freshly created metrics, so we remember our own creates to keep status reliable + avoid dupes.
+  const lsKey = () => `mc_cm:${(bizInp.value || '').trim()}`;
+  function lsGet() { try { return JSON.parse(localStorage.getItem(lsKey()) || '{}'); } catch { return {}; } }
+  function lsSet(o) { try { localStorage.setItem(lsKey(), JSON.stringify(o)); } catch {} }
+  function lsAdd(name, id) { const o = lsGet(); o[name] = id; lsSet(o); }
+  function lsDel(name) { const o = lsGet(); delete o[name]; lsSet(o); }
+
   function applyStatus(ref) {
     const ex = existing.get(ref.m.name);
     if (ex) {
@@ -2902,6 +2913,7 @@ function mountMetrics(container) {
       });
       if (js?.id) {
         existing.set(ref.m.name, js);
+        lsAdd(ref.m.name, js.id);
         applyStatus(ref);
         log(`✓ Создана метрика "${ref.m.name}" (id ${js.id})`, 'success');
       } else {
@@ -2925,6 +2937,7 @@ function mountMetrics(container) {
       const js = await API.del(ref.id);
       if (js?.error) { log(`✗ delete "${ref.m.name}": ${js.error.message}`, 'error'); ref.bD.disabled = false; return; }
       existing.delete(ref.m.name);
+      lsDel(ref.m.name);
       applyStatus(ref);
       log(`🗑 Удалена "${ref.m.name}"`, 'warning');
     } catch (e) { log(`✗ delete "${ref.m.name}": ${e.message}`, 'error'); ref.bD.disabled = false; }
@@ -2964,7 +2977,9 @@ function mountMetrics(container) {
         else break;
       }
       if (page && page.error) log(`Custom Metrics GET error: ${page.error.message}`, 'error');
-      log(`Custom Metrics: найдено ${existing.size} существующих (страниц: ${pages}).`, 'success');
+      const mem = lsGet(); let fromMem = 0;
+      for (const n in mem) { if (mem[n] && !existing.has(n)) { existing.set(n, { id: mem[n], name: n }); fromMem++; } }
+      log(`Custom Metrics: найдено ${existing.size} (GET ${pages} стр.${fromMem ? ` + память ${fromMem}` : ''}).`, 'success');
     } catch (e) { log(`Custom Metrics GET fail: ${e.message}`, 'error'); }
     rowRefs.forEach(applyStatus);
   }
@@ -3020,16 +3035,21 @@ function mountMetrics(container) {
     const { all, error } = await cmFetchAll(biz);
     if (error) { log(`Custom Metrics rebuild GET error: ${error.message}`, 'error'); return; }
     const names = new Set(CM_METRICS.map(m => m.name));
-    const mine = all.filter(m => names.has(m.name));
-    if (!confirm(`Пересоздать набор на business ${biz}?\nУдалю ${mine.length} наших метрик (вкл. старые форматы и дубли) и создам заново ${CM_METRICS.length}.`)) return;
-    log(`Custom Metrics: удаляю ${mine.length}…`, 'warning');
+    // delete set = GET-found (all instances incl dupes) ∪ our localStorage ids (covers GET under-report lag)
+    const toDel = new Map(); // id -> name
+    all.filter(m => names.has(m.name)).forEach(m => toDel.set(m.id, m.name));
+    const mem = lsGet();
+    for (const n in mem) { if (mem[n]) toDel.set(mem[n], n); }
+    if (!confirm(`Пересоздать набор на business ${biz}?\nУдалю ${toDel.size} наших метрик (вкл. старые форматы и дубли) и создам заново ${CM_METRICS.length}.`)) return;
+    log(`Custom Metrics: удаляю ${toDel.size}…`, 'warning');
     let del = 0;
-    for (const m of mine) {
-      try { const r = await API.del(m.id); if (!(r && r.error)) del++; } catch (e) { log(`✗ del "${m.name}": ${e.message}`, 'error'); }
+    for (const [id, name] of toDel) {
+      try { const r = await API.del(id); if (!(r && r.error)) del++; } catch (e) { log(`✗ del "${name}": ${e.message}`, 'error'); }
       await new Promise(r => setTimeout(r, 350));
     }
-    log(`Custom Metrics: удалено ${del}/${mine.length}. Создаю заново…`, 'success');
+    log(`Custom Metrics: удалено ${del}/${toDel.size}. Создаю заново…`, 'success');
     existing.clear();
+    lsSet({});                 // reset memory — createAllMissing repopulates with fresh ids
     rowRefs.forEach(applyStatus);
     await createAllMissing();
     await refresh();
