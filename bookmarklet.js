@@ -20,6 +20,7 @@
    ========================================================= */
 
 /* -------------------- CONFIG -------------------- */
+// v25.0 — Custom Metrics: lazy-load — no FB GET on boot; existing-metrics fetch fires only on first tab open.
 // v24.9 — Custom Metrics: per-row EDITABLE formula input (fix invalid machine-key tokens inline, no redeploy)
 //         + surface FB error_user_title/subcode in log on failure (1359174 = invalid formula).
 // v24.8 — Custom Metrics tab: per-metric create buttons for 16 custom derived metrics via first-party
@@ -34,7 +35,7 @@
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v24.9',
+  APP_VERSION: 'v25.0',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -782,6 +783,7 @@ function makeModal() {
     wrap.querySelector('#tab-col').classList.toggle('active',   t === 'col');
     wrap.querySelector('#tab-anl').classList.toggle('active',   t === 'anl');
     wrap.querySelector('#tab-met').classList.toggle('active',   t === 'met');
+    if (t === 'met' && met.__cmInit) met.__cmInit();   // lazy: fetch existing metrics only on first open
     wrap.querySelector('#tab-insp').classList.toggle('active',  t === 'insp');
     wrap.querySelector('#tab-px').classList.toggle('active',    t === 'px');
     wrap.querySelector('#tab-ops').classList.toggle('active',   t === 'ops');
@@ -2963,13 +2965,16 @@ function mountMetrics(container) {
   head.querySelector('#cm-refresh').onclick = refresh;
   head.querySelector('#cm-all').onclick     = createAllMissing;
 
-  (async () => {
+  // Lazy: no network on boot. First time the tab is opened, setTab() calls __cmInit (detect biz + GET existing).
+  let inited = false;
+  container.__cmInit = async () => {
+    if (inited) return; inited = true;
     bizInp.value = 'определяю…';
     const biz = await cmDetectBiz();
     bizInp.value = biz || '';
     if (biz) refresh();
     else log('Custom Metrics: не определила Business ID — впиши вручную и жми «Обновить статус».', 'warning');
-  })();
+  };
 }
 
 /* ================== COLUMN PRESETS MODULE ================== */
