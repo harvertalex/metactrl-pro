@@ -77,6 +77,13 @@
  *              reuses run state: ready / awaiting-setup / dry-run / running). LIVE FEED rail gained a "● STATUS: ONLINE"
  *              line (mirrors header LED). Secondary buttons → thin cyan-outline transparent (ref look). Chips → cyan
  *              active cells. Levers to dial back kept inline (bracket alpha/legs, card bg, grid alpha, hero glow rings).
+ * v0.18.2: "Page-only" identity mode (logic). The step-3 checkbox (was "Use Facebook Page as IG identity")
+ *          is now PURE page-only: sends object_story_spec.page_id ONLY, omits instagram_user_id entirely,
+ *          and makes ZERO Instagram calls — no /instagram_accounts lookup, no PBIA GET/POST, no readback,
+ *          no "NO Instagram representative" warning. Hard-sets the Facebook Page as identity (Ads Manager
+ *          shows "Use Facebook Page"). Reverts v0.15.0's PBIA-on-demand for this toggle: that was an
+ *          unwanted IG side-effect when the operator explicitly wants page-only. Untick = full IG ladder
+ *          (auto-resolve real IG + PBIA fallback) unchanged.
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -235,7 +242,7 @@
     targetAccIds: [],         // v0.6: array of selected account IDs (1+ for multi-account launch)
     pageIdOverride: '',
     instagramOverride: '',    // v0.6.1: forces instagram_user_id (skips CSV "Instagram Account ID")
-    usePageAsActor: false,    // v0.6.12: explicit "use Facebook Page as IG identity" — skips IG resolution + CSV/override IG entirely; sets identity to page in Ads Manager UI
+    usePageAsActor: false,    // v0.18.2: PURE page-only — page_id only, instagram_user_id omitted, ZERO IG/PBIA calls. Hard-set Facebook Page as identity.
     linkOverride: '',         // v0.2: replaces CSV Link column (with token substitution)
     urlTagsOverride: '',      // v0.2: replaces CSV URL Tags column (with token substitution)
     titleOverride: '',        // v0.2.2: replaces CSV Title (headline) for all ads
@@ -1429,14 +1436,12 @@
     // instagram_user_id at ad creation). Ads Manager UI will show
     // "Use Facebook Page" in the IG profile field.
     if (state.usePageAsActor) {
-      // v0.15.0: "Use Facebook Page as IG identity" now resolves to the page's
-      // Page-Backed Instagram (PBIA), created on demand — instead of omitting
-      // instagram_user_id. PBIA IS the "Use Facebook Page" identity, but setting it
-      // EXPLICITLY makes IG delivery deterministic. Omitting relied on FB auto-backing
-      // the page, which was flaky → IG sometimes got no representative at all.
-      const pbia = pageId ? await loadPbiaForPage(pageId) : null;
-      if (pbia?.igId) return { igId: pbia.igId, source: 'page-as-actor-pbia' };
-      return { igId: '', source: 'page-as-actor-omit', pageOnlyReason: pageId ? 'pbia-unavailable' : 'no-page' };
+      // v0.18.2: PURE page-only. Send ONLY page_id, omit instagram_user_id entirely.
+      // No IG endpoint calls, no PBIA create, no readback, no warnings — the Facebook
+      // Page is the identity, full stop. Ads Manager shows "Use Facebook Page".
+      // (v0.15.0 made this create a PBIA on demand — reverted: that's an unwanted
+      // Instagram side-effect when the operator explicitly wants page-only.)
+      return { igId: '', source: 'page-only' };
     }
     const csvIg = stripPfx(state.rows[0]?.['Instagram Account ID'] || '');
     const desired = state.instagramOverride || csvIg;
@@ -2150,10 +2155,8 @@
     const probePage = state.pageIdOverride || stripPfx(firstRow?.['Link Object ID'] || '');
     const igResolution = await resolveAccountIg(accId, probePage);
     let resolvedIg = igResolution.igId;
-    if (igResolution.source === 'page-as-actor-pbia') {
-      addLog('info', `[${accLabel}] 🔗 Use Page as IG identity — page-backed IG ${resolvedIg} (IG placements deliver with the Page identity)`);
-    } else if (igResolution.source === 'page-as-actor-omit') {
-      addLog('warning', `[${accLabel}] 🔗 "Use Page as IG identity" requested, but no Page-Backed IG could be ${igResolution.pageOnlyReason === 'no-page' ? 'made (no page id)' : 'created (PBIA denied — token needs ADVERTISER+ on the page; page+IG+account must share one Business)'} → instagram_user_id omitted`);
+    if (igResolution.source === 'page-only') {
+      addLog('info', `[${accLabel}] 🟦 Page-only identity — using Facebook Page ${probePage || '(from CSV)'} as identity, Instagram skipped entirely (instagram_user_id omitted, no IG/PBIA calls)`);
     } else if (igResolution.source === 'desired-valid') {
       addLog('info', `[${accLabel}] 🔗 IG actor ${resolvedIg} validated for this account`);
     } else if (igResolution.source === 'desired-unverified') {
@@ -2173,7 +2176,7 @@
     // v0.15.0: never lose Instagram silently. If IG placements are targeted but we
     // couldn't secure a representative, warn LOUDLY and keep IG in targeting anyway
     // (Alexander's call — warn, don't block, don't strip IG placement).
-    if (!resolvedIg) {
+    if (!resolvedIg && !state.usePageAsActor) {
       const place = resolvePlacements();
       const igTargeted = !place || !(place.publisher_platforms || []).length || place.publisher_platforms.includes('instagram');
       if (igTargeted) {
@@ -3015,7 +3018,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>FB LAUNCHER // v0.18.1</span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>FB LAUNCHER // v0.18.2</span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -3188,7 +3191,7 @@
         <input type="text" id="fbl-page-id" value="${esc(state.pageIdOverride)}" placeholder="${state.pagesList.length ? 'or paste custom page ID' : 'page ID (14-20 digits) — empty = use CSV'}" style="margin-bottom:8px">
         <label style="display:flex;align-items:center;gap:6px;margin-top:5px;cursor:pointer">
           <input type="checkbox" id="fbl-use-page-as-actor" ${state.usePageAsActor ? 'checked' : ''}>
-          <span><b>Use Facebook Page as IG identity</b> <span style="color:#6e7681">— uses a Page-Backed Instagram (created on demand) so IG placements always deliver with the Page identity (Ads Manager shows "Use Facebook Page")</span></span>
+          <span><b>Page-only — use Facebook Page, skip Instagram</b> <span style="color:#6e7681">— hard-sets the Page as identity (page_id only, instagram_user_id omitted). Zero IG actions: no IG lookup, no PBIA, no warnings. Ads Manager shows "Use Facebook Page". ✅ железно ставит ФП</span></span>
         </label>
         <label style="margin-top:5px;${state.usePageAsActor ? 'opacity:.4;pointer-events:none' : ''}">Instagram Account ID <span style="color:#6e7681">— empty = auto-fetch from Page's connected IG${isMulti ? ' · ⚠ same ID for all accounts' : ''}</span></label>
         <input type="text" id="fbl-ig-id" value="${esc(state.instagramOverride)}" placeholder="leave empty → launcher auto-detects from Page · or paste IG actor ID to override"${state.usePageAsActor ? ' disabled style="opacity:.4"' : ''}>
