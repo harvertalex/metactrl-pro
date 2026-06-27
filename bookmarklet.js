@@ -20,6 +20,7 @@
    ========================================================= */
 
 /* -------------------- CONFIG -------------------- */
+// v25.8 — Custom Metrics: per-metric `bands` (✅/⚠️/❌ thresholds) appended to FB description + panel row (cmFullDesc).
 // v25.7 — Custom Metrics: drop Intent Share (pinned ~100% for direct-response — outbound≈post_engagement; no signal). 14 metrics.
 // v25.6 — Custom Metrics: Creative Efficiency Index → PERCENT (per spec; was FLOAT). 12 PERCENT, 3 FLOAT (ROAS/EPC/Cost per LPV).
 // v25.5 — Custom Metrics: localStorage memory of created metrics per business (FB GET is eventually-consistent
@@ -48,7 +49,7 @@
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v25.7',
+  APP_VERSION: 'v25.8',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -2805,21 +2806,24 @@ function mountManager(container) {
    Column Presets (Ads Manager app context has the write capability; our own API token does not). */
 
 const CM_METRICS = [
-  { key:'hook',     name:'Hook Rate (Video)',         desc:'Захватываемость креатива в первые 3 секунды',        formula:'actions:video_view / impressions',                      format:'PERCENT', ok:true },
-  { key:'hold',     name:'Hold Rate (Video)',         desc:'Удержание после крючка',                              formula:'video_thruplay_watched_actions:video_view / actions:video_view',   format:'PERCENT' },
-  { key:'shook',    name:'Static Hook Rate',          desc:'Насколько картинка останавливает скролл (thumbstop)', formula:'actions:post_engagement / impressions',                  format:'PERCENT' },
-  { key:'ushook',   name:'Unique Static Hook Rate',   desc:'Реальный охват хука без повторных реакций',           formula:'unique_actions:post_engagement / impressions',           format:'PERCENT' },
-  { key:'ictr',     name:'Intent CTR',                desc:'Доля пользователей, реально перешедших с платформы',  formula:'outbound_clicks:outbound_click / impressions',                   format:'PERCENT' },
-  { key:'lpctr',    name:'LP CTR',                    desc:'Эффективность перехода после клика',                  formula:'actions:landing_page_view / actions:link_click',         format:'PERCENT' },
-  { key:'lpvrate',  name:'LPV Rate',                  desc:'Качество outbound-кликов (дошли до ленда)',           formula:'actions:landing_page_view / outbound_clicks:outbound_click',     format:'PERCENT' },
-  { key:'cplpv',    name:'Cost per LPV',              desc:'Стоимость реального визита на сайт',                   formula:'spend / actions:landing_page_view',                            format:'FLOAT' },
-  { key:'regrate',  name:'Reg Rate (from LPV)',       desc:'Конверсия ленда в регистрацию',                       formula:'actions:complete_registration / actions:landing_page_view', format:'PERCENT' },
-  { key:'leadrate', name:'Lead Rate (from LPV)',      desc:'Конверсия ленда в лид',                               formula:'actions:lead / actions:landing_page_view',               format:'PERCENT' },
-  { key:'instrate', name:'Install Rate (from LPV)',   desc:'Конверсия ленда в установку',                         formula:'actions:mobile_app_install / actions:landing_page_view', format:'PERCENT' },
-  { key:'epc',      name:'EPC (Earnings Per Click)',  desc:'Сколько зарабатываешь с клика',                       formula:'action_values:omni_purchase / actions:link_click',                  format:'FLOAT' },
-  { key:'roas',     name:'ROAS (Custom)',             desc:'Возврат инвестиций',                                  formula:'action_values:omni_purchase / spend',                               format:'FLOAT' },
-  { key:'cei',      name:'Creative Efficiency Index', desc:'Скоринговая оценка креатива',                         formula:'actions:post_engagement * outbound_clicks:outbound_click / impressions', format:'PERCENT' },
+  { key:'hook',     name:'Hook Rate (Video)',         desc:'Захватываемость креатива в первые 3 секунды',        bands:'✅ 30%+ · ⚠️ 20–30% · ❌ <20%',            formula:'actions:video_view / impressions',                      format:'PERCENT', ok:true },
+  { key:'hold',     name:'Hold Rate (Video)',         desc:'Удержание после крючка',                              bands:'✅ 50%+ · ⚠️ 35–50% · ❌ <35%',            formula:'video_thruplay_watched_actions:video_view / actions:video_view',   format:'PERCENT' },
+  { key:'shook',    name:'Static Hook Rate',          desc:'Насколько картинка останавливает скролл (thumbstop)', bands:'✅ 1.5%+ · ⚠️ 0.8–1.5% · ❌ <0.8%',        formula:'actions:post_engagement / impressions',                  format:'PERCENT' },
+  { key:'ushook',   name:'Unique Static Hook Rate',   desc:'Реальный охват хука без повторных реакций',           bands:'✅ 1.2%+ · ⚠️ 0.6–1.2% · ❌ <0.6%',        formula:'unique_actions:post_engagement / impressions',           format:'PERCENT' },
+  { key:'ictr',     name:'Intent CTR',                desc:'Доля пользователей, реально перешедших с платформы',  bands:'✅ 1.2%+ · ⚠️ 0.7–1.2% · ❌ <0.7%',        formula:'outbound_clicks:outbound_click / impressions',                   format:'PERCENT' },
+  { key:'lpctr',    name:'LP CTR',                    desc:'Эффективность перехода после клика',                  bands:'✅ 80%+ · ⚠️ 60–80% · ❌ <60%',            formula:'actions:landing_page_view / actions:link_click',         format:'PERCENT' },
+  { key:'lpvrate',  name:'LPV Rate',                  desc:'Качество outbound-кликов (дошли до ленда)',           bands:'✅ 80%+ · ⚠️ 65–80% · ❌ <65%',            formula:'actions:landing_page_view / outbound_clicks:outbound_click',     format:'PERCENT' },
+  { key:'cplpv',    name:'Cost per LPV',              desc:'Стоимость реального визита на сайт',                   bands:'✅ < таргета · ⚠️ ≈ таргет · ❌ > таргета', formula:'spend / actions:landing_page_view',                            format:'FLOAT' },
+  { key:'regrate',  name:'Reg Rate (from LPV)',       desc:'Конверсия ленда в регистрацию',                       bands:'✅ 10%+ · ⚠️ 5–10% · ❌ <5%',              formula:'actions:complete_registration / actions:landing_page_view', format:'PERCENT' },
+  { key:'leadrate', name:'Lead Rate (from LPV)',      desc:'Конверсия ленда в лид',                               bands:'✅ 12%+ · ⚠️ 6–12% · ❌ <6%',              formula:'actions:lead / actions:landing_page_view',               format:'PERCENT' },
+  { key:'instrate', name:'Install Rate (from LPV)',   desc:'Конверсия ленда в установку',                         bands:'✅ 25%+ · ⚠️ 15–25% · ❌ <15%',            formula:'actions:mobile_app_install / actions:landing_page_view', format:'PERCENT' },
+  { key:'epc',      name:'EPC (Earnings Per Click)',  desc:'Сколько зарабатываешь с клика',                       bands:'✅ > breakeven · ⚠️ ≈ breakeven · ❌ < breakeven', formula:'action_values:omni_purchase / actions:link_click',                  format:'FLOAT' },
+  { key:'roas',     name:'ROAS (Custom)',             desc:'Возврат инвестиций',                                  bands:'✅ 1.3+ · ⚠️ 1.0–1.3 · ❌ <1.0',           formula:'action_values:omni_purchase / spend',                               format:'FLOAT' },
+  { key:'cei',      name:'Creative Efficiency Index', desc:'Скоринговая оценка креатива',                         bands:'✅ верх 25% · ⚠️ 25–75% · ❌ ниж 25%',     formula:'actions:post_engagement * outbound_clicks:outbound_click / impressions', format:'PERCENT' },
 ];
+
+// Full description sent to FB (and shown in the panel row): desc + good/bad bands overview.
+function cmFullDesc(m) { return m.bands ? `${m.desc} · ${m.bands}` : m.desc; }
 
 async function cmDetectBiz() {
   try { const c = require('BusinessUnifiedNavigationContext'); if (c?.businessID) return String(c.businessID); } catch {}
@@ -2905,7 +2909,7 @@ function mountMetrics(container) {
       const js = await API.post(`${biz}/ad_custom_derived_metrics`, {
         business_id: biz,
         name:        ref.m.name,
-        description: ref.m.desc,
+        description: cmFullDesc(ref.m),
         format_type: ref.m.format,
         formula:     formula,
         permission:  permSel.value,
@@ -2950,7 +2954,7 @@ function mountMetrics(container) {
     el.innerHTML = `
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:7px">
         <div style="flex:1;min-width:0;font-weight:600;color:var(--txt);font-size:13px">${m.name}${m.ok ? ' <span class="ar-badge ar-badge-ok" style="font-size:9px;padding:1px 5px">подтв.</span>' : ''}
-          <span style="font-weight:400;color:var(--muted);font-size:11px">— ${m.desc}</span></div>
+          <span style="font-weight:400;color:var(--muted);font-size:11px">— ${cmFullDesc(m)}</span></div>
         <span class="cm-st" style="font-size:11px;color:var(--muted);white-space:nowrap">…</span>
         <button class="cm-create ar-btn ar-btn-primary ar-btn-sm" style="white-space:nowrap">＋ Создать</button>
         <button class="cm-del ar-btn ar-btn-danger ar-btn-sm" style="display:none">🗑</button>
