@@ -20,6 +20,7 @@
    ========================================================= */
 
 /* -------------------- CONFIG -------------------- */
+// v25.9 — Custom Metrics: band words instead of emoji (FB description field mangles ✅/⚠️/❌ → �). Now хорошо/средне/плохо.
 // v25.8 — Custom Metrics: per-metric `bands` (✅/⚠️/❌ thresholds) appended to FB description + panel row (cmFullDesc).
 // v25.7 — Custom Metrics: drop Intent Share (pinned ~100% for direct-response — outbound≈post_engagement; no signal). 14 metrics.
 // v25.6 — Custom Metrics: Creative Efficiency Index → PERCENT (per spec; was FLOAT). 12 PERCENT, 3 FLOAT (ROAS/EPC/Cost per LPV).
@@ -49,7 +50,7 @@
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v25.8',
+  APP_VERSION: 'v25.9',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -2806,20 +2807,20 @@ function mountManager(container) {
    Column Presets (Ads Manager app context has the write capability; our own API token does not). */
 
 const CM_METRICS = [
-  { key:'hook',     name:'Hook Rate (Video)',         desc:'Захватываемость креатива в первые 3 секунды',        bands:'✅ 30%+ · ⚠️ 20–30% · ❌ <20%',            formula:'actions:video_view / impressions',                      format:'PERCENT', ok:true },
-  { key:'hold',     name:'Hold Rate (Video)',         desc:'Удержание после крючка',                              bands:'✅ 50%+ · ⚠️ 35–50% · ❌ <35%',            formula:'video_thruplay_watched_actions:video_view / actions:video_view',   format:'PERCENT' },
-  { key:'shook',    name:'Static Hook Rate',          desc:'Насколько картинка останавливает скролл (thumbstop)', bands:'✅ 1.5%+ · ⚠️ 0.8–1.5% · ❌ <0.8%',        formula:'actions:post_engagement / impressions',                  format:'PERCENT' },
-  { key:'ushook',   name:'Unique Static Hook Rate',   desc:'Реальный охват хука без повторных реакций',           bands:'✅ 1.2%+ · ⚠️ 0.6–1.2% · ❌ <0.6%',        formula:'unique_actions:post_engagement / impressions',           format:'PERCENT' },
-  { key:'ictr',     name:'Intent CTR',                desc:'Доля пользователей, реально перешедших с платформы',  bands:'✅ 1.2%+ · ⚠️ 0.7–1.2% · ❌ <0.7%',        formula:'outbound_clicks:outbound_click / impressions',                   format:'PERCENT' },
-  { key:'lpctr',    name:'LP CTR',                    desc:'Эффективность перехода после клика',                  bands:'✅ 80%+ · ⚠️ 60–80% · ❌ <60%',            formula:'actions:landing_page_view / actions:link_click',         format:'PERCENT' },
-  { key:'lpvrate',  name:'LPV Rate',                  desc:'Качество outbound-кликов (дошли до ленда)',           bands:'✅ 80%+ · ⚠️ 65–80% · ❌ <65%',            formula:'actions:landing_page_view / outbound_clicks:outbound_click',     format:'PERCENT' },
-  { key:'cplpv',    name:'Cost per LPV',              desc:'Стоимость реального визита на сайт',                   bands:'✅ < таргета · ⚠️ ≈ таргет · ❌ > таргета', formula:'spend / actions:landing_page_view',                            format:'FLOAT' },
-  { key:'regrate',  name:'Reg Rate (from LPV)',       desc:'Конверсия ленда в регистрацию',                       bands:'✅ 10%+ · ⚠️ 5–10% · ❌ <5%',              formula:'actions:complete_registration / actions:landing_page_view', format:'PERCENT' },
-  { key:'leadrate', name:'Lead Rate (from LPV)',      desc:'Конверсия ленда в лид',                               bands:'✅ 12%+ · ⚠️ 6–12% · ❌ <6%',              formula:'actions:lead / actions:landing_page_view',               format:'PERCENT' },
-  { key:'instrate', name:'Install Rate (from LPV)',   desc:'Конверсия ленда в установку',                         bands:'✅ 25%+ · ⚠️ 15–25% · ❌ <15%',            formula:'actions:mobile_app_install / actions:landing_page_view', format:'PERCENT' },
-  { key:'epc',      name:'EPC (Earnings Per Click)',  desc:'Сколько зарабатываешь с клика',                       bands:'✅ > breakeven · ⚠️ ≈ breakeven · ❌ < breakeven', formula:'action_values:omni_purchase / actions:link_click',                  format:'FLOAT' },
-  { key:'roas',     name:'ROAS (Custom)',             desc:'Возврат инвестиций',                                  bands:'✅ 1.3+ · ⚠️ 1.0–1.3 · ❌ <1.0',           formula:'action_values:omni_purchase / spend',                               format:'FLOAT' },
-  { key:'cei',      name:'Creative Efficiency Index', desc:'Скоринговая оценка креатива',                         bands:'✅ верх 25% · ⚠️ 25–75% · ❌ ниж 25%',     formula:'actions:post_engagement * outbound_clicks:outbound_click / impressions', format:'PERCENT' },
+  { key:'hook',     name:'Hook Rate (Video)',         desc:'Захватываемость креатива в первые 3 секунды',        bands:'хорошо 30%+ · средне 20–30% · плохо <20%',          formula:'actions:video_view / impressions',                      format:'PERCENT', ok:true },
+  { key:'hold',     name:'Hold Rate (Video)',         desc:'Удержание после крючка',                              bands:'хорошо 50%+ · средне 35–50% · плохо <35%',          formula:'video_thruplay_watched_actions:video_view / actions:video_view',   format:'PERCENT' },
+  { key:'shook',    name:'Static Hook Rate',          desc:'Насколько картинка останавливает скролл (thumbstop)', bands:'хорошо 1.5%+ · средне 0.8–1.5% · плохо <0.8%',      formula:'actions:post_engagement / impressions',                  format:'PERCENT' },
+  { key:'ushook',   name:'Unique Static Hook Rate',   desc:'Реальный охват хука без повторных реакций',           bands:'хорошо 1.2%+ · средне 0.6–1.2% · плохо <0.6%',      formula:'unique_actions:post_engagement / impressions',           format:'PERCENT' },
+  { key:'ictr',     name:'Intent CTR',                desc:'Доля пользователей, реально перешедших с платформы',  bands:'хорошо 1.2%+ · средне 0.7–1.2% · плохо <0.7%',      formula:'outbound_clicks:outbound_click / impressions',                   format:'PERCENT' },
+  { key:'lpctr',    name:'LP CTR',                    desc:'Эффективность перехода после клика',                  bands:'хорошо 80%+ · средне 60–80% · плохо <60%',          formula:'actions:landing_page_view / actions:link_click',         format:'PERCENT' },
+  { key:'lpvrate',  name:'LPV Rate',                  desc:'Качество outbound-кликов (дошли до ленда)',           bands:'хорошо 80%+ · средне 65–80% · плохо <65%',          formula:'actions:landing_page_view / outbound_clicks:outbound_click',     format:'PERCENT' },
+  { key:'cplpv',    name:'Cost per LPV',              desc:'Стоимость реального визита на сайт',                   bands:'хорошо < таргета · средне ≈ таргет · плохо > таргета', formula:'spend / actions:landing_page_view',                            format:'FLOAT' },
+  { key:'regrate',  name:'Reg Rate (from LPV)',       desc:'Конверсия ленда в регистрацию',                       bands:'хорошо 10%+ · средне 5–10% · плохо <5%',            formula:'actions:complete_registration / actions:landing_page_view', format:'PERCENT' },
+  { key:'leadrate', name:'Lead Rate (from LPV)',      desc:'Конверсия ленда в лид',                               bands:'хорошо 12%+ · средне 6–12% · плохо <6%',            formula:'actions:lead / actions:landing_page_view',               format:'PERCENT' },
+  { key:'instrate', name:'Install Rate (from LPV)',   desc:'Конверсия ленда в установку',                         bands:'хорошо 25%+ · средне 15–25% · плохо <15%',          formula:'actions:mobile_app_install / actions:landing_page_view', format:'PERCENT' },
+  { key:'epc',      name:'EPC (Earnings Per Click)',  desc:'Сколько зарабатываешь с клика',                       bands:'хорошо > breakeven · средне ≈ breakeven · плохо < breakeven', formula:'action_values:omni_purchase / actions:link_click',                  format:'FLOAT' },
+  { key:'roas',     name:'ROAS (Custom)',             desc:'Возврат инвестиций',                                  bands:'хорошо 1.3+ · средне 1.0–1.3 · плохо <1.0',         formula:'action_values:omni_purchase / spend',                               format:'FLOAT' },
+  { key:'cei',      name:'Creative Efficiency Index', desc:'Скоринговая оценка креатива',                         bands:'хорошо верх 25% · средне 25–75% · плохо ниж 25%',   formula:'actions:post_engagement * outbound_clicks:outbound_click / impressions', format:'PERCENT' },
 ];
 
 // Full description sent to FB (and shown in the panel row): desc + good/bad bands overview.
