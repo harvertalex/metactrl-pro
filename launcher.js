@@ -84,6 +84,11 @@
  *          shows "Use Facebook Page"). Reverts v0.15.0's PBIA-on-demand for this toggle: that was an
  *          unwanted IG side-effect when the operator explicitly wants page-only. Untick = full IG ladder
  *          (auto-resolve real IG + PBIA fallback) unchanged.
+ * v0.18.3: step-3 checkbox relabel only (no logic change) — the v0.18.2 label "use Facebook Page"
+ *          misled (read as "use the Page as IG identity" = good) when it actually OMITS Instagram.
+ *          Now "⛔ FB-only — БЕЗ Instagram" + amber when active + "⚠ IG выключен" note, and a green
+ *          hint on the UNticked state: "дефолт: ФП авто-используется и в Instagram (page-backed IG)".
+ *          Makes clear: untick = Page delivers on FB AND IG (PBIA); tick = FB-only, IG dropped.
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -3018,7 +3023,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>FB LAUNCHER // v0.18.2</span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>FB LAUNCHER // v0.18.3</span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -3191,8 +3196,9 @@
         <input type="text" id="fbl-page-id" value="${esc(state.pageIdOverride)}" placeholder="${state.pagesList.length ? 'or paste custom page ID' : 'page ID (14-20 digits) — empty = use CSV'}" style="margin-bottom:8px">
         <label style="display:flex;align-items:center;gap:6px;margin-top:5px;cursor:pointer">
           <input type="checkbox" id="fbl-use-page-as-actor" ${state.usePageAsActor ? 'checked' : ''}>
-          <span><b>Page-only — use Facebook Page, skip Instagram</b> <span style="color:#6e7681">— hard-sets the Page as identity (page_id only, instagram_user_id omitted). Zero IG actions: no IG lookup, no PBIA, no warnings. Ads Manager shows "Use Facebook Page". ✅ железно ставит ФП</span></span>
+          <span><b style="color:${state.usePageAsActor ? '#fbbf24' : 'inherit'}">⛔ FB-only — БЕЗ Instagram</b> <span style="color:#6e7681">— ставь ТОЛЬКО если IG не нужен совсем: шлёт один page_id, instagram_user_id НЕ отправляется → объявление НЕ крутится в Instagram, IG-слот пустой. ${state.usePageAsActor ? '<b style="color:#fbbf24">⚠ сейчас включено — IG выключен</b>' : ''}</span></span>
         </label>
+        ${!state.usePageAsActor ? `<div style="font-size:11px;color:#22c55e;margin-top:3px;padding-left:22px">✅ дефолт (галка снята): ФП авто-используется и в Instagram (page-backed IG) — крутится в FB <b>и</b> IG под именем Страницы</div>` : ''}
         <label style="margin-top:5px;${state.usePageAsActor ? 'opacity:.4;pointer-events:none' : ''}">Instagram Account ID <span style="color:#6e7681">— empty = auto-fetch from Page's connected IG${isMulti ? ' · ⚠ same ID for all accounts' : ''}</span></label>
         <input type="text" id="fbl-ig-id" value="${esc(state.instagramOverride)}" placeholder="leave empty → launcher auto-detects from Page · or paste IG actor ID to override"${state.usePageAsActor ? ' disabled style="opacity:.4"' : ''}>
         ${(() => {
