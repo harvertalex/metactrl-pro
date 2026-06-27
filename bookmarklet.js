@@ -20,6 +20,7 @@
    ========================================================= */
 
 /* -------------------- CONFIG -------------------- */
+// v25.10 — Custom Metrics: drop Unique Static Hook Rate (FB unique_actions omits post_engagement → empty; dup of Static Hook). 13 metrics.
 // v25.9 — Custom Metrics: band words instead of emoji (FB description field mangles ✅/⚠️/❌ → �). Now хорошо/средне/плохо.
 // v25.8 — Custom Metrics: per-metric `bands` (✅/⚠️/❌ thresholds) appended to FB description + panel row (cmFullDesc).
 // v25.7 — Custom Metrics: drop Intent Share (pinned ~100% for direct-response — outbound≈post_engagement; no signal). 14 metrics.
@@ -50,7 +51,7 @@
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v25.9',
+  APP_VERSION: 'v25.10',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -2810,7 +2811,6 @@ const CM_METRICS = [
   { key:'hook',     name:'Hook Rate (Video)',         desc:'Захватываемость креатива в первые 3 секунды',        bands:'хорошо 30%+ · средне 20–30% · плохо <20%',          formula:'actions:video_view / impressions',                      format:'PERCENT', ok:true },
   { key:'hold',     name:'Hold Rate (Video)',         desc:'Удержание после крючка',                              bands:'хорошо 50%+ · средне 35–50% · плохо <35%',          formula:'video_thruplay_watched_actions:video_view / actions:video_view',   format:'PERCENT' },
   { key:'shook',    name:'Static Hook Rate',          desc:'Насколько картинка останавливает скролл (thumbstop)', bands:'хорошо 1.5%+ · средне 0.8–1.5% · плохо <0.8%',      formula:'actions:post_engagement / impressions',                  format:'PERCENT' },
-  { key:'ushook',   name:'Unique Static Hook Rate',   desc:'Реальный охват хука без повторных реакций',           bands:'хорошо 1.2%+ · средне 0.6–1.2% · плохо <0.6%',      formula:'unique_actions:post_engagement / impressions',           format:'PERCENT' },
   { key:'ictr',     name:'Intent CTR',                desc:'Доля пользователей, реально перешедших с платформы',  bands:'хорошо 1.2%+ · средне 0.7–1.2% · плохо <0.7%',      formula:'outbound_clicks:outbound_click / impressions',                   format:'PERCENT' },
   { key:'lpctr',    name:'LP CTR',                    desc:'Эффективность перехода после клика',                  bands:'хорошо 80%+ · средне 60–80% · плохо <60%',          formula:'actions:landing_page_view / actions:link_click',         format:'PERCENT' },
   { key:'lpvrate',  name:'LPV Rate',                  desc:'Качество outbound-кликов (дошли до ленда)',           bands:'хорошо 80%+ · средне 65–80% · плохо <65%',          formula:'actions:landing_page_view / outbound_clicks:outbound_click',     format:'PERCENT' },
