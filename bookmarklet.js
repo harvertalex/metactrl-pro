@@ -3579,14 +3579,19 @@ function mountAnalytics(container) {
       sd.loading=true; sd.accounts=[];
       sdRender();
       try {
-        const raw = await fetchAllAccountsFlat('id,account_id,name,account_status,balance,currency,disable_reason');
-        const base = raw.map(a=>({
-          id:a._id, name:a._name, bm:a._bm_name||'',
-          status:a.account_status,
-          balance:parseFloat(a.balance||0)/100,
-          currency:a.currency||'USD',
-          spend:null, impressions:null, clicks:null,
-        }));
+        const raw = await fetchAllAccountsFlat('id,account_id,name,account_status,balance,currency,account_currency_ratio_to_usd,disable_reason');
+        const base = raw.map(a=>{
+          const currency=a.currency||'USD';
+          const off=CURRENCY_OFFSETS[currency]??100;
+          return {
+            id:a._id, name:a._name, bm:a._bm_name||'',
+            status:a.account_status,
+            balance:parseFloat(a.balance||0)/off,
+            currency,
+            rate:parseFloat(a.account_currency_ratio_to_usd||1)||1,
+            spend:null, impressions:null, clicks:null,
+          };
+        });
         sd.status={type:'info',text:`Fetching insights for ${base.length} accounts...`};
         sdRender();
         const insParams={fields:'spend,impressions,clicks',limit:1};
@@ -3616,15 +3621,17 @@ function mountAnalytics(container) {
     function sdRender() {
       const SL={1:'Active',2:'Disabled',3:'Unsettled',7:'Pending',8:'Pending',9:'In Review',100:'Closed',101:'Any Closed',201:'Flagged'};
       const SC2={1:'#22c55e',2:'#ef4444',3:'#f59e0b',7:'#f59e0b',8:'#f59e0b',9:'#f59e0b',100:'#64748b',101:'#64748b',201:'#ef4444'};
-      const fmt=n=>n==null?'—':`$${n.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+      const fmt=(n,cur)=>n==null?'—':n.toLocaleString('en',{style:'currency',currency:cur||'USD',minimumFractionDigits:2,maximumFractionDigits:2});
+      const fmtUsd=n=>n==null?'—':'≈'+n.toLocaleString('en',{style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:2});
+      const toUsd=(n,rate)=>n==null?0:n/(rate||1);
 
       let accs=sd.accounts;
       if (sd.filter==='active') accs=accs.filter(a=>a.status===1);
       if (sd.filter==='issues') accs=accs.filter(a=>a.status!==1);
       if (sd.filter==='spending') accs=accs.filter(a=>(a.spend||0)>0);
 
-      const totalSpend=sd.accounts.reduce((s,a)=>s+(a.spend||0),0);
-      const totalBalance=sd.accounts.reduce((s,a)=>s+a.balance,0);
+      const totalSpend=sd.accounts.reduce((s,a)=>s+toUsd(a.spend||0,a.rate),0);
+      const totalBalance=sd.accounts.reduce((s,a)=>s+toUsd(a.balance,a.rate),0);
       const activeCount=sd.accounts.filter(a=>a.status===1).length;
       const issueCount=sd.accounts.filter(a=>a.status!==1).length;
       const spendingCount=sd.accounts.filter(a=>(a.spend||0)>0).length;
@@ -3640,10 +3647,10 @@ function mountAnalytics(container) {
         <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
           <span style="font-size:11px;font-weight:700;color:${SC2[a.status]||'#64748b'}">${SL[a.status]||a.status}</span>
         </td>
-        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:13px;font-weight:700;color:${(a.spend||0)>0?'var(--txt)':'#64748b'};text-align:right">${fmt(a.spend)}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:13px;font-weight:700;color:${(a.spend||0)>0?'var(--txt)':'#64748b'};text-align:right">${fmt(a.spend,a.currency)}</td>
         <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:#64748b;text-align:right">${a.impressions!=null?a.impressions.toLocaleString():'—'}</td>
         <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:#64748b;text-align:right">${a.clicks!=null?a.clicks.toLocaleString():'—'}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--txt);text-align:right">${fmt(a.balance)}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--txt);text-align:right">${fmt(a.balance,a.currency)}</td>
       </tr>`).join('');
 
       c.innerHTML = `
@@ -3660,8 +3667,8 @@ function mountAnalytics(container) {
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
           ${[
-            ['Spend ('+presetLabel+')', fmt(totalSpend), 'var(--txt)', '100px'],
-            ['Total Balance', fmt(totalBalance), 'var(--txt)', '100px'],
+            ['Spend ('+presetLabel+') ≈USD', fmtUsd(totalSpend), 'var(--txt)', '110px'],
+            ['Total Balance ≈USD', fmtUsd(totalBalance), 'var(--txt)', '110px'],
             ['Active', activeCount, '#22c55e', '70px'],
             ['Spending', spendingCount, '#3b82f6', '70px'],
             ['Issues', issueCount, '#ef4444', '70px'],
@@ -3713,8 +3720,8 @@ function mountAnalytics(container) {
         if (act==='filter') { sd.filter=btn.dataset.filter; sdRender(); return; }
         if (act==='csv') {
           exportCsv([
-            ['Name','BM','ID','Status','Spend','Impressions','Clicks','Balance','Currency'],
-            ...sd.accounts.map(a=>[a.name,a.bm,a.id,a.status,a.spend,a.impressions,a.clicks,a.balance,a.currency])
+            ['Name','BM','ID','Status','Spend','Balance','Currency','Rate→USD','Spend (USD)','Balance (USD)','Impressions','Clicks'],
+            ...sd.accounts.map(a=>[a.name,a.bm,a.id,a.status,a.spend,a.balance,a.currency,a.rate,((a.spend||0)/(a.rate||1)).toFixed(2),(a.balance/(a.rate||1)).toFixed(2),a.impressions,a.clicks])
           ],`spend_${sd.preset}_dashboard.csv`);
         }
       },{once:false});
