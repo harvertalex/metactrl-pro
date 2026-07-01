@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.18.1 — Bookmarklet
+ * FB Launcher v0.19.0 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -89,6 +89,17 @@
  *          Now "⛔ FB-only — БЕЗ Instagram" + amber when active + "⚠ IG выключен" note, and a green
  *          hint on the UNticked state: "дефолт: ФП авто-используется и в Instagram (page-backed IG)".
  *          Makes clear: untick = Page delivers on FB AND IG (PBIA); tick = FB-only, IG dropped.
+ * v0.19.0: step-3 page dropdown now shows ALL pages available to the account, not just 2.
+ *          Root cause: loader used /act_<id>/promote_pages ONLY, with a fallback to /me/accounts
+ *          that fired only when promote_pages returned ZERO — so any account with ≥1 promotable
+ *          page hid the entire broader pool the operator sees in Ads Manager. Now the loader UNIONS
+ *          four sources — promote_pages (safe/account-bound) + the owning BM's owned_pages & client_pages
+ *          + /me/accounts (personal) — and tags each page `promotable` (present in this account's
+ *          promote_pages). Dropdown splits into two optgroups: "✓ Promotable from this account" and
+ *          "⚠ Broader pool — may be rejected from this account" (⚠-prefixed, sorted below). Readout
+ *          shows "N pages (M promotable + K broader)". Selecting/typing a broader-pool page shows an
+ *          amber inline note + a launch-time confirm (FB may reject with subcode 1815813 unless the
+ *          Page is linked to the account in Business Settings). Promotable-only picks are unchanged.
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -1186,7 +1197,13 @@
     render();
   }
 
-  // ─── PAGES LOADER (v0.6: per-account, cached) ───────────────────────────
+  // ─── PAGES LOADER (v0.19: merge all sources, tag promotable) ─────────────
+  // v0.19.0: was promote_pages-only with a zero-fallback to /me/accounts — so an
+  // account that returned even ONE promote_pages result HID every other page the
+  // operator sees in Ads Manager. Now we UNION four sources and tag each page
+  // `promotable` (present in THIS account's promote_pages edge = safe to launch).
+  // Non-promotable pages are still shown (broader pool) but flagged in the UI,
+  // since launching with them from this account may be rejected by FB (subcode 1815813).
   async function loadPagesForAccount(accId) {
     if (!accId) return;
     if (state.pagesByAccount[accId]) {
@@ -1196,29 +1213,53 @@
     }
     state.pagesLoading = true;
     render();
-    const found = new Map();
-    // Primary: pages connected to this ad account (most accurate)
+    const found = new Map();       // id -> name (union of all sources)
+    const promotable = new Set();  // ids FB confirms THIS account can promote
+
+    // 1) promote_pages — the safe, account-bound set (guaranteed launchable here).
     try {
       const items = await apiAll(`/act_${accId}/promote_pages`, { fields: 'id,name', limit: 100 });
-      items.forEach(p => found.set(String(p.id), p.name || 'Untitled'));
+      items.forEach(p => { const id = String(p.id); found.set(id, p.name || 'Untitled'); promotable.add(id); });
       if (items.length) addLog('info', `Pages (promote_pages): ${items.length} for ${accId}`);
     } catch (e) {
       addLog('warning', `promote_pages failed (${accId}): ${e.message}`);
     }
-    // Fallback: pages owned by user (broader pool; only used if no account-bound pages found).
-    if (!found.size) {
-      try {
-        const items = await apiAll('/me/accounts', { fields: 'id,name', limit: 100 });
-        items.forEach(p => found.set(String(p.id), p.name || 'Untitled'));
-        if (items.length) addLog('info', `Pages (/me/accounts): ${items.length}`);
-      } catch (e) {
-        addLog('warning', `/me/accounts failed: ${e.message}`);
+
+    // 2) BM owned/client pages — the broader pool Ads Manager shows. Resolve the
+    //    account's owning business first, then pull its page inventory.
+    try {
+      const acc = await apiFetch(`/act_${accId}`, { params: { fields: 'business{id,name}' } });
+      const bizId = acc && acc.business && acc.business.id;
+      if (bizId) {
+        for (const edge of ['owned_pages', 'client_pages']) {
+          try {
+            const items = await apiAll(`/${bizId}/${edge}`, { fields: 'id,name', limit: 100 });
+            items.forEach(p => { const id = String(p.id); if (!found.has(id)) found.set(id, p.name || 'Untitled'); });
+            if (items.length) addLog('info', `Pages (${edge}): ${items.length} for BM ${bizId}`);
+          } catch (e) { addLog('warning', `${edge} failed (BM ${bizId}): ${e.message}`); }
+        }
       }
+    } catch (e) {
+      addLog('warning', `business lookup failed (${accId}): ${e.message}`);
     }
-    const list = [...found.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+
+    // 3) /me/accounts — personal pool (pages where the session user holds a role).
+    try {
+      const items = await apiAll('/me/accounts', { fields: 'id,name', limit: 100 });
+      items.forEach(p => { const id = String(p.id); if (!found.has(id)) found.set(id, p.name || 'Untitled'); });
+      if (items.length) addLog('info', `Pages (/me/accounts): ${items.length}`);
+    } catch (e) {
+      addLog('warning', `/me/accounts failed: ${e.message}`);
+    }
+
+    // Promotable first, then alpha — the safe picks sit at the top of the dropdown.
+    const list = [...found.entries()]
+      .map(([id, name]) => ({ id, name, promotable: promotable.has(id) }))
+      .sort((a, b) => (a.promotable === b.promotable ? a.name.localeCompare(b.name) : (a.promotable ? -1 : 1)));
     state.pagesByAccount[accId] = list;
     if (state.targetAccIds[0] === accId) state.pagesList = list;
     state.pagesLoading = false;
+    addLog('info', `Pages total for ${accId}: ${list.length} (${promotable.size} promotable, ${list.length - promotable.size} broader pool)`);
     render();
   }
 
@@ -2069,13 +2110,23 @@
         setStatus('error', `Invalid Page ID "${state.pageIdOverride}". Must be 10-20 digits. Pick from dropdown in step 3.`);
         return;
       }
-      if (state.pagesList.length && !state.pagesList.find(p => p.id === state.pageIdOverride)) {
+      const inList = state.pagesList.find(p => p.id === state.pageIdOverride);
+      if (state.pagesList.length && !inList) {
         const ok = confirm(
           `Page ${state.pageIdOverride} is NOT in the primary account's page list.\n\n` +
           `Available pages:\n${state.pagesList.slice(0, 5).map(p => `  ${p.id} — ${p.name}`).join('\n')}\n\n` +
           `Launch anyway? (FB may reject ads with subcode 1815813)`
         );
         if (!ok) { setStatus('warning', 'Launch cancelled. Pick a page from the dropdown in step 3.'); return; }
+      } else if (inList && !inList.promotable) {
+        // v0.19.0: page is in the broader pool (BM/personal) but NOT in this account's
+        // promote_pages — launchable only if FB lets it. Warn, don't silently proceed.
+        const ok = confirm(
+          `Page "${inList.name}" (${inList.id}) is in the broader pool but NOT promotable from the primary account.\n\n` +
+          `FB may reject the ad (subcode 1815813) unless the Page is linked to this ad account in Business Settings.\n\n` +
+          `Launch anyway?`
+        );
+        if (!ok) { setStatus('warning', 'Launch cancelled. Link the Page to the account, or pick a promotable one (step 3).'); return; }
       }
     }
 
@@ -3023,7 +3074,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>FB LAUNCHER // v0.18.3</span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>FB LAUNCHER // v0.19.0</span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -3187,12 +3238,27 @@
 
       <div class="grid2">
       <div class="field">
-        <label>3. Page ID <span style="color:#6e7681">— ${state.pagesLoading ? 'loading pages...' : `<span class="fbl-readout">${state.pagesList.length}</span> pages found`}</span></label>
-        ${state.pagesList.length ? `
+        <label>3. Page ID <span style="color:#6e7681">— ${state.pagesLoading ? 'loading pages...' : (() => {
+          const promo = state.pagesList.filter(p => p.promotable).length;
+          const other = state.pagesList.length - promo;
+          return `<span class="fbl-readout">${state.pagesList.length}</span> pages found${other ? ` (<span class="fbl-readout">${promo}</span> promotable + ${other} broader)` : ''}`;
+        })()}</span></label>
+        ${state.pagesList.length ? (() => {
+          const promo = state.pagesList.filter(p => p.promotable);
+          const other = state.pagesList.filter(p => !p.promotable);
+          const opt = p => `<option value="${esc(p.id)}" ${state.pageIdOverride === p.id ? 'selected' : ''}>${p.promotable ? '' : '⚠ '}${esc(p.name)} (${esc(p.id)})</option>`;
+          return `
         <select id="fbl-page-select" style="margin-bottom:5px">
           <option value="">— from CSV "Link Object ID" —</option>
-          ${state.pagesList.map(p => `<option value="${esc(p.id)}" ${state.pageIdOverride === p.id ? 'selected' : ''}>${esc(p.name)} (${esc(p.id)})</option>`).join('')}
-        </select>` : ''}
+          ${promo.length ? `<optgroup label="✓ Promotable from this account">${promo.map(opt).join('')}</optgroup>` : ''}
+          ${other.length ? `<optgroup label="⚠ Broader pool — may be rejected from this account">${other.map(opt).join('')}</optgroup>` : ''}
+        </select>`;
+        })() : ''}
+        ${(() => {
+          const sel = state.pageIdOverride && state.pagesList.find(p => p.id === state.pageIdOverride);
+          if (sel && !sel.promotable) return `<div style="font-size:11px;color:#fbbf24;margin-top:-2px;margin-bottom:6px">⚠ «${esc(sel.name)}» не привязана к этому кабу (нет в promote_pages) — FB может отбить залив (subcode 1815813). Привяжи ФП в BM → Business Settings → Accounts, либо выбери promotable-страницу.</div>`;
+          return '';
+        })()}
         <input type="text" id="fbl-page-id" value="${esc(state.pageIdOverride)}" placeholder="${state.pagesList.length ? 'or paste custom page ID' : 'page ID (14-20 digits) — empty = use CSV'}" style="margin-bottom:8px">
         <label style="display:flex;align-items:center;gap:6px;margin-top:5px;cursor:pointer">
           <input type="checkbox" id="fbl-use-page-as-actor" ${state.usePageAsActor ? 'checked' : ''}>
