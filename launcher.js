@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.19.1 — Bookmarklet
+ * FB Launcher v0.19.2 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -105,6 +105,12 @@
  *          They read as visual clutter. Kept: each card's left cyan tick (border-left), the focus lift
  *          glow, the [bracketed] read-only readouts (.fbl-readout / .preview b), and the launch-button
  *          corner frame. Net: cleaner cards, same information.
+ * v0.19.2: de-escalated the promotable/broader page split after live proof that a broader-pool page
+ *          (in the account's BM but outside its promote_pages) launches fine. Removed the launch-time
+ *          confirm() and the amber "may be rejected" note for such pages; ⚠ prefix dropped from options;
+ *          the second optgroup is now the neutral "Also available to this token" (still promotable-first
+ *          so the safe picks sit on top). Only a Page ID totally unknown to the token still gets a light
+ *          typo-guard confirm. Pick any page the token can see.
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -2115,23 +2121,18 @@
         setStatus('error', `Invalid Page ID "${state.pageIdOverride}". Must be 10-20 digits. Pick from dropdown in step 3.`);
         return;
       }
+      // v0.19.2: only guard a Page ID totally unknown to the token (typo catch). Broader-pool
+      // pages (in the list but outside this account's promote_pages) launch fine in practice —
+      // same-BM pages are accepted even when promote_pages doesn't list them (verified live) —
+      // so no confirm/alarm for those. Just pick any page the token can see.
       const inList = state.pagesList.find(p => p.id === state.pageIdOverride);
       if (state.pagesList.length && !inList) {
         const ok = confirm(
-          `Page ${state.pageIdOverride} is NOT in the primary account's page list.\n\n` +
+          `Page ${state.pageIdOverride} is not in this token's page list.\n\n` +
           `Available pages:\n${state.pagesList.slice(0, 5).map(p => `  ${p.id} — ${p.name}`).join('\n')}\n\n` +
-          `Launch anyway? (FB may reject ads with subcode 1815813)`
-        );
-        if (!ok) { setStatus('warning', 'Launch cancelled. Pick a page from the dropdown in step 3.'); return; }
-      } else if (inList && !inList.promotable) {
-        // v0.19.0: page is in the broader pool (BM/personal) but NOT in this account's
-        // promote_pages — launchable only if FB lets it. Warn, don't silently proceed.
-        const ok = confirm(
-          `Page "${inList.name}" (${inList.id}) is in the broader pool but NOT promotable from the primary account.\n\n` +
-          `FB may reject the ad (subcode 1815813) unless the Page is linked to this ad account in Business Settings.\n\n` +
           `Launch anyway?`
         );
-        if (!ok) { setStatus('warning', 'Launch cancelled. Link the Page to the account, or pick a promotable one (step 3).'); return; }
+        if (!ok) { setStatus('warning', 'Launch cancelled. Pick a page from the dropdown in step 3.'); return; }
       }
     }
 
@@ -3043,7 +3044,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>FB LAUNCHER // v0.19.1</span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>FB LAUNCHER // v0.19.2</span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -3210,24 +3211,19 @@
         <label>3. Page ID <span style="color:#6e7681">— ${state.pagesLoading ? 'loading pages...' : (() => {
           const promo = state.pagesList.filter(p => p.promotable).length;
           const other = state.pagesList.length - promo;
-          return `<span class="fbl-readout">${state.pagesList.length}</span> pages found${other ? ` (<span class="fbl-readout">${promo}</span> promotable + ${other} broader)` : ''}`;
+          return `<span class="fbl-readout">${state.pagesList.length}</span> pages found${other ? ` (<span class="fbl-readout">${promo}</span> promotable + ${other} more)` : ''}`;
         })()}</span></label>
         ${state.pagesList.length ? (() => {
           const promo = state.pagesList.filter(p => p.promotable);
           const other = state.pagesList.filter(p => !p.promotable);
-          const opt = p => `<option value="${esc(p.id)}" ${state.pageIdOverride === p.id ? 'selected' : ''}>${p.promotable ? '' : '⚠ '}${esc(p.name)} (${esc(p.id)})</option>`;
+          const opt = p => `<option value="${esc(p.id)}" ${state.pageIdOverride === p.id ? 'selected' : ''}>${esc(p.name)} (${esc(p.id)})</option>`;
           return `
         <select id="fbl-page-select" style="margin-bottom:5px">
           <option value="">— from CSV "Link Object ID" —</option>
           ${promo.length ? `<optgroup label="✓ Promotable from this account">${promo.map(opt).join('')}</optgroup>` : ''}
-          ${other.length ? `<optgroup label="⚠ Broader pool — may be rejected from this account">${other.map(opt).join('')}</optgroup>` : ''}
+          ${other.length ? `<optgroup label="Also available to this token">${other.map(opt).join('')}</optgroup>` : ''}
         </select>`;
         })() : ''}
-        ${(() => {
-          const sel = state.pageIdOverride && state.pagesList.find(p => p.id === state.pageIdOverride);
-          if (sel && !sel.promotable) return `<div style="font-size:11px;color:#fbbf24;margin-top:-2px;margin-bottom:6px">⚠ «${esc(sel.name)}» не привязана к этому кабу (нет в promote_pages) — FB может отбить залив (subcode 1815813). Привяжи ФП в BM → Business Settings → Accounts, либо выбери promotable-страницу.</div>`;
-          return '';
-        })()}
         <input type="text" id="fbl-page-id" value="${esc(state.pageIdOverride)}" placeholder="${state.pagesList.length ? 'or paste custom page ID' : 'page ID (14-20 digits) — empty = use CSV'}" style="margin-bottom:8px">
         <label style="display:flex;align-items:center;gap:6px;margin-top:5px;cursor:pointer">
           <input type="checkbox" id="fbl-use-page-as-actor" ${state.usePageAsActor ? 'checked' : ''}>
