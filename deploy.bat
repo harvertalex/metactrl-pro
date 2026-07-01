@@ -17,8 +17,8 @@ goto invalid_cmd
 :regen_b64
 echo [*] Regenerating MetaCtrl B64 in install-page.html and index.html...
 node -e "const fs = require('fs'); const code = fs.readFileSync('bookmarklet.js', 'utf8'); const b64 = Buffer.from(code, 'utf8').toString('base64'); const tag = \"var B64 = '\" + b64 + \"'\"; ['install-page.html','index.html'].forEach(f=>{fs.writeFileSync(f,fs.readFileSync(f,'utf8').replace(/var B64 = '[^']*'/,tag),'utf8');}); console.log('OK MetaCtrl - B64 length:', b64.length);"
-echo [*] Regenerating Launcher B64 in install-launcher.html...
-node -e "const fs = require('fs'); const code = fs.readFileSync('launcher.js', 'utf8'); const b64 = Buffer.from(code, 'utf8').toString('base64'); const tag = \"var B64 = '\" + b64 + \"'\"; const f='install-launcher.html'; fs.writeFileSync(f,fs.readFileSync(f,'utf8').replace(/var B64 = '[^']*'/,tag),'utf8'); console.log('OK Launcher - B64 length:', b64.length);"
+echo [*] Regenerating Launcher B64 + stamping version in install-launcher.html...
+node regen-launcher.mjs
 goto end
 
 :deploy_full

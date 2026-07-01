@@ -72,6 +72,14 @@ console.log('B64 updated in both files, length:', b64.length);
 "
 ```
 
+**FB Launcher** — отдельный бакмарклет (`launcher.js` → `install-launcher.html`), регенится и версионируется ОДНИМ скриптом:
+
+```bash
+cd code/metactrl-pro && node regen-launcher.mjs
+```
+
+Source of truth версии = баннер в шапке `launcher.js` (`FB Launcher vX.Y.Z — Bookmarklet`). Скрипт: (1) регенит B64, (2) стемпит эту версию во все вывески `install-launcher.html` (badge + footer), (3) sanity-чек на дрейф с in-panel заголовком (`>FB LAUNCHER // vX.Y.Z<`). **Версию бампаешь ТОЛЬКО в двух местах `launcher.js` — шапка + заголовок — остальное синхронится само.** `deploy.bat regen` дёргает и MetaCtrl, и этот скрипт.
+
 ### 3. Пуш на GitHub → GitHub Pages (primary)
 
 ```bash
