@@ -1,5 +1,5 @@
 /* ===========================================================================
- * FB Launcher v0.19.0 — Bookmarklet
+ * FB Launcher v0.19.1 — Bookmarklet
  *
  * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -100,6 +100,11 @@
  *          shows "N pages (M promotable + K broader)". Selecting/typing a broader-pool page shows an
  *          amber inline note + a launch-time confirm (FB may reject with subcode 1815813 unless the
  *          Page is linked to the account in Business Settings). Promotable-only picks are unchanged.
+ * v0.19.1: removed the decorative HUD corner brackets (CSS only, no logic) — the bright-cyan L-shaped
+ *          brackets on every step card (.field::after) and the 4-corner panel frame (#panel::before).
+ *          They read as visual clutter. Kept: each card's left cyan tick (border-left), the focus lift
+ *          glow, the [bracketed] read-only readouts (.fbl-readout / .preview b), and the launch-button
+ *          corner frame. Net: cleaner cards, same information.
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -2709,21 +2714,7 @@
         border-left:1px solid #0e3a47; box-shadow:-10px 0 30px rgba(0,0,0,.5),inset 1px 0 0 rgba(56,189,248,.12);
         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         font-size:13px; display:flex; flex-direction:column; overflow:hidden; box-sizing:border-box; }
-      /* v0.18.0 Cyberpunk HUD: BOLD bright-cyan corner brackets framing the whole console "screen", all 4 corners.
-         The two top brackets start ~54px down so they frame the body area and never touch the header close button /
-         rail toggle. 38px legs, 2.5px, full glow — this + the per-card brackets are the #1 signature. pointer-events:none.
-         Lever: bracket alpha .9 / glow radius 9px / leg 38px to dial back. */
-      #${PANEL_ID}::before { content:''; position:absolute; left:0; right:0; top:54px; bottom:0; pointer-events:none; z-index:6;
-        background:
-          linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) left 9px top 6px/38px 2.5px no-repeat,
-          linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) left 9px top 6px/2.5px 38px no-repeat,
-          linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) right 9px top 6px/38px 2.5px no-repeat,
-          linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) right 9px top 6px/2.5px 38px no-repeat,
-          linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) left 9px bottom 9px/38px 2.5px no-repeat,
-          linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) left 9px bottom 9px/2.5px 38px no-repeat,
-          linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) right 9px bottom 9px/38px 2.5px no-repeat,
-          linear-gradient(rgba(56,189,248,.9),rgba(56,189,248,.9)) right 9px bottom 9px/2.5px 38px no-repeat;
-        filter:drop-shadow(0 0 9px rgba(56,189,248,.75)); }
+      /* v0.19.1: panel-frame HUD corner brackets removed (visual clutter — user request). */
       /* v0.14.0: custom scrollbar on the inner scroll panes (left log rail + right form) */
       #${PANEL_ID} .fbl-scroll::-webkit-scrollbar { width:10px; }
       #${PANEL_ID} .fbl-scroll::-webkit-scrollbar-track { background:transparent; }
@@ -2774,33 +2765,11 @@
         border-radius:9px; padding:11px 13px; margin-bottom:11px; transition:border-color .15s,box-shadow .15s;
         box-shadow:inset 0 1px 0 rgba(56,189,248,.12); }
       #${PANEL_ID} .field:hover { border-left-color:#7dd3fc; }
-      /* v0.18.0 Cyberpunk HUD: EVERY step card carries BOLD cyan L-corner brackets AT REST so the whole form reads as a
-         stack of framed HUD modules at a glance (this is the #1 ref signature). 20px legs / 2.5px / alpha .55, no glow at rest;
-         brighten to full #38bdf8 + glow on :focus-within. Lever: rest alpha .55 / legs 20px / focus glow radius 7px. */
-      #${PANEL_ID} .field::after { content:''; position:absolute; inset:-1px; border-radius:9px; pointer-events:none; z-index:2;
-        transition:filter .15s;
-        background:
-          linear-gradient(rgba(56,189,248,.55),rgba(56,189,248,.55)) left 0 top 0/20px 2.5px no-repeat,
-          linear-gradient(rgba(56,189,248,.55),rgba(56,189,248,.55)) left 0 top 0/2.5px 20px no-repeat,
-          linear-gradient(rgba(56,189,248,.55),rgba(56,189,248,.55)) right 0 top 0/20px 2.5px no-repeat,
-          linear-gradient(rgba(56,189,248,.55),rgba(56,189,248,.55)) right 0 top 0/2.5px 20px no-repeat,
-          linear-gradient(rgba(56,189,248,.55),rgba(56,189,248,.55)) left 0 bottom 0/20px 2.5px no-repeat,
-          linear-gradient(rgba(56,189,248,.55),rgba(56,189,248,.55)) left 0 bottom 0/2.5px 20px no-repeat,
-          linear-gradient(rgba(56,189,248,.55),rgba(56,189,248,.55)) right 0 bottom 0/20px 2.5px no-repeat,
-          linear-gradient(rgba(56,189,248,.55),rgba(56,189,248,.55)) right 0 bottom 0/2.5px 20px no-repeat; }
-      /* v0.18.0 Cyberpunk HUD: active step card = lock-on. Brackets full #38bdf8 + glow, border + surface lift. */
+      /* v0.19.1: per-card HUD corner brackets removed (visual clutter — user request).
+         Card keeps its left cyan tick (border-left) + focus lift below. */
+      #${PANEL_ID} .field::after { content:none; }
+      /* v0.18.0 Cyberpunk HUD: active step card = lock-on (border + surface lift; corner brackets removed v0.19.1). */
       #${PANEL_ID} .field:focus-within { border-color:#2b6e8a; border-left-color:#7dd3fc; box-shadow:0 0 16px rgba(56,189,248,.16),inset 0 1px 0 rgba(56,189,248,.2); }
-      #${PANEL_ID} .field:focus-within::after {
-        background:
-          linear-gradient(#38bdf8,#38bdf8) left 0 top 0/20px 2.5px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) left 0 top 0/2.5px 20px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) right 0 top 0/20px 2.5px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) right 0 top 0/2.5px 20px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) left 0 bottom 0/20px 2.5px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) left 0 bottom 0/2.5px 20px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) right 0 bottom 0/20px 2.5px no-repeat,
-          linear-gradient(#38bdf8,#38bdf8) right 0 bottom 0/2.5px 20px no-repeat;
-        filter:drop-shadow(0 0 7px rgba(56,189,248,.8)); }
       /* nested .field stays bracket-free + edge-free — only the outer numbered step cards get the HUD frame */
       #${PANEL_ID} .field .field { position:static; background:none; border:none; border-radius:0; padding:0; margin:0; box-shadow:none; }
       #${PANEL_ID} .field .field::after { content:none; }
@@ -3074,7 +3043,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>FB LAUNCHER // v0.19.0</span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>FB LAUNCHER // v0.19.1</span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
