@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.19.2 — Bookmarklet
+ * MetaLaunch PRO v0.20.0 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -111,6 +111,9 @@
  *          the second optgroup is now the neutral "Also available to this token" (still promotable-first
  *          so the safe picks sit on top). Only a Page ID totally unknown to the token still gets a light
  *          typo-guard confirm. Pick any page the token can see.
+ * v0.20.0: Devices dropdown (— CSV/auto — | All | Mobile only | Desktop only) → targeting.device_platforms,
+ *          UI override wins over CSV "Device Platforms" column; persisted in presets.
+ *          Advantage Audience → On now auto-fills Age min/max to 18/65 (visible, editable after).
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -340,6 +343,7 @@
     // v0.8.0: placements — checkboxes (platforms + position groups). Presets fill both. Empty = CSV.
     placementPlatforms: [],   // subset of facebook/instagram/audience_network/messenger
     placementPositionGroups: [], // subset of PLACEMENT_POSITION_GROUPS keys; empty = all positions
+    devicePlatformsOverride: '', // v0.20.0: '' = CSV/auto | 'mobile' | 'desktop' | 'all' (explicit mobile+desktop)
     descriptionOverride: '',  // v0.8.0: link/video description (Action line); empty = CSV
     phraseVertical: 'insurance', // v0.8.0: selected vertical for the AIDA phrase dropdowns
     running: false,
@@ -704,6 +708,7 @@
       startDate: state.startDate,
       placementPlatforms: state.placementPlatforms,
       placementPositionGroups: state.placementPositionGroups,
+      devicePlatformsOverride: state.devicePlatformsOverride,
       budgetModeOverride: state.budgetModeOverride,
       cboBudgetOverride: state.cboBudgetOverride,
       adsetBudgetOverride: state.adsetBudgetOverride,
@@ -781,6 +786,7 @@
     state.startDate = s.startDate || '';
     state.placementPlatforms = Array.isArray(s.placementPlatforms) ? s.placementPlatforms : [];
     state.placementPositionGroups = Array.isArray(s.placementPositionGroups) ? s.placementPositionGroups : [];
+    state.devicePlatformsOverride = s.devicePlatformsOverride || '';
     state.budgetModeOverride = s.budgetModeOverride || '';
     state.cboBudgetOverride = s.cboBudgetOverride || '';
     state.adsetBudgetOverride = s.adsetBudgetOverride || '';
@@ -2371,7 +2377,10 @@
       const igPositions = placeUI
         ? (placeUI.instagram_positions || [])
         : String(aFirst['Instagram Positions'] || '').split(',').map(s => s.trim()).filter(Boolean);
-      const devicePlatforms = String(aFirst['Device Platforms'] || '').split(',').map(s => s.trim()).filter(Boolean);
+      // v0.20.0: UI device override wins; 'all' = explicit mobile+desktop; '' = CSV column / FB auto
+      const devicePlatforms = state.devicePlatformsOverride
+        ? (state.devicePlatformsOverride === 'all' ? ['mobile', 'desktop'] : [state.devicePlatformsOverride])
+        : String(aFirst['Device Platforms'] || '').split(',').map(s => s.trim()).filter(Boolean);
 
       // Pixel: UI override (highest) > CSV columns
       const csvPixel = stripPfx(aFirst['Optimized Conversion Tracking Pixels'] || aFirst['Pixel'] || '');
@@ -3044,7 +3053,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>METALAUNCH PRO // v0.19.2</span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>METALAUNCH PRO // v0.20.0</span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -3376,7 +3385,7 @@
         </div>
         <div class="field" style="margin-top:10px">
           <label>Placements <span style="color:#6e7681">— preset fills the boxes, then toggle. Empty = CSV / automatic.</span></label>
-          <div class="grid2">
+          <div class="grid3">
             <div class="field">
               <label style="font-size:10px">Quick preset</label>
               <select id="fbl-placement-preset">
@@ -3389,7 +3398,16 @@
               </select>
             </div>
             <div class="field">
-              <label style="font-size:10px">Advantage Audience</label>
+              <label style="font-size:10px">Devices</label>
+              <select id="fbl-devices">
+                <option value="" ${state.devicePlatformsOverride === '' ? 'selected' : ''}>— CSV / auto —</option>
+                <option value="all" ${state.devicePlatformsOverride === 'all' ? 'selected' : ''}>All (mobile + desktop)</option>
+                <option value="mobile" ${state.devicePlatformsOverride === 'mobile' ? 'selected' : ''}>📱 Mobile only</option>
+                <option value="desktop" ${state.devicePlatformsOverride === 'desktop' ? 'selected' : ''}>🖥️ Desktop only</option>
+              </select>
+            </div>
+            <div class="field">
+              <label style="font-size:10px">Advantage Audience <span style="color:#475569">(On → age 18-65)</span></label>
               <select id="fbl-advantage">
                 <option value="" ${state.advantageAudienceOverride === '' ? 'selected' : ''}>— CSV —</option>
                 <option value="0" ${state.advantageAudienceOverride === '0' ? 'selected' : ''}>Off</option>
@@ -3931,7 +3949,18 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     document.getElementById('fbl-age-min')?.addEventListener('input', e => { state.ageMinOverride = e.target.value.trim(); });
     document.getElementById('fbl-age-max')?.addEventListener('input', e => { state.ageMaxOverride = e.target.value.trim(); });
     document.getElementById('fbl-gender')?.addEventListener('change', e => { state.genderOverride = e.target.value; });
-    document.getElementById('fbl-advantage')?.addEventListener('change', e => { state.advantageAudienceOverride = e.target.value; });
+    document.getElementById('fbl-devices')?.addEventListener('change', e => { state.devicePlatformsOverride = e.target.value; });
+    // v0.20.0: Advantage ON → default age 18-65 (visible in the inputs, still editable after)
+    document.getElementById('fbl-advantage')?.addEventListener('change', e => {
+      state.advantageAudienceOverride = e.target.value;
+      if (e.target.value === '1') {
+        state.ageMinOverride = '18';
+        state.ageMaxOverride = '65';
+        const mn = document.getElementById('fbl-age-min'), mx = document.getElementById('fbl-age-max');
+        if (mn) mn.value = '18';
+        if (mx) mx.value = '65';
+      }
+    });
     document.getElementById('fbl-sac')?.addEventListener('change', e => { state.sacOverride = e.target.value; render(); });  // v0.9.0: SAC gates state targeting → re-render
     // v0.8.0/v0.9.0: geo preset — fills states OR countries depending on the preset's field
     document.getElementById('fbl-geo-cluster')?.addEventListener('change', e => {
