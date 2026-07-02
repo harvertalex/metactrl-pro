@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.20.0 — Bookmarklet
+ * MetaLaunch PRO v0.21.0 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -114,6 +114,8 @@
  * v0.20.0: Devices dropdown (— CSV/auto — | All | Mobile only | Desktop only) → targeting.device_platforms,
  *          UI override wins over CSV "Device Platforms" column; persisted in presets.
  *          Advantage Audience → On now auto-fills Age min/max to 18/65 (visible, editable after).
+ * v0.21.0: Devices dropdown gains 🤖 Android only / 🍏 iOS only — maps to device_platforms:['mobile']
+ *          + targeting.user_os:['Android'|'iOS']; CSV fallback reads optional "User OS" column.
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -343,7 +345,7 @@
     // v0.8.0: placements — checkboxes (platforms + position groups). Presets fill both. Empty = CSV.
     placementPlatforms: [],   // subset of facebook/instagram/audience_network/messenger
     placementPositionGroups: [], // subset of PLACEMENT_POSITION_GROUPS keys; empty = all positions
-    devicePlatformsOverride: '', // v0.20.0: '' = CSV/auto | 'mobile' | 'desktop' | 'all' (explicit mobile+desktop)
+    devicePlatformsOverride: '', // v0.20.0: '' = CSV/auto | 'mobile' | 'desktop' | 'all' | v0.21.0: 'android' | 'ios' (mobile + user_os)
     descriptionOverride: '',  // v0.8.0: link/video description (Action line); empty = CSV
     phraseVertical: 'insurance', // v0.8.0: selected vertical for the AIDA phrase dropdowns
     running: false,
@@ -2378,9 +2380,17 @@
         ? (placeUI.instagram_positions || [])
         : String(aFirst['Instagram Positions'] || '').split(',').map(s => s.trim()).filter(Boolean);
       // v0.20.0: UI device override wins; 'all' = explicit mobile+desktop; '' = CSV column / FB auto
-      const devicePlatforms = state.devicePlatformsOverride
-        ? (state.devicePlatformsOverride === 'all' ? ['mobile', 'desktop'] : [state.devicePlatformsOverride])
-        : String(aFirst['Device Platforms'] || '').split(',').map(s => s.trim()).filter(Boolean);
+      // v0.21.0: 'android'/'ios' = mobile + user_os filter (FB targeting.user_os: 'Android'/'iOS')
+      const devOv = state.devicePlatformsOverride;
+      let devicePlatforms, userOs = [];
+      if (devOv === 'android') { devicePlatforms = ['mobile']; userOs = ['Android']; }
+      else if (devOv === 'ios') { devicePlatforms = ['mobile']; userOs = ['iOS']; }
+      else if (devOv === 'all') devicePlatforms = ['mobile', 'desktop'];
+      else if (devOv) devicePlatforms = [devOv];
+      else {
+        devicePlatforms = String(aFirst['Device Platforms'] || '').split(',').map(s => s.trim()).filter(Boolean);
+        userOs = String(aFirst['User OS'] || '').split(',').map(s => s.trim()).filter(Boolean);
+      }
 
       // Pixel: UI override (highest) > CSV columns
       const csvPixel = stripPfx(aFirst['Optimized Conversion Tracking Pixels'] || aFirst['Pixel'] || '');
@@ -2409,6 +2419,7 @@
       };
       if (publisherPlatforms.length) targeting.publisher_platforms = publisherPlatforms;
       if (devicePlatforms.length) targeting.device_platforms = devicePlatforms;
+      if (userOs.length) targeting.user_os = userOs;
       if (fbPositions.length) targeting.facebook_positions = fbPositions;
       if (igPositions.length) targeting.instagram_positions = igPositions;
 
@@ -3053,7 +3064,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>METALAUNCH PRO // v0.20.0</span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>METALAUNCH PRO // v0.21.0</span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -3403,6 +3414,8 @@
                 <option value="" ${state.devicePlatformsOverride === '' ? 'selected' : ''}>— CSV / auto —</option>
                 <option value="all" ${state.devicePlatformsOverride === 'all' ? 'selected' : ''}>All (mobile + desktop)</option>
                 <option value="mobile" ${state.devicePlatformsOverride === 'mobile' ? 'selected' : ''}>📱 Mobile only</option>
+                <option value="android" ${state.devicePlatformsOverride === 'android' ? 'selected' : ''}>🤖 Android only</option>
+                <option value="ios" ${state.devicePlatformsOverride === 'ios' ? 'selected' : ''}>🍏 iOS only</option>
                 <option value="desktop" ${state.devicePlatformsOverride === 'desktop' ? 'selected' : ''}>🖥️ Desktop only</option>
               </select>
             </div>
