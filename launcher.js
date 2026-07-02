@@ -1,7 +1,7 @@
 /* ===========================================================================
- * FB Launcher v0.19.2 — Bookmarklet
+ * MetaLaunch PRO v0.19.2 — Bookmarklet
  *
- * Launches FB Ads Manager campaigns from CSV through Marketing API (no bulk-upload).
+ * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
  * tab+comma CSV auto-detect, video+image ads, US state region targeting.
  * v0.2: Link override, URL Tags override, token engine, pixel placeholder substitution.
@@ -2263,7 +2263,7 @@
           date: dateStr, acc_id: accId, source_name: firstRow['Campaign Name'] || '',
         });
       } else {
-        campName = firstRow['Campaign Name'] || `FB Launcher ${dateStr}`;
+        campName = firstRow['Campaign Name'] || `MetaLaunch ${dateStr}`;
       }
       // v0.7.0: markers on campaign name (campaign name is NOT used in token context, so safe here)
       campName = applyMarkers(campName);
@@ -3044,7 +3044,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>FB LAUNCHER // v0.19.2</span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>METALAUNCH PRO // v0.19.2</span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">

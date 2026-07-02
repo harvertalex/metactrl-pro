@@ -2,10 +2,10 @@
 /**
  * regen-launcher.mjs — single source of truth для версии FB Launcher.
  *
- * Берёт версию из шапки launcher.js ("FB Launcher vX.Y.Z — Bookmarklet") и:
+ * Берёт версию из шапки launcher.js ("MetaLaunch PRO vX.Y.Z — Bookmarklet") и:
  *   1) регенерит B64 бакмарклета в install-launcher.html
  *   2) стемпит эту версию во ВСЕ видимые лейблы страницы (badge + footer)
- *   3) sanity-чек: in-panel заголовок ("FB LAUNCHER // vX.Y.Z") обязан совпадать
+ *   3) sanity-чек: in-panel заголовок ("METALAUNCH PRO // vX.Y.Z") обязан совпадать
  *      с шапкой — иначе дрейф (был баг: шапка v0.18.1, заголовок v0.18.3).
  *
  * Запуск: node regen-launcher.mjs   (дёргается из `deploy.bat regen`)
@@ -19,15 +19,15 @@ const PAGE = 'install-launcher.html';
 const code = readFileSync(LAUNCHER, 'utf8');
 
 // 1) Каноническая версия = баннер в шапке файла.
-const vm = code.match(/FB Launcher v(\d+\.\d+\.\d+) — Bookmarklet/);
+const vm = code.match(/MetaLaunch PRO v(\d+\.\d+\.\d+) — Bookmarklet/);
 if (!vm) { console.error(`✗ version banner not found in ${LAUNCHER}`); process.exit(1); }
 const ver = vm[1];
 
 // 2) Sanity: in-panel заголовок ">FB LAUNCHER // vX.Y.Z<" должен совпадать с баннером.
 //    Матчим именно заголовок (в угловых скобках), а не упоминания в changelog-комментах.
-const tm = code.match(/>FB LAUNCHER \/\/ v(\d+\.\d+\.\d+)</);
+const tm = code.match(/>METALAUNCH PRO \/\/ v(\d+\.\d+\.\d+)</);
 if (!tm) {
-  console.warn('⚠ in-panel title ">FB LAUNCHER // vX.Y.Z<" not found — skip drift check');
+  console.warn('⚠ in-panel title ">METALAUNCH PRO // vX.Y.Z<" not found — skip drift check');
 } else if (tm[1] !== ver) {
   console.warn(`⚠ VERSION DRIFT: banner v${ver} vs in-panel title v${tm[1]} in ${LAUNCHER} — fix the title span.`);
 }
@@ -43,7 +43,7 @@ page = page.replace(/var B64 = '[^']*'/, `var B64 = '${b64}'`);
 // 4) Стемп версии в видимые лейблы. Global — но плейнтекст "FB Launcher vX — Bookmarklet"
 //    в B64 не встречается (blob — base64), так что бьёт только по HTML-вывескам.
 page = page
-  .replace(/FB Launcher v\d+\.\d+\.\d+ — Bookmarklet/g, `FB Launcher v${ver} — Bookmarklet`)
+  .replace(/MetaLaunch PRO v\d+\.\d+\.\d+ — Bookmarklet/g, `MetaLaunch PRO v${ver} — Bookmarklet`)
   .replace(/Bookmarklet v\d+\.\d+\.\d+/g, `Bookmarklet v${ver}`);
 
 writeFileSync(PAGE, page, 'utf8');
