@@ -57,7 +57,7 @@ code/metactrl-pro/bookmarklet.js
 
 ### 2. Регенерация Base64 (обязательно перед деплоем)
 
-Bookmarklet работает как B64-кодированная строка. B64 хранится в **двух файлах**: `install-page.html` и `index.html`.
+Bookmarklet работает как B64-кодированная строка. B64 живёт в **одном файле** — `install-page.html`. ⚠️ `index.html` теперь = **hub-витрина** (карточки на 3 инструмента), B64 в нём нет — не писать туда.
 
 ```bash
 cd code/metactrl-pro && node -e "
@@ -65,10 +65,10 @@ const fs = require('fs');
 const code = fs.readFileSync('bookmarklet.js', 'utf8');
 const b64 = Buffer.from(code, 'utf8').toString('base64');
 const tag = \"var B64 = '\" + b64 + \"'\";
-['install-page.html', 'index.html'].forEach(f => {
+['install-page.html'].forEach(f => {
   fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/var B64 = '[^']*'/, tag), 'utf8');
 });
-console.log('B64 updated in both files, length:', b64.length);
+console.log('B64 updated, length:', b64.length);
 "
 ```
 
@@ -110,12 +110,30 @@ curl -s -o /dev/null -w "%{http_code}" https://harvertalex.github.io/metactrl-pr
 ```
 code/metactrl-pro/
 ├── CLAUDE.md                  ← этот файл (контекст проекта)
-├── bookmarklet.js             ← основной код (3100+ строк)
-├── install-page.html          ← страница установки (содержит B64)
-├── deploy.ts                  ← Деплой скрипт (scp install-page.html + index.html на CAPI Server 1)
+├── index.html                 ← HUB-витрина (карточки на 3 инструмента, без B64)
+├── bookmarklet.js             ← MetaCtrl PRO — основной код (3100+ строк)
+├── install-page.html          ← MetaCtrl PRO — страница установки (содержит B64)
+├── loader.html                ← MetaCtrl PRO — auto-update loader (не на хабе, untracked)
+├── launcher.js                ← FB Launcher — код
+├── install-launcher.html      ← FB Launcher — страница установки (содержит B64)
+├── regen-launcher.mjs         ← FB Launcher — регенератор B64 + version-stamp
+├── creative-uploader/         ← Creative Uploader — отдельный инструмент (заливка + JSON-хеши)
+│   ├── index.html             ←   страница установки (содержит B64)
+│   ├── bookmarklet.js         ←   код
+│   └── build.js               ←   сборка index.html из bookmarklet.js
+├── deploy.ts                  ← Деплой на CAPI Server 1: hub + все страницы + creative-uploader/
 ├── deploy-check.ts            ← Проверка SSH доступа и структуры сервера
 └── README.md                  ← документация для пользователей
 ```
+
+**Страницы (одинаковы на GitHub Pages и backup):**
+
+| URL | Что |
+|-----|-----|
+| `/` (`index.html`) | Hub — витрина инструментов |
+| `/install-page.html` | MetaCtrl PRO (установка) |
+| `/install-launcher.html` | FB Launcher (установка) |
+| `/creative-uploader/` | Creative Uploader (установка) |
 
 ---
 

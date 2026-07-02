@@ -15,8 +15,9 @@ if "%1"=="check" goto check
 goto invalid_cmd
 
 :regen_b64
-echo [*] Regenerating MetaCtrl B64 in install-page.html and index.html...
-node -e "const fs = require('fs'); const code = fs.readFileSync('bookmarklet.js', 'utf8'); const b64 = Buffer.from(code, 'utf8').toString('base64'); const tag = \"var B64 = '\" + b64 + \"'\"; ['install-page.html','index.html'].forEach(f=>{fs.writeFileSync(f,fs.readFileSync(f,'utf8').replace(/var B64 = '[^']*'/,tag),'utf8');}); console.log('OK MetaCtrl - B64 length:', b64.length);"
+REM index.html is now the hub (no B64) — MetaCtrl B64 lives only in install-page.html
+echo [*] Regenerating MetaCtrl B64 in install-page.html...
+node -e "const fs = require('fs'); const code = fs.readFileSync('bookmarklet.js', 'utf8'); const b64 = Buffer.from(code, 'utf8').toString('base64'); const tag = \"var B64 = '\" + b64 + \"'\"; ['install-page.html'].forEach(f=>{fs.writeFileSync(f,fs.readFileSync(f,'utf8').replace(/var B64 = '[^']*'/,tag),'utf8');}); console.log('OK MetaCtrl - B64 length:', b64.length);"
 echo [*] Regenerating Launcher B64 + stamping version in install-launcher.html...
 node regen-launcher.mjs
 goto end
@@ -34,7 +35,7 @@ goto end
 
 :check
 echo [*] Checking SSH access and server files...
-ssh -i %USERPROFILE%\.ssh\tessa-bot root@192.248.190.182 "ls -lah /var/www/metactrl-pro/"
+ssh -i %USERPROFILE%\.ssh\capi-server1 root@94.130.220.232 "ls -lah /var/www/html/metactrl/"
 goto end
 
 :invalid_cmd
