@@ -20,6 +20,11 @@
    ========================================================= */
 
 /* -------------------- CONFIG -------------------- */
+// v25.12 — LIVE FEED = universal request log: core API + Analytics/Accounts/Ops/PixelMgr helpers
+//           mirror every Graph/GQL call into the rail (REQLOG); CP tab log mirrored too.
+//           Column Presets: import → selected accounts (searchable multi-select picker, was blind ALL).
+//           Autorules: "Delete existing rules" now confirm()-guarded (lists target accounts) + danger
+//           styling + button text swap "Generate & Delete Existing".
 // v25.11 — Custom Metrics: English descriptions + bands (good/ok/bad) for FB metric description.
 // v25.10 — Custom Metrics: drop Unique Static Hook Rate (FB unique_actions omits post_engagement → empty; dup of Static Hook). 13 metrics.
 // v25.9 — Custom Metrics: band words instead of emoji (FB description field mangles ✅/⚠️/❌ → �). Now хорошо/средне/плохо.
@@ -52,7 +57,7 @@
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v23.0',
-  APP_VERSION: 'v25.11',
+  APP_VERSION: 'v25.12',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -83,7 +88,7 @@ function createStatusCenter() {
 
   const colorFor = t => t==='error'?'#fca5a5':t==='warning'?'#fcd34d':t==='success'?'#86efac':'#cbd5e1';
   const iconFor  = t => t==='error'?'⛔':t==='warning'?'⚠️':t==='success'?'✅':'·';
-  const PLACEHOLDER = '<div style="color:#475569">Действия появятся здесь при запуске правил.</div>';
+  const PLACEHOLDER = '<div style="color:#475569">Лог запросов и действий всех вкладок появится здесь.</div>';
   const lineHtml = e => `<span style="opacity:.45">${e.ts}</span> ${iconFor(e.type)} <span style="color:${colorFor(e.type)}">${escapeHtml(e.msg)}</span>`;
   function refreshHead(){
     if (countEl) countEl.textContent = entries.length ? ` · ${entries.length}` : '';
@@ -135,6 +140,12 @@ function createStatusCenter() {
 }
 
 const STATUS = createStatusCenter();
+
+// v25.12: universal request log — every Graph API call from any tab lands in the LIVE FEED rail.
+function REQLOG(method, path, ok, ms, errMsg) {
+  const p = String(path).replace(/^https?:\/\/[^/]+\/v[\d.]+\//, '').split('?')[0];
+  STATUS.log(`${method} ${p} ${ok ? '✓' : '✗'} ${Math.round(ms)}ms${ok ? '' : ' — ' + (errMsg || 'error')}`, ok ? 'info' : 'error');
+}
 let STATE_RAIL_COLLAPSED = false;  // v24.5: LIVE FEED rail collapse state (session-persistent)
 
 /* -------------------- CURRENCY -------------------- */
@@ -234,6 +245,26 @@ const API = {
     return items;
   }
 };
+
+// v25.12: instrument core API — the request trail from Autorules / Column Presets / any
+// caller of API.* is mirrored into the LIVE FEED rail (getAllPages logs via wrapped get).
+(function () {
+  const M = { get: 'GET', getRaw: 'GET', post: 'POST', del: 'DELETE' };
+  Object.entries(M).forEach(([fn, verb]) => {
+    const orig = API[fn].bind(API);
+    API[fn] = async (path, ...rest) => {
+      const t0 = performance.now();
+      try {
+        const r = await orig(path, ...rest);
+        REQLOG(verb, path, !r?.error, performance.now() - t0, r?.error?.message);
+        return r;
+      } catch (e) {
+        REQLOG(verb, path, false, performance.now() - t0, e.message);
+        throw e;
+      }
+    };
+  });
+})();
 
 /* -------------------- RULES CRUD -------------------- */
 const Rules = {
@@ -1629,12 +1660,19 @@ function mountGenerator(container) {
   btnGen.style.minWidth = '140px';
   btnGen.textContent = '⚡ Generate Rules';
   // v24.6: progress bar moved into the LIVE FEED rail (built in makeModal); resolved by id in btnGen.onclick.
+  // v25.12: destructive option — danger styling, pushed away from the CTA, and the button
+  // announces the delete before the click (text swap). Actual confirm() guard is in the handler.
   const clearCb = document.createElement('input');
   clearCb.type = 'checkbox'; clearCb.id = 'ar-clear-existing';
+  clearCb.style.cssText = 'margin-left:auto;accent-color:#ef4444';
   const clearLbl = document.createElement('label');
   clearLbl.htmlFor = 'ar-clear-existing';
-  clearLbl.textContent = 'Delete existing rules';
-  clearLbl.style.cssText = 'font-size:12px;cursor:pointer;user-select:none';
+  clearLbl.textContent = '🗑 Delete existing rules';
+  clearLbl.style.cssText = 'font-size:12px;cursor:pointer;user-select:none;color:#fca5a5';
+  clearCb.onchange = () => {
+    btnGen.textContent = clearCb.checked ? '⚡ Generate & Delete Existing' : '⚡ Generate Rules';
+    btnGen.style.background = clearCb.checked ? 'linear-gradient(135deg,#b91c1c,#ef4444)' : '';
+  };
   actRow.appendChild(btnGen);
   actRow.appendChild(clearCb);
   actRow.appendChild(clearLbl);
@@ -1873,6 +1911,17 @@ function mountGenerator(container) {
       // Collect target accounts: selected from list, or fallback to current
       const selectedAccIds = Array.from(accList.selectedOptions).map(o => o.value);
       const targetAccIds = selectedAccIds.length ? selectedAccIds : [null]; // null = current account
+
+      // v25.12: destructive guard — deleting existing rules was silent (Manager tab has a
+      // confirm for the same operation; generator applied it to EVERY selected account without one).
+      if (ctx.clearExisting) {
+        const names = targetAccIds.map(id => id ? (ACCOUNTS_CACHE.find(a => a.id === id)?.name || 'act_' + id) : '(current account)');
+        const listTxt = names.slice(0, 12).join('\n') + (names.length > 12 ? `\n…and ${names.length - 12} more` : '');
+        if (!confirm(`⚠ DELETE ALL existing rules on ${targetAccIds.length} account(s) before generating?\n\n${listTxt}\n\nThis cannot be undone.`)) {
+          STATUS.log('Generation cancelled — delete-existing not confirmed.', 'warning');
+          return;
+        }
+      }
 
       for (let i = 0; i < targetAccIds.length; i++) {
         const accId = targetAccIds[i];
@@ -3250,8 +3299,15 @@ function mountColumnManager(container) {
       <button id="cp-imp-this"  class="ar-btn ar-btn-primary ar-btn-sm">📂 Import preset → This account</button>
       <button id="cp-imp-sizes" class="ar-btn ar-btn-ghost ar-btn-sm">📐 Import column sizes → This account</button>
       <hr class="ar-divider" style="margin:4px 0">
-      <div style="font-size:11px;color:var(--muted)">All accounts (from BM):</div>
-      <button id="cp-imp-all" class="ar-btn ar-btn-ghost ar-btn-sm">🌐 Import preset → ALL accounts</button>
+      <div style="font-size:11px;color:var(--muted)">Multiple accounts:</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button id="cp-load-accs" class="ar-btn ar-btn-ghost ar-btn-sm">🔄 Load accounts</button>
+        <label id="cp-selall-wrap" style="display:none;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer">
+          <input type="checkbox" id="cp-selall" style="accent-color:var(--acc)"> Select all
+        </label>
+      </div>
+      <select id="cp-acc-list" multiple size="4" style="display:none;width:100%;background:var(--card);color:var(--txt);border:1px solid var(--bdr);border-radius:8px;padding:4px"></select>
+      <button id="cp-imp-sel" class="ar-btn ar-btn-ghost ar-btn-sm" disabled>🌐 Import preset → Selected accounts</button>
       <div id="cp-imp-prog" style="display:none">
         <div class="ar-progress"><div id="cp-imp-bar" class="ar-progress-bar"></div></div>
         <div id="cp-imp-status" style="font-size:11px;color:var(--muted);margin-top:4px"></div>
@@ -3271,6 +3327,7 @@ function mountColumnManager(container) {
 
   const logEl = logWrap.querySelector('#cp-log');
   const log = (msg, type = 'info') => {
+    STATUS.log(msg, type);  // v25.12: mirror tab actions into the LIVE FEED rail
     const d = document.createElement('div');
     d.style.margin = '2px 0';
     const c = type==='error'?'#fca5a5':type==='warning'?'#fcd34d':type==='success'?'#86efac':'#cbd5e1';
@@ -3418,12 +3475,50 @@ function mountColumnManager(container) {
     } catch (e) { log(`Sizes error: ${e.message || e}`, 'error'); }
   };
 
-  rightPanel.querySelector('#cp-imp-all').onclick = async () => {
+  // v25.12: multi-account import — explicit account picker (was blind "ALL accounts").
+  // Reuses the Autorules pattern: loadAllAccountsWithRules → ACCOUNTS_CACHE → searchable multi-select.
+  const cpAccList   = rightPanel.querySelector('#cp-acc-list');
+  const cpSelAllWrap = rightPanel.querySelector('#cp-selall-wrap');
+  const cpImpSel    = rightPanel.querySelector('#cp-imp-sel');
+  const cpSyncSelBtn = () => {
+    const n = cpAccList.selectedOptions.length;
+    cpImpSel.disabled = !n;
+    cpImpSel.textContent = n ? `🌐 Import preset → ${n} account(s)` : '🌐 Import preset → Selected accounts';
+  };
+
+  rightPanel.querySelector('#cp-load-accs').onclick = async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true; btn.textContent = '⏳ Loading…';
+    try {
+      await loadAllAccountsWithRules(log);
+      cpAccList.innerHTML = '';
+      ACCOUNTS_CACHE.forEach(a => {
+        const o = document.createElement('option');
+        o.value = a.id;
+        o.textContent = `${a.name} (${a.id}) ${a.currency}`;
+        o.style.color = a.status === 1 ? '#22c55e' : (a.status === 2 || a.status === 101) ? '#ef4444' : '#f59e0b';
+        cpAccList.appendChild(o);
+      });
+      cpAccList.style.display = ACCOUNTS_CACHE.length ? 'block' : 'none';
+      cpAccList.size = Math.min(8, Math.max(3, ACCOUNTS_CACHE.length));
+      cpSelAllWrap.style.display = ACCOUNTS_CACHE.length ? 'flex' : 'none';
+      if (ACCOUNTS_CACHE.length) {
+        if (cpAccList._searchEnhanced) cpAccList.refreshSearch();
+        else makeSearchableSelect(cpAccList, { placeholder: 'Search accounts by name or ID...' });
+      }
+      btn.textContent = '🔄 Reload accounts';
+    } catch (err) { log(`Load error: ${err.message || err}`, 'error'); btn.textContent = '🔄 Load accounts'; }
+    finally { btn.disabled = false; cpSyncSelBtn(); }
+  };
+  rightPanel.querySelector('#cp-selall').onchange = (e) => { selectAllVisible(cpAccList, e.target.checked); cpSyncSelBtn(); };
+  cpAccList.addEventListener('change', cpSyncSelBtn);
+
+  cpImpSel.onclick = async () => {
+    const ids = Array.from(cpAccList.selectedOptions).map(o => o.value);
+    if (!ids.length) { log('Select at least one account first', 'warning'); return; }
     try {
       log('Pick JSON file…');
       const jsFile = cpValidate(await cpPickFile());
-      log('Fetching all account IDs from BM…');
-      const allIds = await cpGetAllAccountIds(log);
 
       const progWrap  = rightPanel.querySelector('#cp-imp-prog');
       const bar       = rightPanel.querySelector('#cp-imp-bar');
@@ -3432,10 +3527,10 @@ function mountColumnManager(container) {
       bar.style.width = '0%';
 
       let ok = 0, fail = 0;
-      for (let i = 0; i < allIds.length; i++) {
-        const acc = allIds[i];
-        statusEl.textContent = `${i+1}/${allIds.length} — act_${acc}`;
-        bar.style.width = `${Math.round((i+1)/allIds.length*100)}%`;
+      for (let i = 0; i < ids.length; i++) {
+        const acc = ids[i];
+        statusEl.textContent = `${i+1}/${ids.length} — act_${acc}`;
+        bar.style.width = `${Math.round((i+1)/ids.length*100)}%`;
         try {
           const usId     = await cpFetchUserSettingsId(acc, log);
           const presetId = await cpUploadPreset(usId, jsFile.preset);
@@ -3450,7 +3545,7 @@ function mountColumnManager(container) {
       }
       bar.style.width = '100%';
       statusEl.textContent = `Done: ${ok} ok / ${fail} failed`;
-      log(`Import to ALL done: ${ok} success, ${fail} failed`, ok > 0 ? 'success' : 'error');
+      log(`Import to ${ids.length} account(s) done: ${ok} success, ${fail} failed`, ok > 0 ? 'success' : 'error');
       setTimeout(() => { progWrap.style.display = 'none'; bar.style.width = '0%'; }, 4000);
     } catch (e) { log(`Error: ${e.message || e}`, 'error'); }
   };
@@ -3527,9 +3622,12 @@ function mountAnalytics(container) {
       }
       const fo = {method, credentials:'include', headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'}};
       if (opts.body) { const b=new URLSearchParams(); Object.entries(opts.body).forEach(([k,v])=>{if(v!=null)b.append(k,v);}); fo.body=b; }
+      const t0 = performance.now();
       const res = await fetch(url.toString(), fo);
       const json = await res.json();
-      if (!res.ok||json?.error) throw new Error(json?.error?.message||`API error (${res.status})`);
+      const bad = !res.ok || !!json?.error;
+      REQLOG(method, url.pathname, !bad, performance.now() - t0, json?.error?.message);  // v25.12
+      if (bad) throw new Error(json?.error?.message||`API error (${res.status})`);
       return json;
     }
     async function apiAll(path, params={}) {
@@ -4335,8 +4433,10 @@ async function apiGet(path, params) {
   params = params || {};
   params.access_token = TOKEN;
   const url = HOST_GRAPH + '/' + path + '?' + new URLSearchParams(params);
+  const t0 = performance.now();
   const r = await fetch(url, { credentials: 'include' });
   const j = await r.json();
+  REQLOG('GET', path, !j.error, performance.now() - t0, j.error && j.error.message);  // v25.12
   if (j.error) throw new Error('[' + j.error.code + '] ' + j.error.message);
   return j;
 }
@@ -5050,9 +5150,12 @@ function mountPixelManager(container) {
       Object.entries(opts.body).forEach(([k, v]) => { if (v != null) b.append(k, v); });
       fetchOpts.body = b;
     }
+    const t0 = performance.now();
     const res = await fetch(url.toString(), fetchOpts);
     const json = await res.json();
-    if (!res.ok || json?.error) throw new Error(json?.error?.message || `Graph API error (${res.status})`);
+    const bad = !res.ok || !!json?.error;
+    REQLOG(method, url.pathname, !bad, performance.now() - t0, json?.error?.message);  // v25.12
+    if (bad) throw new Error(json?.error?.message || `Graph API error (${res.status})`);
     return json;
   }
 
@@ -5122,10 +5225,13 @@ function mountPixelManager(container) {
     params.set('server_timestamps', 'true'); params.set('variables', JSON.stringify(variables)); params.set('doc_id', docId);
     const hdrs = { 'Content-Type': 'application/x-www-form-urlencoded', 'X-FB-Friendly-Name': name };
     if (lsd) hdrs['X-FB-LSD'] = lsd; if (asbd) hdrs['X-ASBD-ID'] = asbd;
+    const t0 = performance.now();
     const res = await fetch(GQL_ENDPOINT, { method: 'POST', credentials: 'include', headers: hdrs, body: params.toString() });
     const text = await res.text();
-    let json; try { json = JSON.parse(text.replace(/^for\s*\(\s*;\s*;\s*\);\s*/, '')); } catch { throw new Error('Could not parse internal GraphQL response.'); }
-    if (!res.ok || json?.error || json?.errors?.length) throw new Error(json?.errorDescription || json?.errors?.[0]?.message || `Internal GraphQL error (${res.status})`);
+    let json; try { json = JSON.parse(text.replace(/^for\s*\(\s*;\s*;\s*\);\s*/, '')); } catch { REQLOG('GQL', name, false, performance.now() - t0, 'unparsable response'); throw new Error('Could not parse internal GraphQL response.'); }
+    const bad = !res.ok || !!json?.error || !!json?.errors?.length;
+    REQLOG('GQL', name, !bad, performance.now() - t0, json?.errorDescription || json?.errors?.[0]?.message);  // v25.12
+    if (bad) throw new Error(json?.errorDescription || json?.errors?.[0]?.message || `Internal GraphQL error (${res.status})`);
     return json;
   }
 
@@ -5762,9 +5868,12 @@ function mountOperations(container) {
     }
     const fo = { method, credentials:'include', headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'} };
     if (opts.body) { const b=new URLSearchParams(); Object.entries(opts.body).forEach(([k,v])=>{if(v!=null)b.append(k,v);}); fo.body=b; }
+    const t0 = performance.now();
     const res = await fetch(url.toString(), fo);
     const json = await res.json();
-    if (!res.ok||json?.error) throw new Error(json?.error?.message||`API error (${res.status})`);
+    const bad = !res.ok || !!json?.error;
+    REQLOG(method, url.pathname, !bad, performance.now() - t0, json?.error?.message);  // v25.12
+    if (bad) throw new Error(json?.error?.message||`API error (${res.status})`);
     return json;
   }
 
