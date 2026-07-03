@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.22.0 — Bookmarklet
+ * MetaLaunch PRO v0.23.0 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -126,6 +126,18 @@
  *          slots in after PBIA, before the page-only surrender. UI hint: green "page IG from account
  *          history (reused PBIA · seen in N ads)". Cached per (account, page); transient scan errors
  *          don't poison the cache.
+ * v0.23.0: ROOT FIX for IG identity on rented cabs — use_page_actor_override replaces the v0.22.0
+ *          history-scan crutch (helper deleted). Root cause chain: (1) the gambling pages have NO
+ *          linked Instagram at all, (2) the session/token holds no page role (assets shared at BM
+ *          level to the ad account only), so page IG / account actors / PBIA are all unreadable —
+ *          the ladder legitimately finds nothing. The documented API answer is the creative-level
+ *          flag use_page_actor_override=true (what AM's "Use Facebook Page" identity sends): FB
+ *          resolves the page's PBIA server-side at delivery, needs no IG id and no page role.
+ *          Verified live on HolyMoly cab (create/readback/delete — flag accepted & persisted).
+ *          Now: no resolved IG + FB-only unticked → creative POST carries the flag (also on the
+ *          drop-IG retry paths); the v0.15.0 "may NOT deliver" loud warning became an info line;
+ *          step-3 hint turned green. Explicit IG (page IG / actor / PBIA / override field) still
+ *          wins when available — the flag is only the empty-case default.
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -1382,70 +1394,19 @@
       const pbia = await loadPbiaForPage(pageId, pageName);
       if (pbia?.igId) { state.pageIgMap[key] = { ...pbia, source: 'pbia' }; return pbia.igId; }
 
-      // v0.22.0: HISTORY rung — rented cabs (partner BM, no page role) can't read page IG
-      // or create PBIA, but Ads Manager-created ads in the SAME account already carry the
-      // page's PBIA in instagram_user_id. Reusing an id that already worked in this exact
-      // (account, page) combo is proven-valid: FB accepts it on adcreatives POST (verified
-      // live on the HolyMoly cabs). Scan the account's own creatives for the most-used IG
-      // for this page.
-      const hist = await loadIgFromHistory(accId, pageId);
-      if (hist?.igId) {
-        const entry = { igId: hist.igId, igName: hist.igName || '', pageName, source: 'history', count: hist.count };
-        state.pageIgMap[key] = entry;
-        addLog('info', `🔗 IG from account history: ${entry.igId}${entry.igName ? ' @' + entry.igName : ''} — used in ${hist.count} existing creative(s) of this page in this account`);
-        return entry.igId;
-      }
-
-      // No IG anywhere. Cache as terminal ONLY if nothing errored (so transient fails retry).
+      // v0.23.0: no explicit IG anywhere (typical rented cab: token has no page role, so
+      // page IG / account actors / PBIA are all unreadable). NOT a problem anymore: the
+      // creative POST will carry use_page_actor_override=true — the documented API
+      // equivalent of Ads Manager's "Use Facebook Page" identity. FB resolves the page's
+      // PBIA server-side at delivery; no id and no page role needed (verified live on the
+      // HolyMoly cabs — flag accepted and persisted). Cache terminal only if clean.
       state.pageIgMap[key] = { igId: '', igName: '', pageName, source: anyError ? 'error' : 'none', terminal: !anyError };
-      addLog('warning', `⚠ Page "${pageName || pageId}" has no Instagram identity (no connected IG, no account actor, PBIA unavailable, nothing in account history). Ads run Facebook-only — IG field empty. Fix: link an IG in Page Settings (business.facebook.com/settings/instagram-accounts), OR paste a promotable IG ID in step 3, OR tick "Use Facebook Page as IG identity".`);
+      addLog('info', `🔗 Page "${pageName || pageId}": no explicit IG found — creatives will use use_page_actor_override (IG runs under the Page identity, like AM's "Use Facebook Page").`);
       return '';
     } finally {
       state.pageIgLoading[key] = false;
       render();
     }
-  }
-
-  // v0.22.0: last-rung IG source — mine the account's OWN creative history for the
-  // instagram_user_id that past ads (usually AM-created, "Page as representative")
-  // used with this page. That id is the page's PBIA; our session can't CREATE one
-  // on rented cabs (no page role) but can REUSE an existing one. Newest creatives
-  // come first, cap at 3×100 so big accounts don't stall the lookup.
-  // Cache key `__ighist__<accId>__<pageId>` — result is per (account, page).
-  async function loadIgFromHistory(accId, pageId) {
-    if (!accId || !pageId) return null;
-    const cacheKey = `__ighist__${accId}__${pageId}`;
-    if (state.pageIgMap[cacheKey] !== undefined) return state.pageIgMap[cacheKey];
-    let result = null;
-    try {
-      const freq = new Map();
-      let next = `/act_${accId}/adcreatives`;
-      let np = { fields: 'instagram_user_id,object_story_spec{page_id}', limit: 100 };
-      for (let page = 0; page < 3 && next; page++) {
-        const r = await apiFetch(next, { params: np });
-        for (const c of (r?.data || [])) {
-          if (!c.instagram_user_id) continue;
-          if (String(c.object_story_spec?.page_id || '') !== String(pageId)) continue;
-          freq.set(String(c.instagram_user_id), (freq.get(String(c.instagram_user_id)) || 0) + 1);
-        }
-        next = r?.paging?.next || '';
-        np = {};
-      }
-      if (freq.size) {
-        const [igId, count] = [...freq.entries()].sort((a, b) => b[1] - a[1])[0];
-        let igName = '';
-        try {
-          const u = await apiFetch(`/${igId}`, { params: { fields: 'username' } });
-          igName = u?.username || '';
-        } catch {}
-        result = { igId, igName, count };
-      }
-    } catch (e) {
-      addLog('warning', `IG history scan failed (${accId}): ${e.message}`);
-      return null; // transient — don't cache, retry next time
-    }
-    state.pageIgMap[cacheKey] = result;
-    return result;
   }
 
   // v0.6.9: PBIA (Page-Backed Instagram Account) helper, separate from
@@ -2309,14 +2270,14 @@
     } else {
       addLog('info', `[${accLabel}] 🔗 no IG actor — FB will use default`);
     }
-    // v0.15.0: never lose Instagram silently. If IG placements are targeted but we
-    // couldn't secure a representative, warn LOUDLY and keep IG in targeting anyway
-    // (Alexander's call — warn, don't block, don't strip IG placement).
+    // v0.23.0 (was v0.15.0 loud warning): no explicit IG is fine now — creatives carry
+    // use_page_actor_override=true, so IG placements deliver under the Page identity
+    // (server-side PBIA), same as AM's "Use Facebook Page". Just log the fact.
     if (!resolvedIg && !state.usePageAsActor) {
       const place = resolvePlacements();
       const igTargeted = !place || !(place.publisher_platforms || []).length || place.publisher_platforms.includes('instagram');
       if (igTargeted) {
-        addLog('warning', `[${accLabel}] ⚠⚠ NO Instagram representative secured — IG stays in targeting but may NOT deliver. Fix: link an IG to the page (Page Settings → Linked accounts), grant this token ADVERTISER+ on the page so a Page-Backed IG can be created, or paste a promotable IG ID in step 3. Launch continues.`);
+        addLog('info', `[${accLabel}] 🔗 No explicit IG — creatives use use_page_actor_override=true: IG delivers under the Page identity (PBIA). To show a real IG handle instead, link an IG to the page or paste an IG ID in step 3.`);
       }
     }
     render();
@@ -2677,6 +2638,11 @@
 
           const creativeBody = { object_story_spec: JSON.stringify(objectStorySpec) };
           if (urlTags) creativeBody.url_tags = urlTags;
+          // v0.23.0: no explicit IG resolved and NOT FB-only mode → use_page_actor_override=true.
+          // Documented API equivalent of AM's "Use Facebook Page" IG identity: FB resolves the
+          // page's PBIA server-side, no id / page role needed. This is the root fix for rented
+          // cabs where the whole IG ladder comes back empty.
+          if (!resolvedIg && !state.usePageAsActor) creativeBody.use_page_actor_override = 'true';
 
           // v0.6.4 safety net — if FB rejects the creative because of IG.
           // v0.6.10: instead of going straight to PBIA, run the full ladder
@@ -2686,7 +2652,7 @@
           // PBIA, while functional, leaves that dropdown empty.
           let creative;
           if (state.dryRun) {
-            addLog('info', `[${accLabel}] 🟦 creative: ${JSON.stringify(objectStorySpec).slice(0, 500)}`);
+            addLog('info', `[${accLabel}] 🟦 creative: ${JSON.stringify(objectStorySpec).slice(0, 500)}${creativeBody.use_page_actor_override ? ' · +use_page_actor_override=true (Page identity on IG)' : ''}`);
             creative = { id: 'DRY_CREATIVE' };
           } else {
           try {
@@ -2715,20 +2681,22 @@
                   creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: retryBody });
                   resolvedIg = fallbackIg;
                 } catch (e2) {
-                  addLog('warning', `[${accLabel}] IG fallback ${fallbackIg} also rejected: ${e2.message} — dropping IG entirely for remaining ads`);
+                  addLog('warning', `[${accLabel}] IG fallback ${fallbackIg} also rejected: ${e2.message} — dropping explicit IG, using use_page_actor_override for remaining ads`);
                   const noIgSpec = { ...objectStorySpec };
                   delete noIgSpec.instagram_user_id;
                   const noIgBody = { object_story_spec: JSON.stringify(noIgSpec) };
                   if (urlTags) noIgBody.url_tags = urlTags;
+                  if (!state.usePageAsActor) noIgBody.use_page_actor_override = 'true';
                   creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: noIgBody });
                   resolvedIg = '';
                 }
               } else {
-                addLog('warning', `[${accLabel}] No IG fallback available (account/page/PBIA all empty or same as rejected) — retrying "${adName}" without IG, and skipping IG for remaining ads in this account`);
+                addLog('warning', `[${accLabel}] No IG fallback available (account/page/PBIA all empty or same as rejected) — retrying "${adName}" with use_page_actor_override, remaining ads follow`);
                 const retrySpec = { ...objectStorySpec };
                 delete retrySpec.instagram_user_id;
                 const retryBody = { object_story_spec: JSON.stringify(retrySpec) };
                 if (urlTags) retryBody.url_tags = urlTags;
+                if (!state.usePageAsActor) retryBody.use_page_actor_override = 'true';
                 creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: retryBody });
                 resolvedIg = '';
               }
@@ -3130,7 +3098,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>METALAUNCH PRO // v0.22.0</span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>METALAUNCH PRO // v0.23.0</span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -3334,19 +3302,18 @@
             return `<div style="font-size:11px;color:#6e7681;margin-top:4px">Override active — auto-detected (${esc(ig.igId || 'none')}) ignored</div>`;
           }
           if (ig.igId) {
-            // v0.11.0 sources: connected_instagram_account+promotable / *-unverified / account-substitute / pbia / page · v0.22.0: history
+            // v0.11.0 sources: connected_instagram_account+promotable / *-unverified / account-substitute / pbia / page
             const s = ig.source || '';
-            const promotable = /\+promotable|account-substitute|history/.test(s);
+            const promotable = /\+promotable|account-substitute/.test(s);
             const srcLabel = s.includes('connected_instagram_account') ? (promotable ? 'page IG (promotable ✓)' : '⚠ page IG (not in this account — verified after create)')
               : s.includes('instagram_business_account') ? (promotable ? 'page Business IG (promotable ✓)' : '⚠ page Business IG (unverified)')
               : s === 'account-substitute' ? `⚠ account actor — page has no IG${ig.count > 1 ? ` · 1 of ${ig.count}` : ''}`
               : s === 'pbia' ? 'page-backed IG (PBIA)'
-              : s === 'history' ? `page IG from account history (reused PBIA${ig.count ? ` · seen in ${ig.count} ads` : ''})`
               : s === 'page' ? '⚠ page actor (may not be promotable here)' : 'detected';
             const color = promotable ? '#22c55e' : '#fbbf24';
             return `<div style="font-size:11px;color:${color};margin-top:4px">🔗 ${srcLabel}: <b>${esc(ig.igId)}</b>${ig.igName ? ` @${esc(ig.igName)}` : ''}${isMulti ? ' · lookup runs per account at launch' : ''}</div>`;
           }
-          return `<div style="font-size:11px;color:#fbbf24;margin-top:4px">⚠ No IG actor available for account ${esc(probeAcc || '?')} — instagram_user_id omitted at launch (FB uses default)</div>`;
+          return `<div style="font-size:11px;color:#22c55e;margin-top:4px">🔗 No explicit IG for account ${esc(probeAcc || '?')} — launch uses <b>use_page_actor_override</b>: IG delivers under the Page identity (как «Использовать Страницу» в AM)</div>`;
         })()}
       </div>
 
