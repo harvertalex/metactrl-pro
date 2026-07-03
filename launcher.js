@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.21.0 — Bookmarklet
+ * MetaLaunch PRO v0.22.0 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -116,6 +116,16 @@
  *          Advantage Audience → On now auto-fills Age min/max to 18/65 (visible, editable after).
  * v0.21.0: Devices dropdown gains 🤖 Android only / 🍏 iOS only — maps to device_platforms:['mobile']
  *          + targeting.user_os:['Android'|'iOS']; CSV fallback reads optional "User OS" column.
+ * v0.22.0: IG identity on rented cabs — new HISTORY rung in the IG ladder. Partner-BM accounts
+ *          (no page role on the token) can't read a page's connected IG, list account actors, or
+ *          GET/POST PBIA — every rung failed and ads went Facebook-only with an empty IG slot. But
+ *          AM-created ads in the same account already carry the page's PBIA in instagram_user_id,
+ *          and REUSING that id on adcreatives POST works (verified live on HolyMoly cabs — create/
+ *          readback/delete kept instagram_user_id). New loadIgFromHistory(accId, pageId) scans the
+ *          account's own creatives (≤3×100, newest first) for the most-used IG for that page and
+ *          slots in after PBIA, before the page-only surrender. UI hint: green "page IG from account
+ *          history (reused PBIA · seen in N ads)". Cached per (account, page); transient scan errors
+ *          don't poison the cache.
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -1372,14 +1382,70 @@
       const pbia = await loadPbiaForPage(pageId, pageName);
       if (pbia?.igId) { state.pageIgMap[key] = { ...pbia, source: 'pbia' }; return pbia.igId; }
 
+      // v0.22.0: HISTORY rung — rented cabs (partner BM, no page role) can't read page IG
+      // or create PBIA, but Ads Manager-created ads in the SAME account already carry the
+      // page's PBIA in instagram_user_id. Reusing an id that already worked in this exact
+      // (account, page) combo is proven-valid: FB accepts it on adcreatives POST (verified
+      // live on the HolyMoly cabs). Scan the account's own creatives for the most-used IG
+      // for this page.
+      const hist = await loadIgFromHistory(accId, pageId);
+      if (hist?.igId) {
+        const entry = { igId: hist.igId, igName: hist.igName || '', pageName, source: 'history', count: hist.count };
+        state.pageIgMap[key] = entry;
+        addLog('info', `🔗 IG from account history: ${entry.igId}${entry.igName ? ' @' + entry.igName : ''} — used in ${hist.count} existing creative(s) of this page in this account`);
+        return entry.igId;
+      }
+
       // No IG anywhere. Cache as terminal ONLY if nothing errored (so transient fails retry).
       state.pageIgMap[key] = { igId: '', igName: '', pageName, source: anyError ? 'error' : 'none', terminal: !anyError };
-      addLog('warning', `⚠ Page "${pageName || pageId}" has no Instagram identity (no connected IG, no account actor, PBIA unavailable). Ads run Facebook-only — IG field empty. Fix: link an IG in Page Settings (business.facebook.com/settings/instagram-accounts), OR paste a promotable IG ID in step 3, OR tick "Use Facebook Page as IG identity".`);
+      addLog('warning', `⚠ Page "${pageName || pageId}" has no Instagram identity (no connected IG, no account actor, PBIA unavailable, nothing in account history). Ads run Facebook-only — IG field empty. Fix: link an IG in Page Settings (business.facebook.com/settings/instagram-accounts), OR paste a promotable IG ID in step 3, OR tick "Use Facebook Page as IG identity".`);
       return '';
     } finally {
       state.pageIgLoading[key] = false;
       render();
     }
+  }
+
+  // v0.22.0: last-rung IG source — mine the account's OWN creative history for the
+  // instagram_user_id that past ads (usually AM-created, "Page as representative")
+  // used with this page. That id is the page's PBIA; our session can't CREATE one
+  // on rented cabs (no page role) but can REUSE an existing one. Newest creatives
+  // come first, cap at 3×100 so big accounts don't stall the lookup.
+  // Cache key `__ighist__<accId>__<pageId>` — result is per (account, page).
+  async function loadIgFromHistory(accId, pageId) {
+    if (!accId || !pageId) return null;
+    const cacheKey = `__ighist__${accId}__${pageId}`;
+    if (state.pageIgMap[cacheKey] !== undefined) return state.pageIgMap[cacheKey];
+    let result = null;
+    try {
+      const freq = new Map();
+      let next = `/act_${accId}/adcreatives`;
+      let np = { fields: 'instagram_user_id,object_story_spec{page_id}', limit: 100 };
+      for (let page = 0; page < 3 && next; page++) {
+        const r = await apiFetch(next, { params: np });
+        for (const c of (r?.data || [])) {
+          if (!c.instagram_user_id) continue;
+          if (String(c.object_story_spec?.page_id || '') !== String(pageId)) continue;
+          freq.set(String(c.instagram_user_id), (freq.get(String(c.instagram_user_id)) || 0) + 1);
+        }
+        next = r?.paging?.next || '';
+        np = {};
+      }
+      if (freq.size) {
+        const [igId, count] = [...freq.entries()].sort((a, b) => b[1] - a[1])[0];
+        let igName = '';
+        try {
+          const u = await apiFetch(`/${igId}`, { params: { fields: 'username' } });
+          igName = u?.username || '';
+        } catch {}
+        result = { igId, igName, count };
+      }
+    } catch (e) {
+      addLog('warning', `IG history scan failed (${accId}): ${e.message}`);
+      return null; // transient — don't cache, retry next time
+    }
+    state.pageIgMap[cacheKey] = result;
+    return result;
   }
 
   // v0.6.9: PBIA (Page-Backed Instagram Account) helper, separate from
@@ -3064,7 +3130,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>METALAUNCH PRO // v0.21.0</span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>METALAUNCH PRO // v0.22.0</span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -3268,13 +3334,14 @@
             return `<div style="font-size:11px;color:#6e7681;margin-top:4px">Override active — auto-detected (${esc(ig.igId || 'none')}) ignored</div>`;
           }
           if (ig.igId) {
-            // v0.11.0 sources: connected_instagram_account+promotable / *-unverified / account-substitute / pbia / page
+            // v0.11.0 sources: connected_instagram_account+promotable / *-unverified / account-substitute / pbia / page · v0.22.0: history
             const s = ig.source || '';
-            const promotable = /\+promotable|account-substitute/.test(s);
+            const promotable = /\+promotable|account-substitute|history/.test(s);
             const srcLabel = s.includes('connected_instagram_account') ? (promotable ? 'page IG (promotable ✓)' : '⚠ page IG (not in this account — verified after create)')
               : s.includes('instagram_business_account') ? (promotable ? 'page Business IG (promotable ✓)' : '⚠ page Business IG (unverified)')
               : s === 'account-substitute' ? `⚠ account actor — page has no IG${ig.count > 1 ? ` · 1 of ${ig.count}` : ''}`
               : s === 'pbia' ? 'page-backed IG (PBIA)'
+              : s === 'history' ? `page IG from account history (reused PBIA${ig.count ? ` · seen in ${ig.count} ads` : ''})`
               : s === 'page' ? '⚠ page actor (may not be promotable here)' : 'detected';
             const color = promotable ? '#22c55e' : '#fbbf24';
             return `<div style="font-size:11px;color:${color};margin-top:4px">🔗 ${srcLabel}: <b>${esc(ig.igId)}</b>${ig.igName ? ` @${esc(ig.igName)}` : ''}${isMulti ? ' · lookup runs per account at launch' : ''}</div>`;
