@@ -78,6 +78,14 @@ console.log('B64 updated, length:', b64.length);
 cd code/metactrl-pro && node regen-launcher.mjs
 ```
 
+**MetaWatch PRO** — вотчдог-бакмарклет (`watchdog.js` → `install-watch.html`), та же схема:
+
+```bash
+cd code/metactrl-pro && node regen-watch.mjs
+```
+
+Source of truth версии = баннер в шапке `watchdog.js` (`MetaWatch PRO vX.Y.Z — Bookmarklet`); drift-чек по `const VERSION`. Бампать версию в двух местах `watchdog.js` — шапка + константа.
+
 Source of truth версии = баннер в шапке `launcher.js` (`MetaLaunch PRO vX.Y.Z — Bookmarklet`). Скрипт: (1) регенит B64, (2) стемпит эту версию во все вывески `install-launcher.html` (badge + footer), (3) sanity-чек на дрейф с in-panel заголовком (`>FB LAUNCHER // vX.Y.Z<`). **Версию бампаешь ТОЛЬКО в двух местах `launcher.js` — шапка + заголовок — остальное синхронится само.** `deploy.bat regen` дёргает и MetaCtrl, и этот скрипт.
 
 ### 3. Пуш на GitHub → GitHub Pages (primary)
@@ -117,6 +125,9 @@ code/metactrl-pro/
 ├── launcher.js                ← MetaLaunch PRO — код
 ├── install-launcher.html      ← MetaLaunch PRO — страница установки (содержит B64)
 ├── regen-launcher.mjs         ← MetaLaunch PRO — регенератор B64 + version-stamp
+├── watchdog.js                ← MetaWatch PRO — вотчдог: сценарии OBSERVE/ARMED, тик, журнал, TG
+├── install-watch.html         ← MetaWatch PRO — страница установки (содержит B64)
+├── regen-watch.mjs            ← MetaWatch PRO — регенератор B64 + version-stamp
 ├── creative-uploader/         ← Creative Uploader — отдельный инструмент (заливка + JSON-хеши)
 │   ├── index.html             ←   страница установки (содержит B64)
 │   ├── bookmarklet.js         ←   код
@@ -133,6 +144,7 @@ code/metactrl-pro/
 | `/` (`index.html`) | Hub — витрина инструментов |
 | `/install-page.html` | MetaCtrl PRO (установка) |
 | `/install-launcher.html` | MetaLaunch PRO (установка) |
+| `/install-watch.html` | MetaWatch PRO (установка) |
 | `/creative-uploader/` | Creative Uploader (установка) |
 
 ---
