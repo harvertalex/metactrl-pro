@@ -128,6 +128,9 @@ code/metactrl-pro/
 ├── watchdog.js                ← MetaWatch PRO — вотчдог: сценарии OBSERVE/ARMED, тик, журнал, TG
 ├── install-watch.html         ← MetaWatch PRO — страница установки (содержит B64)
 ├── regen-watch.mjs            ← MetaWatch PRO — регенератор B64 + version-stamp
+├── switchboard.js             ← FB Switchboard — код (статусы + пауза/старт по кампаниям/адсетам/объявлениям)
+├── install-switchboard.html   ← FB Switchboard — страница установки (содержит B64)
+├── regen-switchboard.mjs      ← FB Switchboard — регенератор B64 + version-stamp
 ├── creative-uploader/         ← Creative Uploader — отдельный инструмент (заливка + JSON-хеши)
 │   ├── index.html             ←   страница установки (содержит B64)
 │   ├── bookmarklet.js         ←   код
@@ -145,6 +148,7 @@ code/metactrl-pro/
 | `/install-page.html` | MetaCtrl PRO (установка) |
 | `/install-launcher.html` | MetaLaunch PRO (установка) |
 | `/install-watch.html` | MetaWatch PRO (установка) |
+| `/install-switchboard.html` | FB Switchboard (установка) |
 | `/creative-uploader/` | Creative Uploader (установка) |
 
 ---
