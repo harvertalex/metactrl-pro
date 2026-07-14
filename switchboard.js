@@ -1,28 +1,25 @@
 /* ============================================================================
-   FB Switchboard v0.1.0 — Bookmarklet
+   FB Switchboard v0.2.0 — Bookmarklet
    Кампании / Адсеты / Объявления в одной панели: статус + тумблер Pause/Start.
-   Работает ТОЛЬКО на adsmanager.facebook.com (берёт __accessToken со страницы,
-   тот же discovery что у MetaCtrl / MetaLaunch). Graph API v23.0. Standalone.
+   Работает ТОЛЬКО на adsmanager/business.facebook.com. Graph API v23.0.
+   FB-клиент (токен-лесенка, credentials:include, мультиисточник кабов, ретраи)
+   портирован из MetaWatch/MetaLaunch — проверенный паттерн для этой среды.
    Regen: node regen-switchboard.mjs
    ========================================================================== */
 (async function () {
   'use strict';
 
-  const VERSION = 'v0.1.0';
+  const VERSION = 'v0.2.0';
+  const HOST_GRAPH = 'https://graph.facebook.com/v23.0';
+  const MAX_RETRIES = 4;
+  const BACKOFF_BASE_MS = 4000;
+  const ROW_CAP = 5000; // потолок строк на уровень, чтобы не улететь на гигантском кабе
 
   // Повторный клик по закладке — закрыть панель
   const existing = document.getElementById('fbsb-root');
   if (existing) { existing.remove(); return; }
 
-  const GRAPH = 'https://graph.facebook.com/v23.0';
-  const TOKEN =
-    (typeof __accessToken !== 'undefined' && __accessToken) ||
-    (window.__accessToken) || null;
-
-  if (!TOKEN) {
-    alert('FB Switchboard: не нашла access_token.\nОткрой панель на adsmanager.facebook.com и запусти закладку там.');
-    return;
-  }
+  let TOKEN = null; // выставляется через getToken() на старте
 
   /* -------------------- state -------------------- */
   const LEVELS = {
@@ -40,35 +37,91 @@
     loading: false,
   };
 
-  /* -------------------- api -------------------- */
-  async function apiGet(path, params = {}) {
-    const url = new URL(GRAPH + path);
-    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
-    url.searchParams.set('access_token', TOKEN);
-    const r = await fetch(url.toString(), { method: 'GET' });
-    const j = await r.json();
-    if (j.error) throw new Error(j.error.message);
-    return j;
-  }
-  // Follows paging.next (уже содержит токен) с потолком, чтобы не улететь на тысячах
-  async function apiGetAll(path, params) {
-    let out = [];
-    let j = await apiGet(path, params);
-    out = out.concat(j.data || []);
-    while (j.paging && j.paging.next && out.length < 3000) {
-      const r = await fetch(j.paging.next);
-      j = await r.json();
-      if (j.error) break;
-      out = out.concat(j.data || []);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  /* -------------------- token ladder (из MetaWatch) -------------------- */
+  async function getToken() {
+    try { if (typeof __accessToken !== 'undefined' && __accessToken) return __accessToken; } catch {}
+    try { if (window.__accessToken) return window.__accessToken; } catch {}
+    try {
+      for (const s of document.querySelectorAll('script')) {
+        const m = (s.textContent || '').match(/"access_token":"(EAA[A-Za-z0-9_-]+)"/);
+        if (m) return m[1];
+      }
+    } catch {}
+    try {
+      const m = (document.documentElement.outerHTML || '').match(/"access_token":"(EAA[A-Za-z0-9_-]+)"/);
+      if (m) return m[1];
+    } catch {}
+    for (const u of ['https://adsmanager.facebook.com/adsmanager/', 'https://business.facebook.com/business/loginpage/']) {
+      try {
+        const txt = await (await fetch(u, { credentials: 'include' })).text();
+        const m = txt.match(/"access_token":"(EAA[A-Za-z0-9_-]+)"/);
+        if (m) return m[1];
+      } catch {}
     }
-    return out;
+    return '';
   }
-  async function apiPost(id, body) {
-    const form = new URLSearchParams({ ...body, access_token: TOKEN });
-    const r = await fetch(GRAPH + '/' + id, { method: 'POST', body: form });
-    const j = await r.json();
-    if (j.error) throw new Error(j.error.message);
-    return j;
+
+  /* -------------------- api (из MetaWatch) -------------------- */
+  function fbErrorMsg(err, httpStatus) {
+    if (!err) return `API error (${httpStatus || '?'})`;
+    const codePart = err.code != null ? `[${err.code}${err.error_subcode ? '/' + err.error_subcode : ''}] ` : '';
+    return `${codePart}${err.error_user_msg || err.message || 'Unknown error'}`;
+  }
+
+  async function apiFetch(path, opts = {}) {
+    const method = opts.method || 'GET';
+    const isFull = /^https?:\/\//i.test(path);
+    const url = isFull ? new URL(path) : new URL(`${HOST_GRAPH}/${path.replace(/^\/+/, '')}`);
+    if (!isFull) {
+      Object.entries(opts.params || {}).forEach(([k, v]) => { if (v != null && v !== '') url.searchParams.set(k, v); });
+      url.searchParams.set('access_token', TOKEN);
+    }
+    const fo = {
+      method, credentials: 'include', mode: 'cors',
+      referrer: 'https://business.facebook.com/', referrerPolicy: 'origin-when-cross-origin',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+    };
+    if (opts.body) {
+      const b = new URLSearchParams();
+      Object.entries(opts.body).forEach(([k, v]) => { if (v != null) b.append(k, v); });
+      b.append('access_token', TOKEN);
+      fo.body = b;
+    }
+    let lastErr;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const res = await fetch(url.toString(), fo);
+        const json = await res.json().catch(() => ({}));
+        if (res.ok && !json?.error) return json;
+        const fbErr = json?.error;
+        if ([4, 17, 32, 80004].includes(fbErr?.code) && attempt < MAX_RETRIES) {
+          await sleep(BACKOFF_BASE_MS * Math.pow(2, attempt - 1));
+          continue;
+        }
+        const err = new Error(fbErrorMsg(fbErr, res.status));
+        err.fbError = fbErr || null;
+        throw err;
+      } catch (e) {
+        lastErr = e;
+        if (e.fbError || attempt >= MAX_RETRIES) break;
+        await sleep(1000 * attempt);
+      }
+    }
+    throw lastErr || new Error('API call failed');
+  }
+
+  async function apiAll(path, params = {}) {
+    const rows = [];
+    let next = path, np = params;
+    while (next && rows.length < ROW_CAP) {
+      const p = await apiFetch(next, { params: np });
+      rows.push(...(p?.data || []));
+      next = p?.paging?.next || '';
+      np = {};
+    }
+    return rows;
   }
 
   /* -------------------- data -------------------- */
@@ -79,14 +132,21 @@
     return m ? 'act_' + m[1] : null;
   }
 
+  // Мультиисточник (как MetaWatch): personal + businesses→owned/client. Всё best-effort.
   async function loadAccounts() {
-    const rows = await apiGetAll('/me/adaccounts', { fields: 'name,account_id', limit: 500 });
-    state.accounts = rows.map(a => ({ id: 'act_' + a.account_id, name: a.name || a.account_id }));
-    const det = detectAct();
-    if (det && !state.accounts.some(a => a.id === det)) {
-      state.accounts.unshift({ id: det, name: det + ' (текущий)' });
+    const fields = 'id,name';
+    const seen = new Set();
+    const push = a => { if (a && a.id && !seen.has(a.id)) { seen.add(a.id); state.accounts.push({ id: a.id, name: a.name || a.id }); } };
+    // текущий каб из URL — держим первым, даже если ниже не придёт
+    if (state.act) push({ id: state.act, name: state.act + ' (текущий)' });
+    try { (await apiAll('/me/adaccounts', { fields, limit: 200 })).forEach(push); } catch {}
+    let businesses = [];
+    try { businesses = await apiAll('/me/businesses', { fields: 'id,name', limit: 100 }); } catch {}
+    for (const b of businesses) {
+      try { (await apiAll(`/${b.id}/owned_ad_accounts`, { fields, limit: 200 })).forEach(push); } catch {}
+      try { (await apiAll(`/${b.id}/client_ad_accounts`, { fields, limit: 200 })).forEach(push); } catch {}
     }
-    state.act = det || (state.accounts[0] && state.accounts[0].id) || null;
+    if (!state.act) state.act = state.accounts[0] && state.accounts[0].id || null;
   }
 
   async function loadLevel(level, force) {
@@ -97,13 +157,12 @@
       (level === 'campaign' ? ',daily_budget,lifetime_budget,objective'
         : level === 'adset' ? ',daily_budget,lifetime_budget,campaign_id'
           : ',adset_id');
-    const rows = await apiGetAll('/' + state.act + '/' + edge, { fields, limit: 500 });
-    state.cache[level] = rows;
+    state.cache[level] = await apiAll('/' + state.act + '/' + edge, { fields, limit: 500 });
   }
 
   // одиночный ре-фетч сущности после тумблера — показать реальный effective_status
   async function refreshEntity(id) {
-    const j = await apiGet('/' + id, { fields: 'status,effective_status' });
+    const j = await apiFetch('/' + id, { params: { fields: 'status,effective_status' } });
     const arr = state.cache[state.level] || [];
     const e = arr.find(x => x.id === id);
     if (e) { e.status = j.status; e.effective_status = j.effective_status; }
@@ -143,7 +202,14 @@
     t.style.borderColor = ok ? '#22c55e' : '#ef4444';
     t.style.opacity = '1';
     clearTimeout(toast._t);
-    toast._t = setTimeout(() => { t.style.opacity = '0'; }, 2600);
+    toast._t = setTimeout(() => { t.style.opacity = '0'; }, 3200);
+  }
+
+  // Персистентная ошибка прямо в теле панели (не исчезает как тост)
+  function showError(msg) {
+    const body = document.getElementById('fbsb-body');
+    if (body) body.innerHTML =
+      `<div class="fbsb-err">⚠️ ${esc(msg)}</div>`;
   }
 
   /* -------------------- render -------------------- */
@@ -185,7 +251,7 @@
         const next = e.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE';
         btn.disabled = true; btn.textContent = '…';
         try {
-          await apiPost(id, { status: next });
+          await apiFetch('/' + id, { method: 'POST', body: { status: next } });
           await refreshEntity(id);
           toast((next === 'PAUSED' ? 'Пауза' : 'Старт') + ': ' + (e.name || id), true);
         } catch (err) {
@@ -204,7 +270,7 @@
     if (!state.cache[level]) {
       state.loading = true; render();
       try { await loadLevel(level); }
-      catch (e) { toast('Не загрузилось: ' + e.message, false); }
+      catch (e) { showError(LEVELS[level].label + ' не загрузились:\n' + e.message); state.loading = false; return; }
       state.loading = false;
     }
     render();
@@ -213,7 +279,7 @@
   async function reloadCurrent() {
     state.loading = true; render();
     try { await loadLevel(state.level, true); }
-    catch (e) { toast('Не загрузилось: ' + e.message, false); }
+    catch (e) { showError(LEVELS[state.level].label + ' не загрузились:\n' + e.message); state.loading = false; return; }
     state.loading = false; render();
   }
 
@@ -221,6 +287,17 @@
     state.act = act;
     state.cache = { campaign: null, adset: null, ad: null };
     await switchLevel(state.level);
+  }
+
+  function fillAccountSelect() {
+    const acct = document.getElementById('fbsb-acct');
+    if (!acct) return;
+    if (!state.accounts.length) {
+      acct.innerHTML = state.act ? `<option value="${esc(state.act)}" selected>${esc(state.act)}</option>` : '';
+      return;
+    }
+    acct.innerHTML = state.accounts.map(a =>
+      `<option value="${esc(a.id)}"${a.id === state.act ? ' selected' : ''}>${esc(a.name)} · ${esc(a.id)}</option>`).join('');
   }
 
   /* -------------------- mount -------------------- */
@@ -274,6 +351,7 @@
         .fbsb-btn.start:hover{background:#134e2b}
         .fbsb-btn:disabled{opacity:.5;cursor:default}
         .fbsb-msg{padding:24px 14px;text-align:center;color:#64748b}
+        .fbsb-err{padding:16px 14px;color:#fca5a5;white-space:pre-wrap;font-size:12px;line-height:1.5}
         #fbsb-toast{position:absolute;left:12px;right:12px;bottom:12px;padding:9px 12px;
           border:1px solid;border-radius:8px;font-size:12px;opacity:0;transition:opacity .2s;
           pointer-events:none;text-align:center}
@@ -314,22 +392,32 @@
     root.querySelectorAll('.fbsb-tab').forEach(t => {
       t.onclick = () => switchLevel(t.dataset.level);
     });
-    const acct = document.getElementById('fbsb-acct');
-    acct.onchange = () => switchAccount(acct.value);
+    document.getElementById('fbsb-acct').onchange = e => switchAccount(e.target.value);
   }
 
   /* -------------------- boot -------------------- */
   mount();
   state.loading = true; render();
-  try {
-    await loadAccounts();
-    const acct = document.getElementById('fbsb-acct');
-    acct.innerHTML = state.accounts.map(a =>
-      `<option value="${a.id}"${a.id === state.act ? ' selected' : ''}>${esc(a.name)} · ${a.id}</option>`).join('');
-    await loadLevel('campaign');
-  } catch (e) {
-    toast('Старт не удался: ' + e.message, false);
+
+  TOKEN = await getToken();
+  if (!TOKEN) {
+    state.loading = false;
+    showError('Не нашла access_token на странице.\nОткрой adsmanager.facebook.com (с логином) и запусти закладку там.');
+    return;
   }
-  state.loading = false;
-  render();
+
+  // 1. Каб из URL — сразу пригоден, кампании грузим не дожидаясь списка кабинетов
+  state.act = detectAct();
+  if (state.act) {
+    fillAccountSelect();
+    try { await loadLevel('campaign'); state.loading = false; render(); }
+    catch (e) { state.loading = false; showError('Кампании не загрузились:\n' + e.message); }
+  } else {
+    state.loading = false;
+    showError('Не нашла ad account в URL.\nОткрой в Ads Manager список кампаний/адсетов (в адресе должен быть act=…) и запусти закладку заново.');
+  }
+
+  // 2. Дропдаун всех кабинетов — best-effort, панель не фейлит
+  try { await loadAccounts(); fillAccountSelect(); }
+  catch (e) { toast('Список кабинетов не подтянулся: ' + e.message, false); }
 })();
