@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.24.0 — Bookmarklet
+ * MetaLaunch PRO v0.25.0 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -154,6 +154,12 @@
  *          belt) BUT restore the LOUD warning: IG identity is NOT attached, the AM field will be
  *          empty — link an IG, grant page role, or paste an IG id. verifyCreativeIg readback now
  *          catches the real silent-drop case.
+ * v0.25.0: editable split-cluster geo. The green split preview renders each cluster's
+ *          countries/states as toggle tokens — click to exclude from THIS launch, click again
+ *          to re-include, ↺ reset restores the preset. GEO_PRESETS defaults stay untouched;
+ *          edits live in state.clusterGeoEdits (persisted into panel presets). Ad set name is
+ *          rebuilt from the effective geo (codes / count) so sub5 never claims an excluded geo.
+ *          Last remaining geo can't be removed (deselect the chip instead).
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -193,6 +199,24 @@
     { group: 'Gambling — countries', label: 'ALL gambling (24 countries)', field: 'countries', value: 'CA, AU, IE, NZ, DE, AT, CH, NO, DK, FI, FR, BE, ES, IT, NL, PT, GR, PL, CZ, SK, SI, HR, RO, HU' },
     { group: 'Gambling — countries', label: 'USA only', field: 'countries', value: 'US' },
   ];
+
+  // v0.25.0: split-cluster geo is editable per launch. state.clusterGeoEdits[idx] holds the
+  // effective comma list when it differs from the preset default (key absent = default).
+  // Edited in the split preview: click a token to exclude/re-include, reset restores.
+  const clusterEdited = i => Object.prototype.hasOwnProperty.call(state.clusterGeoEdits || {}, i);
+  const clusterGeoValue = i => clusterEdited(i) ? state.clusterGeoEdits[i] : GEO_PRESETS[i].value;
+  const clusterTokens = i => clusterGeoValue(i).split(',').map(s => s.trim()).filter(Boolean);
+  // Ad set name must reflect the geo it actually targets (name → sub5 → analytics). Count-style
+  // parens "(8 · cap $10-11)" / "(24 countries)" get the count updated; code-style "(FR/BE/ES)"
+  // are rebuilt from the effective codes.
+  const clusterLabel = i => {
+    const p = GEO_PRESETS[i];
+    if (!clusterEdited(i)) return p.label;
+    const toks = clusterTokens(i);
+    if (/\(\d+/.test(p.label)) return p.label.replace(/\((\d+)([^)]*)\)/, `(${toks.length}$2)`);
+    if (p.field === 'countries') return p.label.replace(/\s*\([^)]*\)\s*$/, '') + ` (${toks.join('/')})`;
+    return p.label;
+  };
 
   // v0.8.0: placement building blocks. Platform checkboxes + position-group checkboxes; presets fill both.
   const PLACEMENT_PLATFORMS = [['facebook', 'Facebook'], ['instagram', 'Instagram'], ['audience_network', 'Audience Network'], ['messenger', 'Messenger']];
@@ -367,6 +391,7 @@
     advantageAudienceOverride: '0', // v0.10.0: default OFF — geo-strict launches must not leak (was '')
     objectiveOverride: '',    // v0.10.0: '' = CSV | OUTCOME_SALES | OUTCOME_LEADS | ... (needed for CSV-less)
     adsetSplitClusters: [],   // v0.10.0: GEO_PRESETS indices → one adset per cluster (waterfall in one click)
+    clusterGeoEdits: {},      // v0.25.0: { presetIdx: 'CA, AU, …' } — per-cluster geo edits; key absent = preset default
     adsetCountOverride: '',   // v0.12.0: CSV-less only — N identical synthetic adsets (''/1 = single). Ignored when CSV loaded or cluster-split active.
     startDate: '',            // v0.10.0: datetime-local; adset start_time (delayed start / Kyiv→US timing)
     dryRun: false,            // v0.10.0: build + log payloads without POSTing
@@ -744,6 +769,7 @@
       sacOverride: state.sacOverride,
       objectiveOverride: state.objectiveOverride,
       adsetSplitClusters: state.adsetSplitClusters,
+      clusterGeoEdits: state.clusterGeoEdits,
       adsetCountOverride: state.adsetCountOverride,
       startDate: state.startDate,
       placementPlatforms: state.placementPlatforms,
@@ -822,6 +848,7 @@
     state.sacOverride = s.sacOverride || '';
     state.objectiveOverride = s.objectiveOverride || '';
     state.adsetSplitClusters = Array.isArray(s.adsetSplitClusters) ? s.adsetSplitClusters : [];
+    state.clusterGeoEdits = (s.clusterGeoEdits && typeof s.clusterGeoEdits === 'object' && !Array.isArray(s.clusterGeoEdits)) ? s.clusterGeoEdits : {};
     state.adsetCountOverride = s.adsetCountOverride || '';
     state.startDate = s.startDate || '';
     state.placementPlatforms = Array.isArray(s.placementPlatforms) ? s.placementPlatforms : [];
@@ -1701,7 +1728,8 @@
     const adsMode = state.creativesParsed?.mode === 'ads';
     const adsModeItems = adsMode ? state.creativesParsed.items : null;
     const hasRows = state.rows.length > 0;
-    const splitClusters = (state.adsetSplitClusters || []).map(i => GEO_PRESETS[i]).filter(Boolean);
+    const splitClusters = (state.adsetSplitClusters || []).filter(i => GEO_PRESETS[i])
+      .map(i => ({ ...GEO_PRESETS[i], label: clusterLabel(i), value: clusterGeoValue(i) }));  // v0.25.0: effective geo
     // CSV-less / cluster-split both need uploaded/pasted creatives to have any ads.
     const csvless = !hasRows;
     if (csvless && !(adsMode && adsModeItems && adsModeItems.length)) return null;
@@ -3014,6 +3042,11 @@
         border:1px solid #1a4a5a; background:#06222d; color:#94a3b8; user-select:none; transition:all .12s; }
       #${PANEL_ID} .chip:hover { border-color:#2b6e8a; color:#cbd5e1; }
       #${PANEL_ID} .chip.on { background:rgba(56,189,248,.18); border-color:#38bdf8; color:#cffafe; font-weight:600; box-shadow:0 0 8px rgba(56,189,248,.3); }
+      #${PANEL_ID} .geo-tok { display:inline-block; padding:0 5px; border:1px solid #2d3a4f; border-radius:4px; cursor:pointer; user-select:none; line-height:1.5; }
+      #${PANEL_ID} .geo-tok:hover { border-color:#38bdf8; color:#cffafe; }
+      #${PANEL_ID} .geo-tok.off { opacity:.35; text-decoration:line-through; }
+      #${PANEL_ID} .geo-tok-reset { color:#fbbf24; cursor:pointer; user-select:none; font-size:10px; }
+      #${PANEL_ID} .geo-tok-reset:hover { text-decoration:underline; }
       #${PANEL_ID} hr { border:none; border-top:1px solid #103a47; margin:16px 0 12px; }
       #${PANEL_ID} .s-pending { color:#475569; }
       #${PANEL_ID} .s-uploading { color:#60a5fa; }
@@ -3127,7 +3160,8 @@
     const bidNeedsCapUI = state.bidStrategyOverride !== 'LOWEST_COST_WITHOUT_CAP';
     const phr = PHRASE_LIB[state.phraseVertical] || PHRASE_LIB.insurance;
     // v0.10.1: cluster split active → single geo fields are ignored (each adset uses its own geo)
-    const splitClustersSel = (state.adsetSplitClusters || []).map(i => GEO_PRESETS[i]).filter(Boolean);
+    const splitClustersSel = (state.adsetSplitClusters || []).filter(i => GEO_PRESETS[i])
+      .map(i => ({ ...GEO_PRESETS[i], idx: i, label: clusterLabel(i), value: clusterGeoValue(i) }));  // v0.25.0
     const splitActive = splitClustersSel.length > 0;
 
     const previewHtml = plan ? `
@@ -3172,7 +3206,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>METALAUNCH PRO // v0.24.0</span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>METALAUNCH PRO // v0.25.0</span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -3457,13 +3491,17 @@
         <div class="field" ${splitActive ? 'style="border-left-color:#22c55e"' : ''}>
           <label>Split into ad sets by cluster <span style="color:#6e7681">— click clusters → one ad set EACH, own geo. Waterfall in one launch.</span></label>
           <div class="chips">
-            ${GEO_PRESETS.map((p, i) => `<span class="chip ${state.adsetSplitClusters.includes(i) ? 'on' : ''}" data-clusteridx="${i}" title="${esc(p.value)}">${esc(p.label.replace(/ \(.*\)$/, '').replace(/ · .*/, ''))}</span>`).join('')}
+            ${GEO_PRESETS.map((p, i) => `<span class="chip ${state.adsetSplitClusters.includes(i) ? 'on' : ''}" data-clusteridx="${i}" title="${esc(clusterGeoValue(i))}">${esc(p.label.replace(/ \(.*\)$/, '').replace(/ · .*/, ''))}${clusterEdited(i) ? ' ✎' : ''}</span>`).join('')}
           </div>
           ${splitActive ? `
           <div style="margin-top:8px;background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.25);border-radius:6px;padding:7px 9px">
             <div style="font-size:11px;color:#4ade80;font-weight:600;margin-bottom:5px">→ ${splitClustersSel.length} ad set${splitClustersSel.length > 1 ? 's' : ''} will be created (creatives go into each):</div>
-            ${splitClustersSel.map((p, i) => `<div style="font-size:11px;color:#cbd5e1;line-height:1.5;margin-bottom:3px"><b style="color:#fff">${String(i + 1).padStart(2, '0')} ${esc(p.label.replace(/ \(.*\)$/, '').replace(/ · .*/, ''))}</b> <span style="color:#6e7681">${p.field === 'states' ? 'states' : 'countries'}:</span> ${esc(p.value)}</div>`).join('')}
-            <div style="font-size:10px;color:#fbbf24;margin-top:4px">↑ single Countries / US-states fields below are ignored while split is on. Click a chip again to remove.</div>
+            ${splitClustersSel.map((p, i) => {
+              const defToks = GEO_PRESETS[p.idx].value.split(',').map(s => s.trim()).filter(Boolean);
+              const onToks = clusterTokens(p.idx);
+              return `<div style="font-size:11px;color:#cbd5e1;line-height:2;margin-bottom:3px"><b style="color:#fff">${String(i + 1).padStart(2, '0')} ${esc(p.label.replace(/ \(.*\)$/, '').replace(/ · .*/, ''))}</b> <span style="color:#6e7681">${p.field === 'states' ? 'states' : 'countries'} ${onToks.length}/${defToks.length}:</span> ${defToks.map(t => `<span class="geo-tok${onToks.includes(t) ? '' : ' off'}" data-geocluster="${p.idx}" data-geotok="${esc(t)}" title="${onToks.includes(t) ? 'click to exclude from this ad set' : 'click to re-include'}">${esc(t)}</span>`).join(' ')}${clusterEdited(p.idx) ? ` <span class="geo-tok-reset" data-clusterreset="${p.idx}" title="restore full preset">↺ reset</span>` : ''}</div>`;
+            }).join('')}
+            <div style="font-size:10px;color:#fbbf24;margin-top:4px">↑ single Countries / US-states fields below are ignored while split is on. Click a chip again to remove. Click a country/state above to exclude it from that ad set.</div>
           </div>` : ''}
         </div>
         <div class="field">
@@ -4101,6 +4139,28 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
         if (i >= 0) state.adsetSplitClusters.splice(i, 1); else state.adsetSplitClusters.push(idx);
         render();
       });
+    });
+    // v0.25.0: split preview geo tokens — toggle a country/state in that cluster's launch geo.
+    // Removing the last one is blocked (deselect the chip instead). Full set again = edit dropped.
+    panel.querySelectorAll('.geo-tok[data-geocluster]').forEach(el => {
+      el.addEventListener('click', () => {
+        const idx = +el.dataset.geocluster;
+        const tok = el.dataset.geotok;
+        const def = GEO_PRESETS[idx].value.split(',').map(s => s.trim()).filter(Boolean);
+        let cur = clusterTokens(idx);
+        if (cur.includes(tok)) {
+          if (cur.length === 1) { setStatus('error', 'Cluster needs at least one geo — deselect the whole chip instead.'); return; }
+          cur = cur.filter(t => t !== tok);
+        } else {
+          cur = def.filter(t => cur.includes(t) || t === tok);  // re-include, keep preset order
+        }
+        if (cur.length === def.length) delete state.clusterGeoEdits[idx];
+        else state.clusterGeoEdits[idx] = cur.join(', ');
+        render();
+      });
+    });
+    panel.querySelectorAll('.geo-tok-reset[data-clusterreset]').forEach(el => {
+      el.addEventListener('click', () => { delete state.clusterGeoEdits[+el.dataset.clusterreset]; render(); });
     });
     // v0.10.0: objective / start time / dry run
     document.getElementById('fbl-objective')?.addEventListener('change', e => { state.objectiveOverride = e.target.value; render(); });
