@@ -1,9 +1,19 @@
 /* ===========================================================================
- * MetaWatch PRO v0.1.0 — Bookmarklet
+ * MetaWatch PRO v0.2.0 — Bookmarklet
  *
  * In-browser watchdog for FB Ads Manager — redundancy layer that works even when
  * server-side infra (ARIA / SCAN watchdog) is down. Runs from an open AM tab on
  * the session token (same discovery ladder as MetaLaunch PRO).
+ *
+ * v0.2.0: ANTI-FLAG request diet (FB restricted the session for "automation /
+ *         multiple sessions" on 2026-07-17, triggered by MetaLaunch — MetaWatch is
+ *         the other session-token tool most exposed since it POLLS on a timer).
+ *         (1) GLOBAL THROTTLE GATE — every apiFetch dispatch serializes behind one
+ *             chain (900ms floor + 0-700ms jitter). fetchAccount()'s Promise.all
+ *             pairs no longer fire as a concurrent burst; each tick emits a paced
+ *             trickle. (2) Default tick 15→30 min; interval options 5/10 dropped
+ *             (too aggressive for a session-token poller) → now 15/30/45/60, with a
+ *             15m hard floor + clamp of any legacy persisted sub-15m value on load.
  *
  * Scope v1 (approved 2026-07-13):
  *   - FB-only metrics (no tracker data): spend / imps / clicks / CTR / CPC / CPM /
@@ -30,7 +40,7 @@
   try { clearInterval(window.__mwFallbackTimer); } catch {}
 
   // ─── CONFIG ─────────────────────────────────────────────────────────────
-  const VERSION = '0.1.0';
+  const VERSION = '0.2.0';
   const GRAPH_VER = 'v23.0';
   const HOST_GRAPH = `https://graph.facebook.com/${GRAPH_VER}`;
   const MAX_RETRIES = 4;
@@ -97,7 +107,7 @@
   const state = {
     sel: [],                         // выбранные act_ id
     scenarios: [],                   // {id,name,enabled,armed,when[],action,scope,filt{mode,text},cooldownMin}
-    settings: { intervalMin: 15, tgToken: '', tgChat: '', sound: true },
+    settings: { intervalMin: 30, tgToken: '', tgChat: '', sound: true }, // v0.2.0: default 15→30 (session-token diet)
     journal: [],                     // новые в начало
     firedMap: {},                    // 'scId:entityId' → ts (dedup/cooldown)
     running: false,
@@ -123,6 +133,9 @@
         journal: s.journal || [], firedMap: s.firedMap || {},
         running: !!s.running, lastTickTs: s.lastTickTs || 0,
       });
+      // v0.2.0: clamp legacy sub-15m intervals (old 5/10 presets) up to the new 15m floor
+      // so a persisted low value can't keep polling the session below the safe cadence.
+      if (!(state.settings.intervalMin >= 15)) state.settings.intervalMin = 30;
       const now = Date.now();
       for (const k of Object.keys(state.firedMap)) if (now - state.firedMap[k] > FIRED_TTL_MS) delete state.firedMap[k];
     } catch {}
@@ -130,6 +143,30 @@
 
   // ─── UTILS ──────────────────────────────────────────────────────────────
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // ─── GLOBAL REQUEST THROTTLE (v0.2.0) ───────────────────────────────────
+  // MetaWatch is a POLLER: every tick it sweeps campaigns+insights (±ads) per
+  // selected cab, from the logged-in Ads Manager session with a scraped token.
+  // fetchAccount() requests its 2-4 calls via Promise.all — a concurrent burst.
+  // A session that machine-guns bursts on a timer is exactly what trips FB's
+  // "automation / multiple sessions" restriction (seen 2026-07-17). This gate
+  // serializes ALL apiFetch traffic behind one chain with a min gap + jitter,
+  // so each tick emits a paced trickle, not a burst. The Promise.all pairs still
+  // work — the gate just runs them one after another.
+  const MIN_REQ_GAP_MS = 900;   // floor between any two graph calls
+  const REQ_JITTER_MS  = 700;   // random 0..700ms added on top
+  let _gateChain = Promise.resolve();
+  let _lastReqAt = 0;
+  function throttleSlot() {
+    const mine = _gateChain.then(async () => {
+      const wait = Math.max(0, (_lastReqAt + MIN_REQ_GAP_MS) - Date.now())
+        + Math.floor(Math.random() * REQ_JITTER_MS);
+      if (wait > 0) await sleep(wait);
+      _lastReqAt = Date.now();
+    });
+    _gateChain = mine.catch(() => {});
+    return mine;
+  }
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   const hhmm = (ts) => ts ? new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '—';
   const fmt = (n, d = 2) => (n == null || !isFinite(n)) ? '—' : (Math.abs(n) >= 100 ? String(Math.round(n)) : Number(n).toFixed(Math.abs(n) < 10 ? d : 1));
@@ -189,6 +226,7 @@
     let lastErr;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
+        await throttleSlot(); // v0.2.0: pace every dispatch — no per-tick session bursts
         const res = await fetch(url.toString(), fo);
         const json = await res.json().catch(() => ({}));
         if (res.ok && !json?.error) return json;
@@ -811,7 +849,7 @@
       <div class="mw-bar">
         <button class="mw-run" id="mw-run">▶ СТАРТ</button>
         <select id="mw-int" title="интервал тика">
-          ${[5, 10, 15, 30, 60].map((m) => `<option value="${m}">${m} мин</option>`).join('')}
+          ${[15, 30, 45, 60].map((m) => `<option value="${m}">${m} мин</option>`).join('')}
         </select>
         <span class="mw-next" id="mw-next">стоп</span>
         <span class="mw-status" id="mw-status"></span>
@@ -828,7 +866,7 @@
     });
     panel.querySelector('#mw-run').addEventListener('click', () => setRunning(!state.running));
     panel.querySelector('#mw-int').addEventListener('change', (e) => {
-      state.settings.intervalMin = Number(e.target.value) || 15;
+      state.settings.intervalMin = Number(e.target.value) || 30;
       save(); render();
     });
 

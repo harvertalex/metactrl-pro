@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.25.0 — Bookmarklet
+ * MetaLaunch PRO v0.26.0 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -160,6 +160,17 @@
  *          edits live in state.clusterGeoEdits (persisted into panel presets). Ad set name is
  *          rebuilt from the effective geo (codes / count) so sub5 never claims an excluded geo.
  *          Last remaining geo can't be removed (deselect the chip instead).
+ * v0.26.0: ANTI-FLAG request diet (FB hit the session with an "automation / multiple sessions"
+ *          restriction on 2026-07-17 right after a launch). Three changes, no feature loss:
+ *          (1) GLOBAL THROTTLE GATE — every apiFetch dispatch serializes behind one chain with a
+ *              700ms floor + 0-600ms jitter, so the session never machine-guns a burst. Kills the
+ *              worst pattern: loadAccounts()'s Promise.all fan-out over /me/businesses × owned/client
+ *              at panel startup (was a dozen concurrent calls in <100ms).
+ *          (2) ACCOUNT CACHE — discovered account list cached in localStorage (30m TTL). Reopening
+ *              the panel within the window hits FB ZERO times; "↻ reload" forces a fresh pull.
+ *          (3) HUMAN WRITE PACING — inter-entity settle bumped 400/800ms → 1600/3200ms +jitter,
+ *              added an 8s +jitter pause between accounts in multi-account launches. A launch now
+ *              reads as hand-operated, not scripted. Trade-off: launches are slower by design.
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -318,9 +329,12 @@
   // ─── CONFIG ─────────────────────────────────────────────────────────────
   const GRAPH_VER = 'v23.0';
   const HOST_GRAPH = `https://graph.facebook.com/${GRAPH_VER}`;
-  const RATE_AD_MS = 400;
-  const RATE_ADSET_MS = 800;
-  const RATE_ACCOUNT_MS = 1500;
+  // v0.26.0: human-cadence write pacing (was 400/800/1500 — too fast, read as automation).
+  // The global throttle gate already adds ~0.7-1.3s per underlying call; these are the
+  // ADDITIONAL settle pauses between created entities so a launch looks hand-operated.
+  const RATE_AD_MS = 1600;
+  const RATE_ADSET_MS = 3200;
+  const RATE_ACCOUNT_MS = 8000;
   const MAX_RETRIES = 4;
   const BACKOFF_BASE_MS = 5000;
 
@@ -423,6 +437,32 @@
   }[m]));
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const stripPfx = v => String(v || '').replace(/^[a-z]+:/, '');
+  // v0.26.0: jittered pacing — de-robotize fixed sleeps (FB reads even cadence as automation).
+  const jitter = (base, spread = 0.5) => base + Math.floor(Math.random() * base * spread);
+
+  // ─── GLOBAL REQUEST THROTTLE (v0.26.0) ──────────────────────────────────
+  // EVERY Graph call funnels through apiFetch. A logged-in Ads Manager session
+  // that machine-guns a burst of calls in a few ms is exactly what trips FB's
+  // "automation / multiple sessions" restriction (seen 2026-07-17 on launch).
+  // The worst offender is panel startup: loadAccounts() fans out
+  // /me/businesses × [owned_ad_accounts, client_ad_accounts] via Promise.all —
+  // a dozen concurrent calls at once. This gate serializes ALL apiFetch traffic
+  // behind one chain with a human-ish min gap + jitter, so the session never
+  // emits a burst. Cost: launches/discovery are a bit slower; that is the point.
+  const MIN_REQ_GAP_MS = 700;   // floor between any two graph calls
+  const REQ_JITTER_MS  = 600;   // random 0..600ms added on top
+  let _gateChain = Promise.resolve();
+  let _lastReqAt = 0;
+  function throttleSlot() {
+    const mine = _gateChain.then(async () => {
+      const wait = Math.max(0, (_lastReqAt + MIN_REQ_GAP_MS) - Date.now())
+        + Math.floor(Math.random() * REQ_JITTER_MS);
+      if (wait > 0) await sleep(wait);
+      _lastReqAt = Date.now();
+    });
+    _gateChain = mine.catch(() => {}); // never let one slot poison the chain
+    return mine;
+  }
 
   // v0.5.2: locale-aware numeric parse — handles EU "520,99" / "1.234,56" alongside US "520.99" / "1,234.56".
   // Power Editor exports use the OS locale of whoever clicked Export, so a single launcher
@@ -517,6 +557,7 @@
     let lastErr;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
+        await throttleSlot(); // v0.26.0: pace every dispatch (incl. retries) — no session bursts
         const res = await fetch(url.toString(), fo);
         const json = await res.json().catch(() => ({}));
         if (res.ok && !json?.error) return json;
@@ -618,8 +659,46 @@
   }
 
   // ─── ACCOUNT LOADER ─────────────────────────────────────────────────────
-  async function loadAccounts() {
+  // v0.26.0: cache the discovered account list in localStorage (30 min TTL).
+  // Every panel open used to re-run the full /me/adaccounts + /me/businesses ×
+  // [owned,client] discovery sweep — the startup burst FB reads as automation.
+  // Reopening the panel within the TTL now loads from cache and hits FB zero times;
+  // the "↻ reload" button forces a fresh pull.
+  const ACCOUNTS_CACHE_KEY = 'fbl_accounts_cache_v1';
+  const ACCOUNTS_TTL_MS = 30 * 60 * 1000;
+
+  function readAccountsCache() {
+    try {
+      const raw = localStorage.getItem(ACCOUNTS_CACHE_KEY);
+      if (!raw) return null;
+      const c = JSON.parse(raw);
+      if (!c || !Array.isArray(c.accounts) || !c.accounts.length) return null;
+      if (Date.now() - (c.ts || 0) > ACCOUNTS_TTL_MS) return null;
+      return c;
+    } catch { return null; }
+  }
+  function writeAccountsCache(bmCount) {
+    try {
+      localStorage.setItem(ACCOUNTS_CACHE_KEY, JSON.stringify({
+        ts: Date.now(), bmCount, accounts: ACCOUNTS,
+      }));
+    } catch {}
+  }
+
+  async function loadAccounts(force = false) {
     if (accountsLoading) return;
+    if (!force) {
+      const cached = readAccountsCache();
+      if (cached) {
+        ACCOUNTS.length = 0;
+        cached.accounts.forEach(a => ACCOUNTS.push(a));
+        const ageMin = Math.round((Date.now() - cached.ts) / 60000);
+        setStatus('success', `Loaded ${ACCOUNTS.length} accounts from cache (${ageMin}m old · ↻ to refresh · 0 FB calls).`);
+        addLog('info', `Accounts from cache: ${ACCOUNTS.length} (age ${ageMin}m, no FB discovery)`);
+        render();
+        return;
+      }
+    }
     accountsLoading = true;
     setStatus('info', 'Loading ad accounts...');
     render();
@@ -706,6 +785,7 @@
 
     accountsLoading = false;
     if (ACCOUNTS.length) {
+      writeAccountsCache(bmCount); // v0.26.0: cache so reopen within TTL skips discovery
       setStatus('success', `Loaded ${ACCOUNTS.length} accounts across ${bmCount} BMs + personal.`);
     } else if (personalErr && bizErr) {
       setStatus('error', `Both /me/adaccounts and /me/businesses failed. Token scope issue? Try opening business.facebook.com first, then click bookmark again.`);
@@ -2311,7 +2391,8 @@
     }
 
     let okAccounts = 0, errAccounts = 0;
-    for (const accId of accIds) {
+    for (let ai = 0; ai < accIds.length; ai++) {
+      const accId = accIds[ai];
       try {
         const ok = await runLaunchForAccount(accId, plan, dateStr);
         if (ok) okAccounts++; else errAccounts++;
@@ -2319,6 +2400,9 @@
         errAccounts++;
         addLog('error', `[${accId}] launch failed: ${e.message}`);
       }
+      // v0.26.0: settle between accounts so multi-account launches don't chain
+      // back-to-back bursts on the same session.
+      if (ai < accIds.length - 1) await sleep(jitter(RATE_ACCOUNT_MS));
     }
 
     state.running = false;
@@ -2623,7 +2707,7 @@
         continue;
       }
 
-      await sleep(RATE_ADSET_MS);
+      await sleep(jitter(RATE_ADSET_MS));
 
       // ── Ads in this adset ──
       for (let i = 0; i < adsToCreate.length; i++) {
@@ -2837,7 +2921,7 @@
           addLog('error', `[${accLabel}] ✗ ad "${adName}": ${e.message}`);
         }
         adGlobalIdx++;
-        await sleep(RATE_AD_MS);
+        await sleep(jitter(RATE_AD_MS));
       }
     }
 
@@ -3206,7 +3290,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>METALAUNCH PRO // v0.25.0</span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>METALAUNCH PRO // v0.26.0</span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -4023,7 +4107,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
         }
       });
     });
-    document.getElementById('fbl-reload-acc')?.addEventListener('click', () => loadAccounts());
+    document.getElementById('fbl-reload-acc')?.addEventListener('click', () => loadAccounts(true));
     document.getElementById('fbl-acc-filter')?.addEventListener('input', e => {
       state.accFilter = e.target.value;
       render();
