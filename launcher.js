@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.26.0 — Bookmarklet
+ * MetaLaunch PRO v0.26.1 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -171,6 +171,17 @@
  *          (3) HUMAN WRITE PACING — inter-entity settle bumped 400/800ms → 1600/3200ms +jitter,
  *              added an 8s +jitter pause between accounts in multi-account launches. A launch now
  *              reads as hand-operated, not scripted. Trade-off: launches are slower by design.
+ * v0.26.1: URL token engine fixes (buyer-reported: pixel/account-id "macros not substituting"):
+ *          (1) step 10 built the tag from an EMPTY source — CSV-less launches (blank "URL Tags")
+ *              short-circuited and ads went out with NO url_tags while the panel showed
+ *              "sub2 = account ID"; now the param is created from scratch.
+ *          (2) unknown/typo'd single-brace tokens ({pixelid}, {Pixel_ID}) were silently blanked
+ *              to "" → empty params; now left as literal text + one ⚠ warning per launch.
+ *          (3) launcher tokens written FB-style ({{pixel_id}}, {{account_id}}) went out as
+ *              literals (FB doesn't know them); now auto-resolved like single-brace.
+ *          (4) multi-account launch logs a ⚠ that the ONE pixel (step 4/CSV) is applied to ALL
+ *              accounts — promoted_object and {pixel_id} alike.
+ *          (5) collapsible "macros reference" under step 8 — all launcher tokens + FB macros.
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -2033,22 +2044,38 @@
   /**
    * Resolve tokens in a URL or URL Tag string.
    * - Single-brace tokens {pixel_id}, {account_id}, etc. → replaced from ctx
+   * - v0.26.1: OUR token names in DOUBLE braces ({{pixel_id}}) also resolve — buyers mix
+   *   them up with FB style; FB doesn't know these names, so they went out as literals.
+   *   (FB macros all contain a dot ({{ad.name}}) or aren't ctx keys ({{placement}}) → untouched.)
+   * - v0.26.1: unknown single-brace tokens LEFT AS-IS + one warning per launch (was: silently
+   *   blanked — a typo like {pixelid} produced empty params that looked like a broken macro).
    * - Literal "pixelID" (case-sensitive, our gen-gambling-csv.ts convention) → pixel_id
    * - Double-brace FB macros {{campaign.id}} → LEFT AS-IS (FB substitutes at runtime)
    */
+  const _tokenWarned = new Set();  // dedup unknown-token warnings, cleared per launch
   function resolveTokens(str, ctx) {
     if (!str) return str;
     let out = String(str);
+    const hasTok = k => Object.prototype.hasOwnProperty.call(ctx, k);
+    // Our tokens mistakenly written FB-style: {{pixel_id}} → resolve like {pixel_id}
+    out = out.replace(/\{\{(\w+)\}\}/g, (m, k) => hasTok(k) ? String(ctx[k] ?? '') : m);
     // Preserve FB {{...}} macros: protect them, then restore after single-brace replace
     const fbMacros = [];
     out = out.replace(/\{\{[^}]+\}\}/g, m => {
       fbMacros.push(m);
       return `\x00FBM${fbMacros.length - 1}\x00`;
     });
-    // Replace single-brace tokens
-    out = out.replace(/\{(\w+)\}/g, (_, k) => {
-      const v = ctx[k];
-      return v == null ? '' : String(v);
+    // Replace single-brace tokens; unknown names stay literal (typo ≠ silent empty param)
+    out = out.replace(/\{(\w+)\}/g, (m, k) => {
+      if (hasTok(k)) {
+        const v = ctx[k];
+        return v == null ? '' : String(v);
+      }
+      if (!_tokenWarned.has(k)) {
+        _tokenWarned.add(k);
+        addLog('warning', `⚠ Unknown token {${k}} in Link/URL Tags — sent as literal text. Known tokens: ${Object.keys(ctx).map(t => `{${t}}`).join(' ')}`);
+      }
+      return m;
     });
     // Legacy: literal "pixelID" → ctx.pixel_id (from gen-gambling-csv.ts placeholder)
     if (ctx.pixel_id) {
@@ -2216,17 +2243,20 @@
   }
 
   function transformUrlTags(raw, accId, adName) {
-    if (!raw) return raw;
     const target = String(state.urlTagParam || '').trim();
     if (!target || state.urlTagMode === 'keep') return raw;
-    const pairs = String(raw).split('&').map(p => {
-      const [k, ...rest] = p.split('=');
-      return [k, rest.join('=')];
-    });
     const newVal = state.urlTagMode === 'acc_id' ? accId
       : state.urlTagMode === 'ad_name' ? String(adName || '')
       : state.urlTagMode === 'empty' ? ''
       : state.urlTagMode === 'custom' ? String(state.urlTagCustom || '') : '';
+    // v0.26.1: empty source (CSV-less launch / blank CSV "URL Tags" column) used to
+    // short-circuit here → step 10 silently did NOTHING and ads went out with no url_tags
+    // at all, while the panel showed "sub2 = account ID". Now the param is built from scratch.
+    if (!raw) return newVal === '' ? raw : `${target}=${newVal}`;
+    const pairs = String(raw).split('&').map(p => {
+      const [k, ...rest] = p.split('=');
+      return [k, rest.join('=')];
+    });
     let saw = false;
     const out = pairs.map(([k, v]) => {
       if (k === target) { saw = true; return [k, newVal]; }
@@ -2383,11 +2413,16 @@
 
     state.running = true;
     state.log = [];
+    _tokenWarned.clear();  // v0.26.1: unknown-token warnings dedup per launch
     state.progress = { done: 0, total: totalUnits };
     render();
 
     if (accIds.length > 1) {
       addLog('info', `🌐 Multi-account launch: ${accIds.length} accounts × ${plan.adsetCount} adsets × ${plan.adCount} ads = ${totalUnits} ops`);
+      // v0.26.1: there is ONE pixel per launch (step 4 override > CSV) — it goes into
+      // promoted_object AND the {pixel_id} token on EVERY account. If the cabs use
+      // different pixels, this is wrong for accounts 2..N — launch them separately.
+      addLog('warning', `⚠ Single pixel ${effectivePixel} will be used on ALL ${accIds.length} accounts (promoted_object + {pixel_id} token). Different pixels per cab → launch per-cab.`);
     }
 
     let okAccounts = 0, errAccounts = 0;
@@ -3290,7 +3325,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>METALAUNCH PRO // v0.26.0</span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>METALAUNCH PRO // v0.26.1</span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -3798,6 +3833,24 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       <div class="field">
         <label>8. URL Tags override (optional) <span style="color:#6e7681">— same tokens; {{fb.macros}} preserved</span></label>
         <input type="text" id="fbl-tags-override" value="${esc(state.urlTagsOverride)}" placeholder="empty = use CSV URL Tags. e.g. keyword={pixel_id}&amp;sub2={account_id}&amp;sub5={{ad.name}}">
+        <details style="margin-top:6px">
+          <summary style="cursor:pointer;font-size:10px;color:#38bdf8;user-select:none">ℹ macros reference — everything usable in steps 7 / 8</summary>
+          <div style="font-size:10px;line-height:1.8;color:#94a3b8;padding:6px 2px 2px">
+            <b style="color:#e2e8f0">Launcher tokens</b> — single braces, substituted at CREATE time (fixed value baked into the ad):<br>
+            <code>{pixel_id}</code> pixel from step 4 (override &gt; CSV) &nbsp;·&nbsp;
+            <code>{account_id}</code> ad account ID — per-account in multi-launch &nbsp;·&nbsp;
+            <code>{adset_name}</code> clean ad set name (markers stripped) &nbsp;·&nbsp;
+            <code>{ad_name}</code> clean ad name &nbsp;·&nbsp;
+            <code>{geo}</code> first country of the ad set &nbsp;·&nbsp;
+            <code>{date}</code> launch date MMDDYY &nbsp;·&nbsp;
+            <code>{adset_idx}</code> ad set number 01, 02, …<br>
+            <b style="color:#e2e8f0">FB macros</b> — double braces, sent as-is, FB fills them at AD DELIVERY:<br>
+            <code>{{campaign.id}}</code> <code>{{adset.id}}</code> <code>{{ad.id}}</code>
+            <code>{{campaign.name}}</code> <code>{{adset.name}}</code> <code>{{ad.name}}</code>
+            <code>{{placement}}</code> <code>{{site_source_name}}</code><br>
+            <span style="color:#6e7681">Typo in a single-brace token → sent as literal text + ⚠ warning in LIVE FEED (not silently blanked). Writing a launcher token FB-style ({{pixel_id}}) is auto-corrected.</span>
+          </div>
+        </details>
       </div>
 
       <div class="field">
@@ -3855,7 +3908,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       </div>
 
       <div class="field">
-        <label>10. Quick: replace single URL Tag param <span style="color:#6e7681">— skipped if step 8 is set</span></label>
+        <label>10. Quick: replace single URL Tag param <span style="color:#6e7681">— skipped if step 8 is set · adds the param even when URL Tags is empty (CSV-less)</span></label>
         <div class="row">
           <input type="text" id="fbl-tag-param" value="${esc(state.urlTagParam)}" placeholder="sub2" style="flex:1">
           <select id="fbl-tag-mode" style="flex:1.5">
