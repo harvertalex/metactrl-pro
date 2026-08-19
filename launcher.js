@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.26.1 — Bookmarklet
+ * MetaLaunch PRO v0.27.1 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -182,6 +182,39 @@
  *          (4) multi-account launch logs a ⚠ that the ONE pixel (step 4/CSV) is applied to ALL
  *              accounts — promoted_object and {pixel_id} alike.
  *          (5) collapsible "macros reference" under step 8 — all launcher tokens + FB macros.
+ *
+ * v0.27.1: hard abort (2nd STOP click) + the STOP control now works for a plain
+ *          multi-account launch too, not only for a repeat series (it used to be
+ *          disabled outside a series — the one case where skipping queued cabs matters).
+ *
+ * v0.27.0: REPEAT SERIES + manual presets + milestone alerts moved into the log rail.
+ *          (1) step 11b "Repeat launch": run the SAME configured launch N times with a
+ *              gap (default 5 min). Runs 2..N append " | R<n>" to the CAMPAIGN name only —
+ *              adset/ad names and the token context stay byte-identical, so sub_id
+ *              reporting is untouched. The gap is deliberate: N identical campaigns
+ *              created back-to-back on one session is the shape FB reads as automation
+ *              (see v0.26.0 request diet). The launch button doubles as a two-stage
+ *              abort: 1st click = soft (current run finishes whole, remaining runs
+ *              cancelled), 2nd click = HARD (also stops between ACCOUNTS — the cab in
+ *              flight is finished, queued cabs are skipped and the progress total is
+ *              shrunk to match). A single (non-series) launch skips the soft stage —
+ *              with no queued runs to cancel it would be a no-op click. There is NO
+ *              mid-account kill stage on purpose: that is the only variant that leaves
+ *              a campaign holding some of its adsets/ads for you to clean up by hand.
+ *          (2) countdown to the next run is ONE self-rewriting log line (setStickyLog),
+ *              not 300 pushed lines at 1 tick/sec.
+ *          (3) presets no longer require a CSV. The whole CSV-less path (objective,
+ *              budget, geo, link — all typed by hand) was unsavable because savePreset()
+ *              bailed with "Load CSV first"; auto-save had the same silent gate.
+ *              Presets now also carry createStatus, repeat settings and target accounts;
+ *              restoring the accounts is opt-in via a checkbox (a preset built for 5 cabs
+ *              must not silently retarget a session opened for one). List badges:
+ *              🤖 auto · ✍️ manual · 📋 CSV-backed.
+ *          (4) milestone alerts ("Upload done: 4/4", launch summaries, preset/CSV loaded)
+ *              moved from the top status bar into the LIVE FEED rail. The top bar kept
+ *              overwriting each message with the next one, so "creatives ready" vanished
+ *              while the operator was looking at the file list. The bar now carries
+ *              BLOCKING errors only (missing pixel / DSA / bad page).
  *
  * Use from business.facebook.com or adsmanager.facebook.com (logged in).
  * Standalone — does NOT depend on MetaCtrl PRO.
@@ -436,10 +469,19 @@
     devicePlatformsOverride: '', // v0.20.0: '' = CSV/auto | 'mobile' | 'desktop' | 'all' | v0.21.0: 'android' | 'ios' (mobile + user_os)
     descriptionOverride: '',  // v0.8.0: link/video description (Action line); empty = CSV
     phraseVertical: 'insurance', // v0.8.0: selected vertical for the AIDA phrase dropdowns
+    // v0.27.0: repeat series — fire the SAME configured launch N times with a gap
+    // between runs (dup-testing the same setup across the day without re-clicking).
+    repeatCount: '1',            // '1'/'' = single launch (old behaviour)
+    repeatDelayMin: '5',         // minutes between runs; countdown shown in the log rail
+    repeatCurrent: 0,            // 1-based index of the run in flight (0 = not in a series)
+    repeatTotal: 0,              // total runs in the series in flight
+    repeatAbort: false,          // set by the STOP button: finish current run, cancel the rest
+    hardAbort: false,            // v0.27.0: 2nd STOP click — also stop between ACCOUNTS inside the run
+    presetRestoreAccounts: false,// v0.27.0: opt-in — apply a preset's saved target accounts
     running: false,
     log: [],
     progress: { done: 0, total: 0 },
-    status: { type: 'info', text: 'Loading FB session token...' },
+    status: { type: 'info', text: '' },   // v0.27.0: bar starts empty — progress goes to the feed
   };
 
   // ─── UTILS ──────────────────────────────────────────────────────────────
@@ -506,6 +548,48 @@
   function setStatus(type, text) { state.status = { type, text }; render(); }
   function addLog(type, msg) {
     state.log.push({ type, msg, ts: new Date().toLocaleTimeString() });
+    render();
+  }
+
+  // v0.27.0: milestone events (upload finished, launch finished, preset loaded) used to live
+  // ONLY in the top status bar, where each new message overwrote the previous one — the
+  // operator had to look away from the file list to catch "Upload done: 4/4" before it
+  // vanished. They now land in the LIVE FEED rail on the left, which keeps history.
+  // The top bar stays for BLOCKING errors only (missing pixel / DSA / bad page).
+  function logEvent(type, text) {
+    addLog(type, `▸ ${text}`);
+    if (type === 'error') {
+      setStatus(type, text);   // blocking failures still need the loud top bar
+    } else {
+      // Clear the bar instead of leaving it — a stale "Loading ad accounts..." sitting
+      // above a finished upload is worse than no bar at all.
+      state.status = { type: 'info', text: '' };
+      render();
+    }
+  }
+
+  // v0.27.0: a single log line that REWRITES itself instead of pushing a new one.
+  // Used by the repeat-series countdown (1 tick/sec would otherwise flood the feed
+  // with 300 lines between two runs). `key` identifies the line to overwrite.
+  function setStickyLog(key, type, msg) {
+    const existing = state.log.find(l => l.sticky === key);
+    if (existing) {
+      existing.type = type;
+      existing.msg = msg;
+      existing.ts = new Date().toLocaleTimeString();
+    } else {
+      state.log.push({ type, msg, sticky: key, ts: new Date().toLocaleTimeString() });
+    }
+    render();
+  }
+
+  // Freeze a sticky line in place (drop its key) so the next countdown starts a fresh line.
+  function releaseStickyLog(key, type, msg) {
+    const existing = state.log.find(l => l.sticky === key);
+    if (!existing) return;
+    delete existing.sticky;
+    if (type) existing.type = type;
+    if (msg) existing.msg = msg;
     render();
   }
 
@@ -704,14 +788,14 @@
         ACCOUNTS.length = 0;
         cached.accounts.forEach(a => ACCOUNTS.push(a));
         const ageMin = Math.round((Date.now() - cached.ts) / 60000);
-        setStatus('success', `Loaded ${ACCOUNTS.length} accounts from cache (${ageMin}m old · ↻ to refresh · 0 FB calls).`);
+        logEvent('success', `Loaded ${ACCOUNTS.length} accounts from cache (${ageMin}m old · ↻ to refresh · 0 FB calls).`);
         addLog('info', `Accounts from cache: ${ACCOUNTS.length} (age ${ageMin}m, no FB discovery)`);
         render();
         return;
       }
     }
     accountsLoading = true;
-    setStatus('info', 'Loading ad accounts...');
+    setStatus('info', 'Loading ad accounts…');   // transient; cleared by logEvent on completion
     render();
 
     const fields = 'id,account_id,name,account_status,currency';
@@ -797,7 +881,7 @@
     accountsLoading = false;
     if (ACCOUNTS.length) {
       writeAccountsCache(bmCount); // v0.26.0: cache so reopen within TTL skips discovery
-      setStatus('success', `Loaded ${ACCOUNTS.length} accounts across ${bmCount} BMs + personal.`);
+      logEvent('success', `Loaded ${ACCOUNTS.length} accounts across ${bmCount} BMs + personal.`);
     } else if (personalErr && bizErr) {
       setStatus('error', `Both /me/adaccounts and /me/businesses failed. Token scope issue? Try opening business.facebook.com first, then click bookmark again.`);
     } else {
@@ -876,13 +960,29 @@
       attributionOverride: state.attributionOverride,
       descriptionOverride: state.descriptionOverride,
       phraseVertical: state.phraseVertical,
+      // v0.27.0: fields you set BY HAND that a preset used to forget entirely.
+      createStatus: state.createStatus,
+      repeatCount: state.repeatCount,
+      repeatDelayMin: state.repeatDelayMin,
+      // v0.27.0: target accounts ARE saved now (restoring them is opt-in at load time
+      // via the "restore accounts" checkbox — a preset built for 5 cabs should not
+      // silently retarget a session the operator opened for one).
+      targetAccIds: state.targetAccIds.slice(),
     };
   }
 
+  // v0.27.0: manual (CSV-less) setups are savable. The old gate ("Load CSV first")
+  // meant the entire CSV-less launch path — objective/budget/geo/link all typed by
+  // hand — could never be stored, which is exactly the setup worth keeping.
   function savePreset() {
-    if (!state.rows.length) { setStatus('error', 'Load CSV first before saving preset.'); return; }
-    const defaultName = state.campNamePrefix || state.fileName.replace(/\.[^.]+$/, '') || 'Preset';
-    const name = prompt('Preset name:', defaultName);
+    const manual = !state.rows.length;
+    const d0 = new Date();
+    const mon0 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d0.getMonth()];
+    const manualStamp = `Manual ${String(d0.getDate()).padStart(2,'0')} ${mon0} ${String(d0.getHours()).padStart(2,'0')}:${String(d0.getMinutes()).padStart(2,'0')}`;
+    const defaultName = state.campNamePrefix
+      || state.fileName.replace(/\.[^.]+$/, '')
+      || (manual ? manualStamp : 'Preset');
+    const name = prompt(manual ? 'Preset name (manual setup — no CSV):' : 'Preset name:', defaultName);
     if (!name) return;
     const preset = {
       id: 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
@@ -890,12 +990,13 @@
       createdAt: new Date().toISOString(),
       fileName: state.fileName,
       csvText: state.rows.length ? JSON.stringify(state.rows) : '',  // pre-parsed rows
+      manual,                                    // v0.27.0: '✍️' badge in the preset list
       settings: collectSettings(),
     };
     state.presets.unshift(preset);  // newest first
     state.selectedPresetId = preset.id;
     savePresetsToStorage();
-    setStatus('success', `Preset "${name}" saved.`);
+    logEvent('success', `Preset "${name}" saved.`);
     render();
   }
 
@@ -955,12 +1056,31 @@
     state.attributionOverride = s.attributionOverride || '';
     state.descriptionOverride = s.descriptionOverride || '';
     state.phraseVertical = s.phraseVertical || 'insurance';
+    // v0.27.0: manual fields. Older presets have none of these -> keep current values
+    // rather than clobbering them with '' (createStatus '' would break the dropdown).
+    state.createStatus = s.createStatus || state.createStatus || 'ACTIVE';
+    state.repeatCount = s.repeatCount || '1';
+    state.repeatDelayMin = s.repeatDelayMin || '5';
+    // v0.27.0: accounts restore is OPT-IN (checkbox next to the preset dropdown).
+    // Accounts the current token can no longer see are skipped, loudly.
+    if (state.presetRestoreAccounts && Array.isArray(s.targetAccIds) && s.targetAccIds.length) {
+      const known = s.targetAccIds.filter(id => ACCOUNTS.find(a => a.id === id));
+      const missing = s.targetAccIds.filter(id => !ACCOUNTS.find(a => a.id === id));
+      if (known.length) {
+        state.targetAccIds = known;
+        loadPixelsForAccount(known[0]);
+        loadPagesForAccount(known[0]);
+      }
+      if (missing.length) {
+        addLog('warning', `⚠ Preset account(s) not visible to this token, skipped: ${missing.join(', ')}`);
+      }
+    }
     state.selectedPresetId = presetId;
     // Reset creatives — must be fresh per launch
     state.creativesInput = '';
     state.creativesParsed = null;
     state.uploads = [];
-    setStatus('success', `Loaded preset "${preset.name}". Upload fresh creatives and launch.`);
+    logEvent('success', `Loaded preset "${preset.name}"${preset.manual ? ' (manual setup)' : ''}. Upload fresh creatives and launch.`);
     render();
   }
 
@@ -990,14 +1110,14 @@
     state.presets = state.presets.filter(p => p.id !== state.selectedPresetId);
     state.selectedPresetId = '';
     savePresetsToStorage();
-    setStatus('info', `Preset "${preset.name}" deleted.`);
+    logEvent('info', `Preset "${preset.name}" deleted.`);
     render();
   }
 
   // v0.5: auto-save current state as preset after a successful launch.
   // Name: "<prefix or fileName> | DD MMM HH:MM". Silent (no prompt, no render).
   function autoSavePresetSilent() {
-    if (!state.rows.length) return;
+    // v0.27.0: was `if (!state.rows.length) return` — CSV-less launches never auto-saved.
     const base = (state.campNamePrefix || state.fileName.replace(/\.[^.]+$/, '') || 'Launch').trim();
     const d = new Date();
     const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
@@ -1008,8 +1128,9 @@
       name,
       createdAt: d.toISOString(),
       fileName: state.fileName,
-      csvText: JSON.stringify(state.rows),
+      csvText: state.rows.length ? JSON.stringify(state.rows) : '',
       auto: true,
+      manual: !state.rows.length,
       settings: collectSettings(),
     };
     state.presets.unshift(preset);
@@ -1038,7 +1159,7 @@
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    setStatus('success', `Exported ${state.presets.length} preset(s).`);
+    logEvent('success', `Exported ${state.presets.length} preset(s).`);
   }
 
   // v0.5: import presets from JSON. Merges by id; duplicates → renamed "(imported)".
@@ -1367,7 +1488,8 @@
     const pairedSuffix = pairedCount ? ` · ${pairedCount} thumbnail${pairedCount > 1 ? 's' : ''} paired` : '';
     const accSuffix = accIds.length > 1 ? ` across ${accIds.length} accounts` : '';
     const partialSuffix = partialCount ? ` · ${partialCount} partial` : '';
-    setStatus(okCount ? (partialCount ? 'warning' : 'success') : 'error',
+    // v0.27.0: goes to the LIVE FEED rail (was: top status bar, overwritten by the next message)
+    logEvent(okCount ? (partialCount ? 'warning' : 'success') : 'error',
       `Upload done: ${okCount}/${files.length} fully successful${partialSuffix}${accSuffix}${pairedSuffix}.`);
     render();
   }
@@ -1803,7 +1925,7 @@
       state.rows = rows;
       state.fileName = file.name;
       const sepLabel = sep === '\t' ? 'TSV' : 'CSV';
-      setStatus('success', `Parsed ${rows.length} rows from ${file.name} (${sepLabel})`);
+      logEvent('success', `Parsed ${rows.length} rows from ${file.name} (${sepLabel})`);
       // v0.6.2: warm the IG cache for whichever page the CSV references first.
       // If the user later overrides the page in step 3 that triggers its own fetch.
       const csvPageId = stripPfx(rows[0]?.['Link Object ID'] || '');
@@ -2030,6 +2152,14 @@
       out += ` | ${m}`;
     }
     return out;
+  }
+
+  // v0.27.0: " | R2" for the 2nd run of a repeat series onward. Campaign name only —
+  // adset/ad names are untouched, and campaign names never feed the token context, so
+  // this cannot leak into URL tags / sub_id reporting.
+  function applyRepeatSuffix(name) {
+    if (!state.repeatCurrent || state.repeatCurrent < 2) return name;
+    return `${name} | R${state.repeatCurrent}`;
   }
 
   // v0.7.0: parse the free-form markers field ("CTRL | PWA-A") into deduped trimmed tokens,
@@ -2412,9 +2542,18 @@
     const totalUnits = perAccountUnits * accIds.length;
 
     state.running = true;
-    state.log = [];
+    // v0.27.0: inside a repeat series the feed and the progress bar span the WHOLE series —
+    // wiping them per run would erase run 1's history the moment run 2 starts.
+    const inSeries = state.repeatTotal > 1;
+    if (!inSeries) {
+      state.log = [];
+      state.progress = { done: 0, total: totalUnits };
+    } else if (state.repeatCurrent <= 1) {
+      // Series: the wrapper already cleared the feed and wrote the header — only size
+      // the progress bar to the WHOLE series here (done keeps accumulating across runs).
+      state.progress = { done: 0, total: totalUnits * state.repeatTotal };
+    }
     _tokenWarned.clear();  // v0.26.1: unknown-token warnings dedup per launch
-    state.progress = { done: 0, total: totalUnits };
     render();
 
     if (accIds.length > 1) {
@@ -2428,6 +2567,16 @@
     let okAccounts = 0, errAccounts = 0;
     for (let ai = 0; ai < accIds.length; ai++) {
       const accId = accIds[ai];
+      // v0.27.0 HARD ABORT: checked only BETWEEN accounts, never mid-account. Cutting
+      // inside runLaunchForAccount would leave a campaign with half its adsets/ads —
+      // a stump to clean up by hand in Ads Manager. Between cabs every campaign is whole.
+      if (state.hardAbort) {
+        const skipped = accIds.length - ai;
+        addLog('warning', `⏹⏹ HARD ABORT — ${skipped} account(s) skipped: ${accIds.slice(ai).join(', ')}`);
+        // Keep the bar honest: the skipped cabs' ops will never land.
+        state.progress.total = Math.max(state.progress.done, state.progress.total - skipped * perAccountUnits);
+        break;
+      }
       try {
         const ok = await runLaunchForAccount(accId, plan, dateStr);
         if (ok) okAccounts++; else errAccounts++;
@@ -2437,19 +2586,135 @@
       }
       // v0.26.0: settle between accounts so multi-account launches don't chain
       // back-to-back bursts on the same session.
-      if (ai < accIds.length - 1) await sleep(jitter(RATE_ACCOUNT_MS));
+      // v0.27.0: skip the settle when aborting — the next iteration exits anyway.
+      if (ai < accIds.length - 1 && !state.hardAbort) await sleep(jitter(RATE_ACCOUNT_MS));
     }
 
-    state.running = false;
+    // v0.27.0: in a series the button must stay in "running" mode between runs
+    // (the countdown gap is part of the run) — runLaunchSeries clears it at the end.
+    if (!inSeries) state.running = false;
     if (accIds.length > 1) {
       const summary = errAccounts
         ? `Multi-account done: ${okAccounts}/${accIds.length} accounts succeeded, ${errAccounts} failed.`
         : `🎉 Multi-account done: all ${okAccounts} accounts launched successfully.`;
-      setStatus(errAccounts ? 'warning' : 'success', summary);
+      logEvent(errAccounts ? 'warning' : 'success', summary);
     }
     // v0.5.3: auto-save preset only when EVERY account succeeded.
     if (state.autoSavePreset && !errAccounts && okAccounts > 0) autoSavePresetSilent();
     render();
+    return !errAccounts && okAccounts > 0;   // v0.27.0: series needs the verdict
+  }
+
+  // v0.27.0 ─── REPEAT SERIES ────────────────────────────────────────────────
+  // Fires the SAME configured launch N times with a gap between runs. Everything
+  // inside a run is untouched v0.26.x logic — this only sequences runs and paces them.
+  //
+  // Why a real gap and not back-to-back: N identical campaigns created in one burst on
+  // one session is the exact shape FB reads as automation (see v0.26.0 request diet).
+  // The countdown between runs is a single self-rewriting log line, not 300 pushed lines.
+  async function runLaunchSeries() {
+    // Already running: the button is the abort control, in two escalating stages.
+    //   1st click (soft) — finish the current run whole, cancel the remaining runs.
+    //   2nd click (hard) — ALSO stop between accounts: the cab in flight is finished
+    //                      (no half-built campaigns), the queued cabs are skipped.
+    // There is deliberately no "kill mid-account" stage: that is the only variant that
+    // leaves a campaign with some of its adsets/ads and needs manual cleanup.
+    if (state.running) {
+      // Outside a series there are no "remaining runs" to cancel, so the soft stage
+      // would be a no-op click — go straight to skipping the queued accounts.
+      const inSeriesNow = state.repeatTotal > 1;
+      if (!inSeriesNow && !state.hardAbort) {
+        state.repeatAbort = true;
+        state.hardAbort = true;
+        addLog('warning', '⏹⏹ Stop requested — finishing the current ACCOUNT, queued accounts will be skipped.');
+      } else if (!state.repeatAbort) {
+        state.repeatAbort = true;
+        addLog('warning', '⏹ Stop requested — finishing the current run, remaining runs cancelled. Click again to also skip the queued accounts.');
+      } else if (!state.hardAbort) {
+        state.hardAbort = true;
+        addLog('warning', '⏹⏹ HARD ABORT armed — finishing the current ACCOUNT, then stopping. Queued accounts will be skipped.');
+      } else {
+        addLog('info', '⏹⏹ Already aborting — the account in flight has to finish so no half-built campaign is left behind.');
+      }
+      render();
+      return;
+    }
+
+    const runs = Math.max(1, Math.min(50, parseInt(state.repeatCount, 10) || 1));
+    const delayMin = Math.max(0, parseFloat(String(state.repeatDelayMin).replace(',', '.')) || 0);
+    const delayMs = Math.round(delayMin * 60000);
+
+    state.repeatAbort = false;
+    state.hardAbort = false;
+    state.repeatTotal = runs;
+    state.repeatCurrent = 0;
+
+    if (runs > 1) {
+      state.repeatCurrent = 1;
+      state.running = true;
+      state.log = [];
+      addLog('info', `🔁 Repeat series armed: ${runs} runs · ${delayMin} min between runs. Runs 2+ get "| R<n>" in the campaign name.`);
+      render();
+    }
+
+    let okRuns = 0, errRuns = 0;
+    for (let r = 1; r <= runs; r++) {
+      state.repeatCurrent = r;
+      if (runs > 1) addLog('info', `━━━━━ RUN ${r}/${runs} ━━━━━`);
+      let ok = false;
+      try {
+        ok = await runLaunch();
+      } catch (e) {
+        addLog('error', `Run ${r}/${runs} failed: ${e.message}`);
+      }
+      // runLaunch returns undefined when it bails on a pre-flight check (no accounts,
+      // no pixel, ...). Nothing was created and nothing will be on the next run either,
+      // so abort the whole series instead of repeating the same rejection N times.
+      if (ok === undefined) {
+        if (runs > 1) addLog('error', '⛔ Series aborted: launch pre-flight rejected the setup (see the message above).');
+        break;
+      }
+      if (ok) okRuns++; else errRuns++;
+
+      if (r < runs) {
+        if (state.hardAbort) { addLog('warning', `⏹⏹ Series hard-aborted during run ${r}/${runs}.`); break; }
+        if (state.repeatAbort) { addLog('warning', `⏹ Series stopped after run ${r}/${runs}.`); break; }
+        await countdownToNextRun(delayMs, r + 1, runs);
+        if (state.repeatAbort) { addLog('warning', `⏹ Series stopped after run ${r}/${runs}.`); break; }
+      }
+    }
+
+    state.running = false;
+    state.repeatCurrent = 0;
+    state.repeatTotal = 0;
+    state.repeatAbort = false;
+    state.hardAbort = false;
+    if (runs > 1) {
+      logEvent(errRuns ? 'warning' : 'success',
+        errRuns ? `Series done: ${okRuns}/${runs} runs fully succeeded, ${errRuns} had errors.`
+                : `🎉 Series done: all ${runs} runs launched successfully.`);
+    }
+    render();
+  }
+
+  // One self-rewriting log line ticking down to the next run. Resolves early when
+  // the operator hits STOP so the abort feels immediate instead of waiting out the gap.
+  async function countdownToNextRun(delayMs, nextRun, totalRuns) {
+    if (delayMs <= 0) return;
+    const until = Date.now() + delayMs;
+    const key = `countdown_${nextRun}`;
+    while (Date.now() < until) {
+      if (state.repeatAbort || state.hardAbort) {
+        releaseStickyLog(key, 'warning', `⏹ Wait for run ${nextRun}/${totalRuns} cancelled.`);
+        return;
+      }
+      const left = Math.max(0, until - Date.now());
+      const mm = Math.floor(left / 60000);
+      const ss = Math.floor((left % 60000) / 1000);
+      setStickyLog(key, 'info', `⏳ Next run ${nextRun}/${totalRuns} in ${mm}:${String(ss).padStart(2, '0')}`);
+      await sleep(1000);
+    }
+    releaseStickyLog(key, 'info', `⏳ Wait over — starting run ${nextRun}/${totalRuns}.`);
   }
 
   // v0.6: extracted per-account pipeline. Same logic that runLaunch had before,
@@ -2523,6 +2788,10 @@
       }
       // v0.7.0: markers on campaign name (campaign name is NOT used in token context, so safe here)
       campName = applyMarkers(campName);
+      // v0.27.0: repeat-series suffix. Run 1 keeps the exact original name (so a plain
+      // single launch is byte-identical to v0.26.x); runs 2..N get " | R2", " | R3" so the
+      // duplicates are tellable apart in Ads Manager and in reporting.
+      campName = applyRepeatSuffix(campName);
 
       const campBody = {
         name: campName,
@@ -3319,13 +3588,22 @@
         ? `🚀 LAUNCH ▸ ${totalAds} ads × ${state.targetAccIds.length} accounts (${totalAds * state.targetAccIds.length} ops)`
         : `🚀 LAUNCH ▸ ${totalAds} ads to ${esc(selectedAccs[0]?.name || 'account')}`;
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
+    // v0.27.0: repeat-series UI helpers
+    const repeatRuns = Math.max(1, Math.min(50, parseInt(state.repeatCount, 10) || 1));
+    const repeatGapMin = Math.max(0, parseFloat(String(state.repeatDelayMin).replace(',', '.')) || 0);
+    const repeatEtaMin = Math.round(repeatGapMin * (repeatRuns - 1));
+    const seriesRunning = state.running && state.repeatTotal > 1;
+    // v0.27.0: the STOP control is live for ANY running launch — a single launch spread
+    // over several cabs is exactly the case where aborting the queued cabs matters.
+    const stoppable = state.running;
+    const stopStage = state.hardAbort ? 2 : state.repeatAbort ? 1 : 0;
 
     const ledClass = state.status.type === 'error' ? 'err' : state.status.type === 'warning' ? 'warn' : '';
     // v0.18.0 Cyberpunk HUD: rail status mirrors the header LED (online / standby / alert).
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>METALAUNCH PRO // v0.26.1</span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>METALAUNCH PRO // v0.27.1</span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -3343,9 +3621,8 @@
         <div class="fbl-main fbl-scroll" id="fbl-main">
       <div class="sub">CSV/TSV → FB Marketing API. Bypasses bulk-upload bugs.</div>
 
-      <div class="status ${state.status.type}">${esc(state.status.text)}</div>
+      ${state.status.text ? `<div class="status ${state.status.type}">${esc(state.status.text)}</div>` : ''}
 
-      ${state.presets.length || state.rows.length ? `
       <div class="field" style="background:rgba(168,85,247,.06);border:1px solid rgba(168,85,247,.2);border-radius:6px;padding:8px 10px">
         <label style="color:#c084fc">⭐ Presets <span style="color:#6e7681">— ${state.presets.length} saved</span></label>
         <div style="display:flex;gap:5px;align-items:center">
@@ -3354,11 +3631,13 @@
             ${state.presets.map(p => {
               const dt = new Date(p.createdAt);
               const dStr = `${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')}`;
-              const tag = p.auto ? ' 🤖' : '';
-              return `<option value="${esc(p.id)}" ${state.selectedPresetId === p.id ? 'selected' : ''}>${esc(p.name)} · ${dStr}${tag}</option>`;
+              // v0.27.0: 🤖 auto-saved · ✍️ manual (no CSV) · 📋 CSV-backed
+              const tag = p.auto ? ' 🤖' : (p.manual ? ' ✍️' : ' 📋');
+              const accN = p.settings && Array.isArray(p.settings.targetAccIds) ? p.settings.targetAccIds.length : 0;
+              return `<option value="${esc(p.id)}" ${state.selectedPresetId === p.id ? 'selected' : ''}>${esc(p.name)} · ${dStr}${tag}${accN ? ` · ${accN}acc` : ''}</option>`;
             }).join('')}
           </select>
-          <button id="fbl-preset-save" ${!state.rows.length ? 'disabled' : ''} title="Save current CSV + settings as preset">💾</button>
+          <button id="fbl-preset-save" title="Save current settings as preset (CSV optional — manual setups save too)">💾</button>
           <button id="fbl-preset-delete" ${!state.selectedPresetId ? 'disabled' : ''} title="Delete selected preset">🗑</button>
         </div>
         <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
@@ -3366,13 +3645,17 @@
             <input type="checkbox" id="fbl-auto-save" ${state.autoSavePreset ? 'checked' : ''} style="width:auto;margin:0">
             🤖 Auto-save preset on successful launch
           </label>
+          <label style="display:flex;align-items:center;gap:4px;margin:0;cursor:pointer;font-size:11px;color:#cbd5e1" title="When loading a preset, also re-select the ad accounts it was saved with">
+            <input type="checkbox" id="fbl-preset-restore-accs" ${state.presetRestoreAccounts ? 'checked' : ''} style="width:auto;margin:0">
+            🎯 Restore accounts from preset
+          </label>
           <span style="flex:1"></span>
           <button id="fbl-preset-export" ${!state.presets.length ? 'disabled' : ''} title="Download all presets as JSON" style="padding:4px 8px;font-size:11px">📤 Export</button>
           <button id="fbl-preset-import-btn" title="Load presets from JSON" style="padding:4px 8px;font-size:11px">📥 Import</button>
           <input type="file" id="fbl-preset-import" accept=".json,application/json" style="display:none">
         </div>
-        <div style="font-size:10px;color:#6e7681;margin-top:4px">Saves: CSV, all overrides, prefix, DSA, assignments. Excludes: creatives, account.</div>
-      </div>` : ''}
+        <div style="font-size:10px;color:#6e7681;margin-top:4px">Saves: CSV (if loaded), all manual overrides, prefix, DSA, assignments, create status, repeat settings, target accounts. Excludes: creatives (need fresh hashes).</div>
+      </div>
 
       <div class="field" ${!state.rows.length ? 'style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.25);border-radius:6px;padding:8px 10px"' : ''}>
         <label>1. CSV file ${!state.rows.length ? '<span style="color:#ef4444">⚠ required — defines campaign, adsets, geo, budget</span>' : ''}</label>
@@ -3934,15 +4217,46 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
         </label>
       </div>
 
+      <div class="field">
+        <label>11b. Repeat launch <span style="color:#6e7681">— fire this same setup N times with a gap between runs</span></label>
+        <div style="display:flex;gap:8px;align-items:flex-end">
+          <div style="flex:1">
+            <div style="font-size:10px;color:#8b949e;margin-bottom:3px">Runs (1 = single launch)</div>
+            <input type="number" id="fbl-repeat-count" min="1" max="50" step="1" value="${esc(state.repeatCount)}" placeholder="1">
+          </div>
+          <div style="flex:1">
+            <div style="font-size:10px;color:#8b949e;margin-bottom:3px">Gap between runs (min)</div>
+            <input type="number" id="fbl-repeat-delay" min="0" max="240" step="1" value="${esc(state.repeatDelayMin)}" placeholder="5">
+          </div>
+        </div>
+        ${repeatRuns > 1 ? `<div style="font-size:10px;color:#22c55e;margin-top:4px;font-family:ui-monospace,monospace">
+          ${repeatRuns} runs × ${totalAds * Math.max(1, state.targetAccIds.length)} ads · ~${repeatEtaMin} min total · runs 2+ named "… | R2", "… | R3" · countdown shows in the live feed
+        </div>` : '<div style="font-size:10px;color:#6e7681;margin-top:4px">Countdown to the next run appears in the LIVE FEED on the left. The button becomes ⏹ STOP while a series runs.</div>'}
+      </div>
+
       <hr>
 
-      <button class="primary" id="fbl-run" ${runDisabled ? 'disabled' : ''} style="width:100%">
-        ${state.dryRun && !runDisabled ? '🟦 DRY RUN — ' : ''}${buttonLabel}
+      <button class="primary" id="fbl-run" ${runDisabled && !stoppable ? 'disabled' : ''} style="width:100%">
+        ${stoppable
+          ? (stopStage === 2
+              ? `⏹⏹ HARD ABORT ARMED — finishing current account…`
+              : stopStage === 1
+                ? `⏹⏹ SKIP QUEUED ACCOUNTS ▸ click again${seriesRunning ? ` · run ${state.repeatCurrent}/${state.repeatTotal} finishing` : ''}`
+                : seriesRunning
+                  ? `⏹ STOP SERIES ▸ run ${state.repeatCurrent}/${state.repeatTotal}`
+                  : `⏹ STOP LAUNCH`)
+          : `${state.dryRun && !runDisabled ? '🟦 DRY RUN — ' : ''}${buttonLabel}${repeatRuns > 1 && !runDisabled ? ` × ${repeatRuns} runs` : ''}`}
       </button>
       <div class="fbl-launch-sub${runDisabled && !state.running ? ' blocked' : ''}">${
-        state.running ? '◉ LAUNCH SEQUENCE RUNNING…'
+        stopStage === 2 ? '◉ HARD ABORT — CURRENT ACCOUNT FINISHES, QUEUED CABS SKIPPED'
+        : stopStage === 1 ? (seriesRunning
+            ? `◉ SOFT STOP — RUN ${state.repeatCurrent}/${state.repeatTotal} FINISHES · CLICK AGAIN TO SKIP QUEUED ACCOUNTS`
+            : '◉ SOFT STOP ARMED · CLICK AGAIN TO SKIP QUEUED ACCOUNTS')
+        : seriesRunning ? `◉ SERIES RUNNING — RUN ${state.repeatCurrent}/${state.repeatTotal} · CLICK TO STOP`
+        : state.running ? '◉ LAUNCH SEQUENCE RUNNING… · CLICK TO STOP'
         : runDisabled ? '▲ AWAITING SETUP — RESOLVE STEP ABOVE'
         : state.dryRun ? '◇ DRY RUN ARMED — NO LIVE WRITES'
+        : repeatRuns > 1 ? `◈ SERIES ARMED — ${repeatRuns} RUNS · ${state.repeatDelayMin || 0} MIN APART`
         : '● SYSTEM READY — AWAITING COMMAND'
       }</div>
         </div>
@@ -3998,6 +4312,17 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     document.getElementById('fbl-preset-select')?.addEventListener('change', e => {
       if (e.target.value) loadPreset(e.target.value);
       else state.selectedPresetId = '';
+    });
+    document.getElementById('fbl-repeat-count')?.addEventListener('input', e => {
+      state.repeatCount = e.target.value;
+      render();
+    });
+    document.getElementById('fbl-repeat-delay')?.addEventListener('input', e => {
+      state.repeatDelayMin = e.target.value;
+      render();
+    });
+    document.getElementById('fbl-preset-restore-accs')?.addEventListener('change', e => {
+      state.presetRestoreAccounts = e.target.checked;
     });
     document.getElementById('fbl-preset-save')?.addEventListener('click', savePreset);
     document.getElementById('fbl-preset-delete')?.addEventListener('click', deletePreset);
@@ -4420,7 +4745,9 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     document.getElementById('fbl-status')?.addEventListener('change', e => {
       state.createStatus = e.target.value;
     });
-    document.getElementById('fbl-run')?.addEventListener('click', () => runLaunch());
+    // v0.27.0: the button drives the SERIES wrapper (runs=1 behaves exactly like before);
+    // while a series is running the same button is the STOP control.
+    document.getElementById('fbl-run')?.addEventListener('click', () => runLaunchSeries());
   }
 
   // ─── INIT ───────────────────────────────────────────────────────────────
@@ -4442,6 +4769,6 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     setStatus('error', 'Could not retrieve FB session token. Are you logged in to business.facebook.com?');
     return;
   }
-  setStatus('info', 'Token loaded. Click ↻ to load ad accounts.');
+  logEvent('info', 'Token loaded. Click ↻ to load ad accounts.');
   loadAccounts();
 })();
