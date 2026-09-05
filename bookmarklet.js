@@ -20,6 +20,9 @@
    ========================================================= */
 
 /* -------------------- CONFIG -------------------- */
+// v25.13 — Graph API version unified: CONFIG.VERSION is now the single source for every
+//          Graph call (was v19.0/v22.0/v23.0 mixed across 4 scopes; v19.0 sunset 2026-05-21
+//          silently killed the BM invite flow). One line to move all calls to a new version.
 // v25.12 — LIVE FEED = universal request log: core API + Analytics/Accounts/Ops/PixelMgr helpers
 //           mirror every Graph/GQL call into the rail (REQLOG); CP tab log mirrored too.
 //           Column Presets: import → selected accounts (searchable multi-select picker, was blind ALL).
@@ -56,8 +59,8 @@
 //         moved into the rail (was hidden in the tab body), rail header buttons de-cramped.
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
-  VERSION: 'v23.0',
-  APP_VERSION: 'v25.12',
+  VERSION: 'v23.0',   // single source for ALL Graph calls — see v25.13 note above
+  APP_VERSION: 'v25.13',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -3608,7 +3611,7 @@ function mountAnalytics(container) {
   function mountAnlSpend(c) {
     c.innerHTML = '';
 
-    const GRAPH_VER = 'v22.0';
+    const GRAPH_VER = CONFIG.VERSION;
     function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
     function esc(v) { return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
@@ -4424,7 +4427,7 @@ function mountInspector(container) {
    Links to navigate to every node.
    ========================================================= */
 
-const HOST_GRAPH = 'https://graph.facebook.com/v23.0';
+const HOST_GRAPH = `https://graph.facebook.com/${CONFIG.VERSION}`;
 
 /* TOKEN check moved to BOOT — panel now opens on any FB page */
 
@@ -5089,7 +5092,7 @@ function getCurrentActId() {
 function mountPixelManager(container) {
   container.innerHTML = '';
 
-  const GRAPH_VER    = 'v22.0';
+  const GRAPH_VER    = CONFIG.VERSION;
   const GQL_ENDPOINT = '/api/graphql/?_callFlowletID=0&_triggerFlowletID=1&qpl_active_e2e_trace_ids=';
   const GQL_CALLER   = 'RelayModern';
   const RATE_MS      = 2500;
@@ -5847,7 +5850,7 @@ function mountPixelManager(container) {
 function mountOperations(container) {
   container.innerHTML = '';
 
-  const GRAPH_VER = 'v22.0';
+  const GRAPH_VER = CONFIG.VERSION;
   const ACC_STATUS = {
     1:'ACTIVE', 2:'DISABLED', 3:'UNSETTLED', 7:'PENDING_RISK_REVIEW',
     8:'PENDING_SETTLEMENT', 9:'IN_GRACE_PERIOD', 100:'PENDING_CLOSURE',
@@ -6103,7 +6106,7 @@ function mountOperations(container) {
       const email = emails[i];
       inviteLog(`[${i+1}/${emails.length}] → ${email}`);
       try {
-        const url = `https://graph.facebook.com/v19.0/${ops.invBmId}/business_users?access_token=${ops.invToken}`;
+        const url = `https://graph.facebook.com/${GRAPH_VER}/${ops.invBmId}/business_users?access_token=${ops.invToken}`;
         const body = new URLSearchParams({
           brandId: ops.invBmId, email,
           invite_origin: 'BM_INVITE_USER_FLOW',

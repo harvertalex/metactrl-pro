@@ -1,0 +1,163 @@
+ACCOUNT SELECTORS IN METACTRL PRO
+==================================
+
+Found 5 distinct account selector interfaces:
+
+1. AUTORULES MANAGER — RULE GENERATOR (multi-select listbox)
+   File: bookmarklet.js
+   Lines: 1396-1421
+   Type: <select multiple> with size=4
+   Data source: ACCOUNTS_CACHE
+   Element ID: accList
+   
+2. AUTORULES MANAGER — EXPORT (single-select dropdown)
+   File: bookmarklet.js
+   Lines: 2479-2489
+   Type: <select>
+   Data source: ACCOUNTS_CACHE
+   Element created dynamically, no ID
+   Label: "— choose account —"
+   
+3. AUTORULES MANAGER — IMPORT (multi-select listbox)
+   File: bookmarklet.js
+   Lines: 2532-2543
+   Type: <select multiple>
+   Data source: ACCOUNTS_CACHE
+   Element created dynamically, no ID
+   Label: "Select target account(s):"
+
+4. PIXEL MANAGER — SINGLE MODE (two selects)
+   File: bookmarklet.js
+   Lines: 5001, 5025, 5033
+   Type: <select> via HTML string (rendered into .ar-field)
+   Data sources: pxState.pixels, pxState.accounts
+   Attributes: 
+     - data-pxrole="pixel-select"
+     - data-pxrole="account-select"
+   Handler: line 5221-5226
+
+5. LAUNCHER / CREATIVE UPLOADER (custom multi-select)
+   File: launcher.js
+   Lines: 2347-2368
+   Type: Custom UI with filter input + checkbox list
+   Data source: ACCOUNTS global array
+   Elements:
+     - id="fbl-acc-filter" (text input for filtering)
+     - id="fbl-acc-toggle" (expand/collapse button)
+     - id="fbl-acc-list" (container for checkboxes)
+     - class="fbl-acc-cb" (individual checkboxes)
+     - class="fbl-acc-remove" (remove buttons)
+   Handler: lines 2809-2829
+
+ACCOUNT OBJECT STRUCTURE
+========================
+
+From ACCOUNTS_CACHE (Autorules):
+  {
+    id: string (without 'act_' prefix),
+    name: string,
+    status: number (1=Active, 2=Limited, 101=Disabled, etc.),
+    currency: string (e.g., 'USD'),
+    conversionRate: number,
+    ruleCount: number
+  }
+
+From pxState.accounts (Pixel Manager):
+  {
+    id: string,
+    name: string,
+    status: number,
+    currency: string,
+    label: string (computed display label)
+  }
+
+From ACCOUNTS (Launcher):
+  {
+    id: string,
+    name: string,
+    status: number,
+    currency: string,
+    bm: string (Business Manager name),
+    label: string (computed display label)
+  }
+
+From OPS_ACCOUNTS_CACHE (Ops tab):
+  {
+    id: string,
+    name: string,
+    status: number,
+    currency: string,
+    label: string
+  }
+
+DISPLAY FORMATS
+===============
+
+Autorules (ACCOUNTS_CACHE):
+  "● {name} ({id}) [{ruleCount}r] {currency}"
+  Color based on status: Green (1), Red (2/101), Yellow (else)
+
+Pixel Manager (pxState):
+  "● {label}"
+  Color based on status
+
+Launcher:
+  "{bm} · {label} {id}"
+  With BM name shown separately
+
+EXISTING SEARCH/FILTER IMPLEMENTATIONS
+======================================
+
+1. Launcher account picker (launcher.js:2249-2250):
+   - Simple substring match: .toLowerCase().includes(accFilter)
+   - Searches: name, id, bm
+   - Input element: #fbl-acc-filter
+   - Handler: input event listener at line 2809
+
+2. Analytics (bookmarklet.js:3148-3150):
+   - Filter by status: active, issues, spending
+
+3. Spend Dashboard (bookmarklet.js):
+   - Filter buttons: all, active, issues, spending
+
+STYLING / UI HELPERS AVAILABLE
+===============================
+
+1. ar-select class (bookmarklet.js):
+   Used for styled select elements
+   Background: var(--card)
+   Color: var(--txt)
+   Border: 1px solid var(--bdr)
+   Radius: 8px
+   Padding: 4px
+
+2. ar-field class:
+   Container for label + input combinations
+
+3. ar-label class:
+   Labels for form fields
+
+4. Color variables defined in index.html:
+   --bg, --bg2, --card, --surf, --txt, --txt2, --bdr, --acc (accent)
+
+UTILITY FUNCTIONS
+=================
+
+- normalizeScheduleSpec (line 364): schedule normalization
+- esc (line 4548): HTML escape utility
+- uniqBy (used in line 4782): deduplication
+- Array.from (used in line 1421): convert to array
+- Array.includes, Array.filter: standard filtering
+
+NOTE: No dedicated debounce, fuzzy match, or normalize functions exist yet.
+
+SEARCH/INDEX REQUIREMENTS FOR HELPER
+====================================
+
+For account search, need to index:
+1. account.id (exact match or starts-with)
+2. account.name (substring match, case-insensitive)
+3. account.bm (substring match, case-insensitive) — launcher only
+
+Recommendation: Simple substring search with case-insensitive matching.
+Can optionally use fuzzy match for typo tolerance, but basic includes() sufficient.
