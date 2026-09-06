@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>MetaLaunch PRO — visual harness</title>
+<style>html,body{margin:0;padding:0;background:#0a0f14;width:100%;height:100%;overflow:hidden}</style>
+</head>
+<body>
+<script>
+  // Тот же приём, что и в harness.html для MetaCtrl: панель рендерится standalone, без FB.
+  // 1) токен-глобал, чтобы панель смонтировалась в авторизованном виде
+  var __accessToken = 'VISUAL_TEST_TOKEN';
+  // 2) сеть глушится — промис, который никогда не резолвится: синхронная отрисовка
+  //    проходит целиком, а страница не висит на реальных запросах
+  window.fetch = function () { return new Promise(function () {}); };
+  window.alert = function () {};
+  window.confirm = function () { return false; };
+</script>
+<script src="../launcher.js"></script>
+</body>
+</html>

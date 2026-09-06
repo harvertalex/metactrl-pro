@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.27.1 — Bookmarklet
+ * MetaLaunch PRO v0.28.0 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -182,6 +182,16 @@
  *          (4) multi-account launch logs a ⚠ that the ONE pixel (step 4/CSV) is applied to ALL
  *              accounts — promoted_object and {pixel_id} alike.
  *          (5) collapsible "macros reference" under step 8 — all launcher tokens + FB macros.
+ *
+ * v0.28.0: тема TradingView вместо cyberpunk-HUD. Панель перешла на общий словарь
+ *          code/shared/theme/theme.ts: убраны glow-тени, dot-mesh на фоне формы,
+ *          скан-линии в журнале, corner-brackets на LAUNCH, uppercase+разрядка в
+ *          заголовках; база с бирюзовой #04141a на сине-серую #131722, панели плоские
+ *          (радиус 4px, теней нет), синий #2962FF только на интерактиве. Цвета в CSS и
+ *          в inline-разметке (183 места) идут через var(--*) — hex в правилах больше нет.
+ *          Смена цвета: theme.ts -> theme-cli.ts emit -> перенести TV_TOKENS_BODY в
+ *          injectStyles() -> node regen-launcher.mjs. Только оформление: разметка,
+ *          обработчики и логика залива не тронуты.
  *
  * v0.27.1: hard abort (2nd STOP click) + the STOP control now works for a plain
  *          multi-account launch too, not only for a repeat series (it used to be
@@ -543,7 +553,7 @@
     }
     return +s;
   }
-  const SC = { info:'#3b82f6', success:'#22c55e', error:'#ef4444', warning:'#f59e0b' };
+  const SC = { info:'var(--accent)', success:'var(--good)', error:'var(--crit)', warning:'var(--warn)' };
 
   function setStatus(type, text) { state.status = { type, text }; render(); }
   function addLog(type, msg) {
@@ -557,7 +567,7 @@
   // vanished. They now land in the LIVE FEED rail on the left, which keeps history.
   // The top bar stays for BLOCKING errors only (missing pixel / DSA / bad page).
   function logEvent(type, text) {
-    addLog(type, `▸ ${text}`);
+    addLog(type, `· ${text}`);
     if (type === 'error') {
       setStatus(type, text);   // blocking failures still need the loud top bar
     } else {
@@ -598,18 +608,18 @@
     const d = u.errorDetails || {};
     const fb = d.fbError || {};
     const lines = [];
-    lines.push(`<b style="color:#fbbf24">${esc(u.error || 'Error')}</b>`);
-    if (d.stage)        lines.push(`<span style="color:#94a3b8">stage:</span> ${esc(d.stage)}`);
-    if (d.url)          lines.push(`<span style="color:#94a3b8">url:</span> ${esc(d.url)}`);
-    if (d.httpStatus)   lines.push(`<span style="color:#94a3b8">http:</span> ${d.httpStatus}`);
-    if (fb.code != null) lines.push(`<span style="color:#94a3b8">fb code:</span> ${fb.code}${fb.subcode ? '/' + fb.subcode : ''}`);
-    if (fb.type)        lines.push(`<span style="color:#94a3b8">fb type:</span> ${esc(fb.type)}`);
-    if (fb.message)     lines.push(`<span style="color:#94a3b8">fb msg:</span> ${esc(fb.message)}`);
-    if (fb.user_title)  lines.push(`<span style="color:#94a3b8">user title:</span> ${esc(fb.user_title)}`);
-    if (fb.user_msg)    lines.push(`<span style="color:#94a3b8">user msg:</span> ${esc(fb.user_msg)}`);
-    if (fb.fbtrace_id)  lines.push(`<span style="color:#94a3b8">fbtrace_id:</span> ${esc(fb.fbtrace_id)}`);
-    if (d.netError)     lines.push(`<span style="color:#94a3b8">net err:</span> ${esc(d.netError)}`);
-    if (d.rawResponse)  lines.push(`<div style="color:#64748b;font-size:10px;margin-top:6px;padding-top:6px;border-top:1px solid #1e293b">raw response:\n${esc(d.rawResponse)}</div>`);
+    lines.push(`<b style="color:var(--warn)">${esc(u.error || 'Error')}</b>`);
+    if (d.stage)        lines.push(`<span style="color:var(--text-faint)">stage:</span> ${esc(d.stage)}`);
+    if (d.url)          lines.push(`<span style="color:var(--text-faint)">url:</span> ${esc(d.url)}`);
+    if (d.httpStatus)   lines.push(`<span style="color:var(--text-faint)">http:</span> ${d.httpStatus}`);
+    if (fb.code != null) lines.push(`<span style="color:var(--text-faint)">fb code:</span> ${fb.code}${fb.subcode ? '/' + fb.subcode : ''}`);
+    if (fb.type)        lines.push(`<span style="color:var(--text-faint)">fb type:</span> ${esc(fb.type)}`);
+    if (fb.message)     lines.push(`<span style="color:var(--text-faint)">fb msg:</span> ${esc(fb.message)}`);
+    if (fb.user_title)  lines.push(`<span style="color:var(--text-faint)">user title:</span> ${esc(fb.user_title)}`);
+    if (fb.user_msg)    lines.push(`<span style="color:var(--text-faint)">user msg:</span> ${esc(fb.user_msg)}`);
+    if (fb.fbtrace_id)  lines.push(`<span style="color:var(--text-faint)">fbtrace_id:</span> ${esc(fb.fbtrace_id)}`);
+    if (d.netError)     lines.push(`<span style="color:var(--text-faint)">net err:</span> ${esc(d.netError)}`);
+    if (d.rawResponse)  lines.push(`<div style="color:var(--text-faint);font-size:10px;margin-top:6px;padding-top:6px;border-top:1px solid var(--surface)">raw response:\n${esc(d.rawResponse)}</div>`);
     return lines.join('\n');
   }
 
@@ -3252,211 +3262,190 @@
     const style = document.createElement('style');
     style.id = '__fb_launcher_styles__';
     style.textContent = `
-      /* v0.18.0 Cyberpunk HUD: palette nudged from navy → dark teal-black so the whole console reads
-         as the reference. Cyan accents brightened. Levers: TEAL bg pair + .field/.fbl-main bg below. */
+      /* ═══ ТЕМА TRADINGVIEW ═══════════════════════════════════════════════
+         Токены ниже — копия dist/tv-bookmarklet.js (источник: code/shared/theme/theme.ts).
+         Букмарклет — самодостаточный B64-blob, импортировать читателя он не может,
+         поэтому словарь ВШИТ. Меняешь цвет: theme.ts → bun code/shared/theme/theme-cli.ts emit
+         → перенести TV_TOKENS_BODY сюда → node regen-launcher.mjs.
+         Правила ниже цвета НЕ хардкодят — только var(). Так перенос словаря красит всё.
+
+         v0.28.0: HUD снят целиком (glow, dot-mesh, скан-линии, corner-brackets,
+         uppercase+разрядка, бирюзовая база var(--bg)). Язык TradingView: фон сине-серый
+         #131722, панели плоские (радиус 4px, теней нет), подписи обычным регистром,
+         синий #2962FF ТОЛЬКО на интерактиве, зелёный/красный ТОЛЬКО как направление. */
+      #${PANEL_ID} {
+        --bg:#131722; --surface:#1E222D; --surface-2:#2A2E39;
+        --border:#2A2E39; --border-soft:#22262F; --bar:#131722;
+        --text:#D1D4DC; --text-dim:#B2B5BE; --text-faint:#787B86;
+        --accent:#2962FF; --accent-dim:#1E53E5; --accent-bg:rgba(41,98,255,.15); --on-accent:#FFFFFF;
+        --good:#26A69A; --warn:#FF9800; --crit:#EF5350;
+        --good-bg:rgba(38,166,154,.14); --warn-bg:rgba(255,152,0,.14); --crit-bg:rgba(239,83,80,.14);
+        --font-ui:"Trebuchet MS",-apple-system,"Segoe UI",Roboto,sans-serif;
+        --font-mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,monospace;
+        --r:4px; --r-sm:3px;
+      }
+      /* Панель: плоская, без градиента и без свечения по кромке. Тень оставлена
+         одна и только внешняя — панель висит НАД чужой страницей, ей нужен край. */
       #${PANEL_ID} { position:fixed; top:0; right:0; width:1140px; max-width:96vw; height:100vh;
-        background:linear-gradient(180deg,#061a22 0%,#04141a 100%); color:#e2e8f0; z-index:2147483646;
-        border-left:1px solid #0e3a47; box-shadow:-10px 0 30px rgba(0,0,0,.5),inset 1px 0 0 rgba(56,189,248,.12);
-        font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-        font-size:13px; display:flex; flex-direction:column; overflow:hidden; box-sizing:border-box; }
-      /* v0.19.1: panel-frame HUD corner brackets removed (visual clutter — user request). */
-      /* v0.14.0: custom scrollbar on the inner scroll panes (left log rail + right form) */
+        background:var(--bg); color:var(--text); z-index:2147483646;
+        border-left:1px solid var(--border); box-shadow:-8px 0 24px rgba(0,0,0,.45);
+        font-family:var(--font-ui);
+        font-size:12px; display:flex; flex-direction:column; overflow:hidden; box-sizing:border-box; }
       #${PANEL_ID} .fbl-scroll::-webkit-scrollbar { width:10px; }
       #${PANEL_ID} .fbl-scroll::-webkit-scrollbar-track { background:transparent; }
-      #${PANEL_ID} .fbl-scroll::-webkit-scrollbar-thumb { background:#243049; border-radius:5px; border:2px solid #0a0f1c; }
-      #${PANEL_ID} .fbl-scroll::-webkit-scrollbar-thumb:hover { background:#3b4a66; }
-      /* v0.14.0: two-column body — left log rail, right scrolling form. Header spans both. */
+      #${PANEL_ID} .fbl-scroll::-webkit-scrollbar-thumb { background:var(--surface-2); border-radius:5px; border:2px solid var(--bg); }
+      #${PANEL_ID} .fbl-scroll::-webkit-scrollbar-thumb:hover { background:var(--text-faint); }
+      /* Две колонки: слева журнал, справа форма. Шапка над обеими. */
       #${PANEL_ID} .fbl-cols { display:flex; flex:1; min-height:0; overflow:hidden; }
       #${PANEL_ID} .fbl-lograil { width:330px; flex-shrink:0; display:flex; flex-direction:column;
-        border-right:1px solid #0e3a47; background:#03101a; transition:width .15s; }
+        border-right:1px solid var(--border); background:var(--bg); transition:width .15s; }
       #${PANEL_ID} .fbl-lograil.collapsed { width:38px; }
       #${PANEL_ID} .fbl-railhead { flex-shrink:0; display:flex; align-items:center; justify-content:space-between;
-        padding:9px 11px; font-size:12px; font-weight:700; color:#7dd3fc; border-bottom:1px solid #0e3a47;
-        font-family:ui-monospace,monospace; letter-spacing:.5px; text-shadow:0 0 7px rgba(56,189,248,.5); }
-      /* v0.18.0 Cyberpunk HUD: "● STATUS: ONLINE" line above the live feed — green dot + green mono text. */
+        padding:9px 11px; font-size:11px; font-weight:400; color:var(--text-faint); border-bottom:1px solid var(--border);
+        font-family:var(--font-ui); }
+      /* Статус ленты: точка + подпись. Цвет несёт состояние, свечения нет. */
       #${PANEL_ID} .fbl-railstatus { flex-shrink:0; display:flex; align-items:center; gap:7px;
-        padding:8px 11px 6px; font-family:ui-monospace,monospace; font-size:10.5px; font-weight:700;
-        letter-spacing:1px; color:#4ade80; }
-      #${PANEL_ID} .fbl-railstatus .dot { width:8px; height:8px; border-radius:50%; background:#22c55e;
-        box-shadow:0 0 8px #22c55e; animation:fbl-led-pulse 2.4s ease-in-out infinite; }
-      #${PANEL_ID} .fbl-railstatus.warn { color:#fbbf24; } #${PANEL_ID} .fbl-railstatus.warn .dot { background:#fbbf24; box-shadow:0 0 8px #fbbf24; }
-      #${PANEL_ID} .fbl-railstatus.err { color:#f87171; } #${PANEL_ID} .fbl-railstatus.err .dot { background:#ef4444; box-shadow:0 0 8px #ef4444; }
+        padding:8px 11px 6px; font-family:var(--font-ui); font-size:11px; font-weight:400;
+        color:var(--good); }
+      #${PANEL_ID} .fbl-railstatus .dot { width:7px; height:7px; border-radius:50%; background:var(--good); }
+      #${PANEL_ID} .fbl-railstatus.warn { color:var(--warn); } #${PANEL_ID} .fbl-railstatus.warn .dot { background:var(--warn); }
+      #${PANEL_ID} .fbl-railstatus.err { color:var(--crit); } #${PANEL_ID} .fbl-railstatus.err .dot { background:var(--crit); }
       #${PANEL_ID} .fbl-lograil.collapsed .fbl-railstatus { display:none; }
       #${PANEL_ID} .fbl-railbody { flex:1; min-height:0; display:flex; flex-direction:column; padding:10px 11px; overflow:hidden; }
       #${PANEL_ID} .fbl-lograil.collapsed .fbl-railbody, #${PANEL_ID} .fbl-lograil.collapsed .fbl-railhead .ttl { display:none; }
-      /* v0.17.1 Holographic HUD: cyan dot-grid mesh behind the right form column only — clearly visible
-         in the gaps between cards (rail stays #05080f telemetry). Cards/inputs have solid bg, so
-         labels/values stay crisp over it; the grid only reads in the negative space. */
-      #${PANEL_ID} .fbl-main { flex:1; min-width:0; overflow-y:auto; padding:0 18px 18px;
-        background-image:radial-gradient(circle, rgba(56,189,248,.13) 1.4px, transparent 1.4px);
-        background-size:22px 22px; animation:fbl-mesh-drift 36s linear infinite; }
-      @keyframes fbl-mesh-drift { from { background-position:0 0; } to { background-position:22px 44px; } }
-      /* v0.16.0 Ops Cockpit: header → black command bar, mono title, status LED */
-      #${PANEL_ID} h2 { margin:0; padding:14px 18px; font-size:14px; font-weight:700; color:#e8eef7; flex-shrink:0;
-        background:#080d18; border-bottom:1px solid #1a2740;
-        font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-        display:flex; align-items:center; justify-content:space-between; z-index:5;
-        box-shadow:0 2px 12px rgba(0,0,0,.4); letter-spacing:1px; }
+      /* Форма: ровный фон, никакой сетки. Плотность даёт отступ, а не рисунок. */
+      #${PANEL_ID} .fbl-main { flex:1; min-width:0; overflow-y:auto; padding:0 18px 18px; background:var(--bg); }
+      /* Шапка — панель управления: имя инструмента слева, индикатор состояния. */
+      #${PANEL_ID} h2 { margin:0; padding:12px 18px; font-size:13px; font-weight:600; color:var(--text); flex-shrink:0;
+        background:var(--surface); border-bottom:1px solid var(--border);
+        font-family:var(--font-ui);
+        display:flex; align-items:center; justify-content:space-between; z-index:5; }
       #${PANEL_ID} h2 .fbl-title { display:flex; align-items:center; gap:9px; }
-      #${PANEL_ID} .fbl-led { width:9px; height:9px; border-radius:50%; flex-shrink:0;
-        background:#22c55e; box-shadow:0 0 6px currentColor; animation:fbl-led-pulse 2.4s ease-in-out infinite; }
-      #${PANEL_ID} .fbl-led.warn { background:#fbbf24; }
-      #${PANEL_ID} .fbl-led.err { background:#ef4444; }
-      @keyframes fbl-led-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
-      #${PANEL_ID} .sub { color:#94a3b8; font-size:11px; margin:14px 0; }
-      /* v0.18.0 Cyberpunk HUD: cards = framed instrument modules. Teal-black surface, cyan telemetry tick (read-only/state, NOT clickable).
-         Faint cyan inset top hairline at rest = module edge. Lever: card bg #082530 → #0a1b26 if too bright over the grid. */
-      #${PANEL_ID} .field { position:relative; background:#082530; border:1px solid #103a47; border-left:3px solid #38bdf8;
-        border-radius:9px; padding:11px 13px; margin-bottom:11px; transition:border-color .15s,box-shadow .15s;
-        box-shadow:inset 0 1px 0 rgba(56,189,248,.12); }
-      #${PANEL_ID} .field:hover { border-left-color:#7dd3fc; }
-      /* v0.19.1: per-card HUD corner brackets removed (visual clutter — user request).
-         Card keeps its left cyan tick (border-left) + focus lift below. */
+      #${PANEL_ID} .fbl-led { width:8px; height:8px; border-radius:50%; flex-shrink:0; background:var(--good); }
+      #${PANEL_ID} .fbl-led.warn { background:var(--warn); }
+      #${PANEL_ID} .fbl-led.err { background:var(--crit); }
+      #${PANEL_ID} .sub { color:var(--text-faint); font-size:11px; margin:14px 0; }
+      /* Карточка шага: плоская, 4px, без тени и без цветного корешка.
+         Активность показывает рамка на фокусе — этого достаточно. */
+      #${PANEL_ID} .field { position:relative; background:var(--surface); border:1px solid var(--border);
+        border-radius:var(--r); padding:11px 13px; margin-bottom:10px; transition:border-color .15s; }
       #${PANEL_ID} .field::after { content:none; }
-      /* v0.18.0 Cyberpunk HUD: active step card = lock-on (border + surface lift; corner brackets removed v0.19.1). */
-      #${PANEL_ID} .field:focus-within { border-color:#2b6e8a; border-left-color:#7dd3fc; box-shadow:0 0 16px rgba(56,189,248,.16),inset 0 1px 0 rgba(56,189,248,.2); }
-      /* nested .field stays bracket-free + edge-free — only the outer numbered step cards get the HUD frame */
-      #${PANEL_ID} .field .field { position:static; background:none; border:none; border-radius:0; padding:0; margin:0; box-shadow:none; }
+      #${PANEL_ID} .field:focus-within { border-color:var(--accent); }
+      /* Вложенная .field — не карточка, а просто группа полей. */
+      #${PANEL_ID} .field .field { position:static; background:none; border:none; border-radius:0; padding:0; margin:0; }
       #${PANEL_ID} .field .field::after { content:none; }
-      #${PANEL_ID} .field .field:focus-within { box-shadow:none; }
-      #${PANEL_ID} .field > label { font-size:12px; font-weight:600; color:#e8eef7; margin-bottom:7px; letter-spacing:.2px; }
-      /* v0.18.0 Cyberpunk HUD: top-level step-card titles → HUD module headers (uppercase + tracking + leading cyan glyph).
-         Scoped to .fbl-main > .field > label so nested grid sub-labels stay sentence-case. Grey hint spans keep their case (text-transform:none). */
-      #${PANEL_ID} .fbl-main > .field > label { text-transform:uppercase; letter-spacing:.9px; font-size:11.5px; color:#d6f3ff;
+      #${PANEL_ID} .field > label { font-size:12px; font-weight:600; color:var(--text); margin-bottom:7px; }
+      /* Заголовок шага: обычный регистр, без разрядки и без глифа.
+         Отличается весом и цветом, а не оформлением. */
+      #${PANEL_ID} .fbl-main > .field > label { font-size:12px; color:var(--text); font-weight:600;
         display:flex; align-items:baseline; flex-wrap:wrap; gap:5px; }
-      #${PANEL_ID} .fbl-main > .field > label::before { content:'▸'; color:#38bdf8; font-weight:700;
-        text-shadow:0 0 6px rgba(56,189,248,.7); margin-right:1px; text-transform:none; }
       #${PANEL_ID} .fbl-main > .field > label span, #${PANEL_ID} .fbl-main > .field > label code,
-      #${PANEL_ID} .fbl-main > .field > label b { text-transform:none; letter-spacing:0; }
-      #${PANEL_ID} label { display:block; font-size:11px; color:#94a3b8; margin-bottom:3px; }
-      #${PANEL_ID} input[type=text], #${PANEL_ID} input[type=file], #${PANEL_ID} input[type=datetime-local], #${PANEL_ID} select, #${PANEL_ID} textarea {
-        width:100%; padding:7px 9px; background:#06222d; border:1px solid #1a4a5a;
-        border-radius:6px; color:#e2e8f0; font-size:12px; box-sizing:border-box;
-        font-family:inherit; transition:border-color .12s,box-shadow .12s; }
-      /* v0.17.0 Holographic HUD: focus = cyan lock-on (telemetry accent; a state, not a default clickable affordance). Launch button stays action-blue. */
-      #${PANEL_ID} input:focus, #${PANEL_ID} select:focus, #${PANEL_ID} textarea:focus { outline:none; border-color:#38bdf8; box-shadow:0 0 0 2px rgba(56,189,248,.25),0 0 10px rgba(56,189,248,.15); }
-      /* v0.18.0 Cyberpunk HUD: secondary buttons → thin cyan-outlined transparent (cyan text), per the ref.
-         (Accent-split normally keeps cyan off clickables; this ref pass intentionally allows it on secondary actions.) */
-      #${PANEL_ID} button { padding:7px 12px; border-radius:6px; border:1px solid rgba(56,189,248,.45);
-        background:rgba(56,189,248,.06); color:#7dd3fc; font-size:12px; cursor:pointer; font-family:inherit; transition:background .12s,border-color .12s,box-shadow .12s; }
-      #${PANEL_ID} button:hover { background:rgba(56,189,248,.14); border-color:#38bdf8; box-shadow:0 0 8px rgba(56,189,248,.25); }
-      /* v0.18.0 Cyberpunk HUD: the LAUNCH hero — giant, bright cyan→blue gradient, intense layered glow, framed with brackets.
-         Lever: shrink padding 18px→13px / drop the two outer box-shadow rings to dial back the glow. */
-      #${PANEL_ID} button.primary { position:relative; padding:18px 20px; font-size:15px; border-radius:11px;
-        background:linear-gradient(100deg,#0ea5e9,#2563eb 55%,#3b82f6); border:none; color:#f0fbff; font-weight:800;
-        letter-spacing:1.2px; text-transform:uppercase; text-shadow:0 0 10px rgba(8,30,60,.6);
-        box-shadow:0 0 0 1px rgba(125,211,252,.6),0 0 22px rgba(56,189,248,.55),0 0 46px rgba(37,99,235,.4),0 6px 18px rgba(0,0,0,.45);
-        transition:background .12s,box-shadow .12s,transform .05s; overflow:visible; }
-      #${PANEL_ID} button.primary:hover:not(:disabled) { background:linear-gradient(100deg,#38bdf8,#2563eb 55%,#4f8df9);
-        box-shadow:0 0 0 1px rgba(125,211,252,.85),0 0 30px rgba(56,189,248,.75),0 0 60px rgba(37,99,235,.5),0 6px 18px rgba(0,0,0,.45); }
-      /* corner brackets framing the hero (cyan, glowing) */
-      #${PANEL_ID} button.primary::after { content:''; position:absolute; inset:5px; border-radius:7px; pointer-events:none;
-        background:
-          linear-gradient(rgba(224,247,255,.95),rgba(224,247,255,.95)) left 0 top 0/16px 2.5px no-repeat,
-          linear-gradient(rgba(224,247,255,.95),rgba(224,247,255,.95)) left 0 top 0/2.5px 16px no-repeat,
-          linear-gradient(rgba(224,247,255,.95),rgba(224,247,255,.95)) right 0 top 0/16px 2.5px no-repeat,
-          linear-gradient(rgba(224,247,255,.95),rgba(224,247,255,.95)) right 0 top 0/2.5px 16px no-repeat,
-          linear-gradient(rgba(224,247,255,.95),rgba(224,247,255,.95)) left 0 bottom 0/16px 2.5px no-repeat,
-          linear-gradient(rgba(224,247,255,.95),rgba(224,247,255,.95)) left 0 bottom 0/2.5px 16px no-repeat,
-          linear-gradient(rgba(224,247,255,.95),rgba(224,247,255,.95)) right 0 bottom 0/16px 2.5px no-repeat,
-          linear-gradient(rgba(224,247,255,.95),rgba(224,247,255,.95)) right 0 bottom 0/2.5px 16px no-repeat;
-        filter:drop-shadow(0 0 4px rgba(224,247,255,.6)); }
-      /* v0.16.0: confirm-feel press on the launch trigger */
-      #${PANEL_ID} button.primary:active:not(:disabled) { transform:translateY(1px); box-shadow:inset 0 2px 10px rgba(0,0,0,.5),0 0 18px rgba(56,189,248,.4); }
-      #${PANEL_ID} button.primary:disabled { background:linear-gradient(100deg,#16384a,#1b3a52); color:#7da8c0;
-        box-shadow:0 0 0 1px rgba(56,189,248,.2),0 0 10px rgba(56,189,248,.1); }
-      #${PANEL_ID} button.primary:disabled::after { filter:none; opacity:.45; }
-      /* v0.18.0 Cyberpunk HUD: functional readiness subtitle under the launch hero (reuses blockReason / ready text). */
-      #${PANEL_ID} .fbl-launch-sub { text-align:center; font-family:ui-monospace,monospace; font-size:10.5px; letter-spacing:1.5px;
-        text-transform:uppercase; margin-top:9px; color:#5eead4; text-shadow:0 0 7px rgba(94,234,212,.4); }
-      #${PANEL_ID} .fbl-launch-sub.blocked { color:#fbbf24; text-shadow:0 0 7px rgba(251,191,36,.35); }
+      #${PANEL_ID} .fbl-main > .field > label b { font-weight:400; color:var(--text-faint); }
+      #${PANEL_ID} label { display:block; font-size:11px; color:var(--text-faint); margin-bottom:3px; font-weight:400; }
+      #${PANEL_ID} input[type=text], #${PANEL_ID} input[type=number], #${PANEL_ID} input[type=file], #${PANEL_ID} input[type=datetime-local], #${PANEL_ID} select, #${PANEL_ID} textarea {
+        width:100%; padding:5px 9px; background:var(--bg); border:1px solid var(--border);
+        border-radius:var(--r-sm); color:var(--text); font-size:12px; box-sizing:border-box;
+        font-family:var(--font-ui); transition:border-color .12s; }
+      /* Фокус — тонкая синяя рамка. Синий здесь единственный, и он значит «сюда можно». */
+      #${PANEL_ID} input:focus, #${PANEL_ID} select:focus, #${PANEL_ID} textarea:focus { outline:none; border-color:var(--accent); }
+      /* Вторичная кнопка: контурная, нейтральная. */
+      #${PANEL_ID} button { padding:5px 12px; border-radius:var(--r-sm); border:1px solid var(--border);
+        background:none; color:var(--text-dim); font-size:12px; cursor:pointer; font-family:var(--font-ui);
+        font-weight:600; transition:border-color .12s,color .12s; }
+      #${PANEL_ID} button:hover { color:var(--text); border-color:var(--accent-dim); }
+      /* LAUNCH — единственная заливка акцентом на всей панели. Размер несёт вес,
+         а не свечение: крупнее прочих, но той же формы. */
+      #${PANEL_ID} button.primary { position:relative; padding:12px 20px; font-size:13px; border-radius:var(--r);
+        background:var(--accent); border:1px solid var(--accent-dim); color:var(--on-accent); font-weight:600;
+        transition:background .12s; }
+      #${PANEL_ID} button.primary:hover:not(:disabled) { background:var(--accent-dim); }
+      #${PANEL_ID} button.primary::after { content:none; }
+      #${PANEL_ID} button.primary:active:not(:disabled) { background:var(--accent-dim); }
+      #${PANEL_ID} button.primary:disabled { background:var(--surface-2); border-color:var(--border); color:var(--text-faint); }
+      /* Строка готовности под кнопкой: обычный регистр, цвет = вердикт. */
+      #${PANEL_ID} .fbl-launch-sub { text-align:center; font-family:var(--font-ui); font-size:11px;
+        margin-top:8px; color:var(--text-faint); }
+      #${PANEL_ID} .fbl-launch-sub.blocked { color:var(--warn); }
       #${PANEL_ID} button:disabled:not(.primary) { opacity:.4; cursor:not-allowed; }
-      #${PANEL_ID} .close { background:rgba(255,255,255,.12); border:none; color:#fff; font-size:18px; padding:0 8px; line-height:1.4; border-radius:5px; cursor:pointer; }
-      #${PANEL_ID} .close:hover { background:rgba(255,255,255,.25); }
-      #${PANEL_ID} .preview { background:linear-gradient(100deg,rgba(56,189,248,.1),rgba(37,99,235,.06)); border:1px solid #1a4a5a;
-        border-left:3px solid #22c55e; border-radius:9px; padding:9px 12px; font-size:11px; color:#cbd5e1; line-height:1.9;
-        margin-bottom:11px; }
-      /* v0.18.0 Cyberpunk HUD: preview metrics = [bracketed] cyan readouts (read-only telemetry). Brackets via pseudo-els, CSS-only.
-         Inline color:#22c55e/#ef4444 on the pixel <b> still wins (status), so only the neutral metric <b>s turn cyan-bracketed. */
-      #${PANEL_ID} .preview b { font-family:ui-monospace,monospace; font-variant-numeric:tabular-nums; color:#5eead4;
-        background:rgba(56,189,248,.08); border:1px solid rgba(56,189,248,.3); border-radius:4px; padding:0 5px;
-        text-shadow:0 0 6px rgba(94,234,212,.3); white-space:nowrap; }
-      #${PANEL_ID} .preview b::before { content:'['; color:#38bdf8; margin-right:3px; opacity:.8; }
-      #${PANEL_ID} .preview b::after { content:']'; color:#38bdf8; margin-left:3px; opacity:.8; }
-      /* v0.18.0 Cyberpunk HUD: reusable [bracketed] cyan readout for inline readonly counts (accounts/pages/pixels etc). */
-      #${PANEL_ID} .fbl-readout { font-family:ui-monospace,monospace; font-variant-numeric:tabular-nums; color:#5eead4;
-        background:rgba(56,189,248,.08); border:1px solid rgba(56,189,248,.3); border-radius:4px; padding:0 5px; white-space:nowrap;
-        text-shadow:0 0 6px rgba(94,234,212,.3); }
-      #${PANEL_ID} .fbl-readout::before { content:'['; color:#38bdf8; margin-right:3px; opacity:.8; }
-      #${PANEL_ID} .fbl-readout::after { content:']'; color:#38bdf8; margin-left:3px; opacity:.8; }
-      /* v0.16.0 Ops Cockpit: log rail = telemetry feed (the hero). Darkest surface + faint scanlines. */
-      #${PANEL_ID} .log { flex:1; min-height:0; overflow-y:auto; background:#020a10;
-        background-image:repeating-linear-gradient(0deg, rgba(56,189,248,.035) 0, rgba(56,189,248,.035) 1px, transparent 1px, transparent 3px);
-        border:1px solid #0e3a47; border-radius:6px; padding:8px 10px;
-        font-family:ui-monospace,monospace; font-size:11px; font-variant-numeric:tabular-nums; }
-      #${PANEL_ID} .log div { word-break:break-word; line-height:1.45; margin-bottom:2px;
-        padding:1px 0; }
-      #${PANEL_ID} .log div.error-line { background:rgba(239,68,68,.08);
-        border-left:2px solid #ef4444; padding-left:4px; margin:2px 0; }
-      #${PANEL_ID} .log .ts { color:#38bdf8; opacity:.85; margin-right:6px; }
-      /* v0.18.0 Cyberpunk HUD: segmented glowing meter — discrete cells (▮▮▮▮▯▯) not a smooth fill.
-         The fill is a bright cyan→blue gradient; a ::after overlay of track-colored stripes punches the gaps between cells. */
-      #${PANEL_ID} .progress { position:relative; height:11px; border-radius:3px; background:#031019;
-        border:1px solid #103a47; overflow:hidden; margin:6px 0; box-shadow:inset 0 0 6px rgba(0,0,0,.5); }
-      #${PANEL_ID} .progress > div { height:100%; background:linear-gradient(90deg,#38bdf8,#2563eb);
-        box-shadow:0 0 10px rgba(56,189,248,.7),inset 0 0 4px rgba(224,247,255,.5); transition:width .3s; }
-      #${PANEL_ID} .progress::after { content:''; position:absolute; inset:0; pointer-events:none;
-        background:repeating-linear-gradient(90deg, transparent 0 9px, #031019 9px 12px); }
-      #${PANEL_ID} .status { padding:8px 10px; border-radius:6px; font-size:12px; margin:8px 0;
-        background:rgba(59,130,246,.1); border:1px solid rgba(59,130,246,.3); color:#dbeafe; }
-      #${PANEL_ID} .status.success { background:rgba(34,197,94,.1); border-color:rgba(34,197,94,.3); color:#bbf7d0; }
-      #${PANEL_ID} .status.error { background:rgba(239,68,68,.1); border-color:rgba(239,68,68,.3); color:#fecaca; }
-      #${PANEL_ID} .status.warning { background:rgba(245,158,11,.1); border-color:rgba(245,158,11,.3); color:#fde68a; }
+      #${PANEL_ID} .close { background:none; border:1px solid var(--border); color:var(--text-dim); font-size:16px; padding:0 8px; line-height:1.4; border-radius:var(--r-sm); cursor:pointer; }
+      #${PANEL_ID} .close:hover { color:var(--text); border-color:var(--accent-dim); }
+      /* Сводка перед заливом: плоская панель, зелёный корешок = «готово к отправке». */
+      #${PANEL_ID} .preview { background:var(--surface); border:1px solid var(--border);
+        border-left:2px solid var(--good); border-radius:var(--r); padding:9px 12px; font-size:11px;
+        color:var(--text-dim); line-height:1.8; margin-bottom:10px; }
+      /* Числа в сводке — шрифтом интерфейса, но табличные. Скобок и рамок нет:
+         число выделяется тем, что оно светлее подписи. */
+      #${PANEL_ID} .preview b { font-family:var(--font-ui); font-variant-numeric:tabular-nums;
+        color:var(--text); font-weight:600; white-space:nowrap; }
+      #${PANEL_ID} .fbl-readout { font-family:var(--font-ui); font-variant-numeric:tabular-nums;
+        color:var(--text); font-weight:600; white-space:nowrap; }
+      /* Журнал — единственное место моноширинного шрифта: это поток строк, где
+         выравнивание несёт смысл. Скан-линии сняты. */
+      #${PANEL_ID} .log { flex:1; min-height:0; overflow-y:auto; background:var(--bg);
+        border:1px solid var(--border); border-radius:var(--r-sm); padding:8px 10px;
+        font-family:var(--font-mono); font-size:11px; font-variant-numeric:tabular-nums; color:var(--text-dim); }
+      #${PANEL_ID} .log div { word-break:break-word; line-height:1.45; margin-bottom:2px; padding:1px 0; }
+      #${PANEL_ID} .log div.error-line { background:var(--crit-bg); border-left:2px solid var(--crit); padding-left:4px; margin:2px 0; color:var(--text); }
+      #${PANEL_ID} .log .ts { color:var(--text-faint); margin-right:6px; }
+      /* Прогресс: сплошная синяя полоса. Сегментация и свечение убраны —
+         дробление читалось как отдельная величина, которой нет. */
+      #${PANEL_ID} .progress { position:relative; height:4px; border-radius:2px; background:var(--surface-2);
+        overflow:hidden; margin:6px 0; }
+      #${PANEL_ID} .progress > div { height:100%; background:var(--accent); transition:width .3s; }
+      #${PANEL_ID} .progress::after { content:none; }
+      /* Статусная плашка: подложка-вердикт, текст читаемый. */
+      #${PANEL_ID} .status { padding:7px 10px; border-radius:var(--r-sm); font-size:12px; margin:8px 0;
+        background:var(--accent-bg); border:1px solid var(--border); color:var(--text); }
+      #${PANEL_ID} .status.success { background:var(--good-bg); border-color:var(--good); color:var(--text); }
+      #${PANEL_ID} .status.error { background:var(--crit-bg); border-color:var(--crit); color:var(--text); }
+      #${PANEL_ID} .status.warning { background:var(--warn-bg); border-color:var(--warn); color:var(--text); }
       #${PANEL_ID} .row { display:flex; gap:6px; }
       #${PANEL_ID} .row > * { flex:1; }
-      /* v0.7.0: responsive grids — settings flow 2-3 per row, collapse to 1 col on narrow panels */
       #${PANEL_ID} .grid2 { display:grid; grid-template-columns:repeat(2,1fr); gap:10px 14px; }
       #${PANEL_ID} .grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:10px 14px; }
       #${PANEL_ID} .grid2 > .field, #${PANEL_ID} .grid3 > .field { margin-bottom:0; min-width:0; }
       @media (max-width:760px) {
         #${PANEL_ID} .grid2, #${PANEL_ID} .grid3 { grid-template-columns:1fr; }
         #${PANEL_ID} .fbl-cols { flex-direction:column; }
-        #${PANEL_ID} .fbl-lograil { width:auto; max-height:30vh; border-right:none; border-bottom:1px solid #1e2a44; }
+        #${PANEL_ID} .fbl-lograil { width:auto; max-height:30vh; border-right:none; border-bottom:1px solid var(--border); }
         #${PANEL_ID} .fbl-lograil.collapsed { width:auto; }
       }
-      /* v0.7.0: marker chips · v0.18.0 HUD: resting = dim teal cell, "on" = bright cyan active cell (a selected state). */
+      /* Метки-переключатели: выбранная = заливка акцентом, прочие нейтральны. */
       #${PANEL_ID} .chips { display:flex; flex-wrap:wrap; gap:5px; }
-      #${PANEL_ID} .chip { padding:3px 10px; border-radius:6px; font-size:11px; cursor:pointer;
-        border:1px solid #1a4a5a; background:#06222d; color:#94a3b8; user-select:none; transition:all .12s; }
-      #${PANEL_ID} .chip:hover { border-color:#2b6e8a; color:#cbd5e1; }
-      #${PANEL_ID} .chip.on { background:rgba(56,189,248,.18); border-color:#38bdf8; color:#cffafe; font-weight:600; box-shadow:0 0 8px rgba(56,189,248,.3); }
-      #${PANEL_ID} .geo-tok { display:inline-block; padding:0 5px; border:1px solid #2d3a4f; border-radius:4px; cursor:pointer; user-select:none; line-height:1.5; }
-      #${PANEL_ID} .geo-tok:hover { border-color:#38bdf8; color:#cffafe; }
+      #${PANEL_ID} .chip { padding:3px 10px; border-radius:var(--r-sm); font-size:11px; cursor:pointer;
+        border:1px solid var(--border); background:none; color:var(--text-dim); user-select:none; transition:all .12s; }
+      #${PANEL_ID} .chip:hover { border-color:var(--accent-dim); color:var(--text); }
+      #${PANEL_ID} .chip.on { background:var(--accent-bg); border-color:var(--accent); color:var(--text); font-weight:600; }
+      #${PANEL_ID} .geo-tok { display:inline-block; padding:0 5px; border:1px solid var(--border); border-radius:var(--r-sm); cursor:pointer; user-select:none; line-height:1.5; }
+      #${PANEL_ID} .geo-tok:hover { border-color:var(--accent); color:var(--text); }
       #${PANEL_ID} .geo-tok.off { opacity:.35; text-decoration:line-through; }
-      #${PANEL_ID} .geo-tok-reset { color:#fbbf24; cursor:pointer; user-select:none; font-size:10px; }
+      #${PANEL_ID} .geo-tok-reset { color:var(--warn); cursor:pointer; user-select:none; font-size:10px; }
       #${PANEL_ID} .geo-tok-reset:hover { text-decoration:underline; }
-      #${PANEL_ID} hr { border:none; border-top:1px solid #103a47; margin:16px 0 12px; }
-      #${PANEL_ID} .s-pending { color:#475569; }
-      #${PANEL_ID} .s-uploading { color:#60a5fa; }
-      #${PANEL_ID} .s-processing { color:#fbbf24; }
-      #${PANEL_ID} .s-done { color:#4ade80; }
-      #${PANEL_ID} .s-error { color:#f87171; }
-      #${PANEL_ID} .fbl-bar { height:100%; width:0%; background:#3b82f6; transition:width .15s linear; }
+      #${PANEL_ID} hr { border:none; border-top:1px solid var(--border); margin:16px 0 12px; }
+      /* Состояния загрузки файла — по значению, не по яркости. */
+      #${PANEL_ID} .s-pending { color:var(--text-faint); }
+      #${PANEL_ID} .s-uploading { color:var(--accent); }
+      #${PANEL_ID} .s-processing { color:var(--warn); }
+      #${PANEL_ID} .s-done { color:var(--good); }
+      #${PANEL_ID} .s-error { color:var(--crit); }
+      #${PANEL_ID} .fbl-bar { height:100%; width:0%; background:var(--accent); transition:width .15s linear; }
+      /* Неопределённый прогресс: движение показывает, что процесс жив. Пульс убран,
+         остался сдвиг полосы — он читается и без свечения. */
       #${PANEL_ID} .fbl-bar.uploading,
       #${PANEL_ID} .fbl-bar.processing {
         width:100% !important; background-size:200% 100%; animation:fbl-pulse 1.5s linear infinite;
       }
       #${PANEL_ID} .fbl-bar.uploading {
-        background:linear-gradient(90deg, #3b82f6 0%, #60a5fa 50%, #3b82f6 100%);
+        background:linear-gradient(90deg, var(--surface-2) 0%, var(--accent) 50%, var(--surface-2) 100%);
       }
       #${PANEL_ID} .fbl-bar.processing {
-        background:linear-gradient(90deg, #fbbf24 0%, #f59e0b 50%, #fbbf24 100%);
+        background:linear-gradient(90deg, var(--surface-2) 0%, var(--warn) 50%, var(--surface-2) 100%);
       }
-      #${PANEL_ID} .fbl-bar.done  { background:#22c55e; width:100% !important; }
-      #${PANEL_ID} .fbl-bar.error { background:#ef4444; width:100% !important; }
+      #${PANEL_ID} .fbl-bar.done  { background:var(--good); width:100% !important; }
+      #${PANEL_ID} .fbl-bar.error { background:var(--crit); width:100% !important; }
       @keyframes fbl-pulse { 0% { background-position:200% 0; } 100% { background-position:-200% 0; } }
-      #${PANEL_ID} #fbl-drop.over { border-color:#3b82f6 !important; background:rgba(59,130,246,.06); color:#93c5fd; }
-      #${PANEL_ID} #fbl-drop.has-files { border-color:#22c55e; background:rgba(34,197,94,.04); color:#86efac; }
+      #${PANEL_ID} #fbl-drop.over { border-color:var(--accent) !important; background:var(--accent-bg); color:var(--text); }
+      #${PANEL_ID} #fbl-drop.has-files { border-color:var(--good); background:var(--good-bg); color:var(--text); }
     `;
     document.head.appendChild(style);
   }
@@ -3556,9 +3545,9 @@
       <div class="preview">
         <div><b>${plan.adsetCount}</b> adset${plan.adsetCount > 1 ? 's' : ''} ${plan.adsMode ? `× <b>${plan.adsModeItems.length}</b> creatives = <b>${plan.adCount}</b> ads` : `· <b>${plan.adCount}</b> ad${plan.adCount > 1 ? 's' : ''}`} · <b>${plan.isCBO ? 'CBO' : 'ABO'}</b> ${plan.isCBO ? `$${plan.cboBudget}/d` : `$${plan.aboTotal}/d total`}</div>
         <div>Objective: <b>${esc(plan.objective || '?')}</b> · Event: <b>${esc(effEvent)}</b></div>
-        <div>Pixel: <b style="color:${pixelValid && pixelInAccount ? '#22c55e' : '#ef4444'}">${esc(effPixel || 'MISSING')}</b> ${state.pixelOverride ? '<span style="color:#6e7681">(override)</span>' : '<span style="color:#6e7681">(from CSV)</span>'} ${!pixelValid && effPixel ? '<span style="color:#ef4444">⚠ invalid format</span>' : ''} ${pixelValid && state.pixelsList.length && !pixelInAccount ? '<span style="color:#ef4444">⚠ not in this account</span>' : ''}</div>
-        ${plan.adsMode ? `<div style="color:#22c55e">⚡ ads-mode: each adset gets ${plan.adsModeItems.length} new ads from creatives JSON (CSV Ad Name/Image Hash/Video ID ignored)</div>` : ''}
-        ${plan.sacList.length ? `<div style="color:#fbbf24">SAC: <b>${esc(plan.sacList[0])}</b> (region-targeting disabled)</div>` : ''}
+        <div>Pixel: <b style="color:${pixelValid && pixelInAccount ? 'var(--good)' : 'var(--crit)'}">${esc(effPixel || 'MISSING')}</b> ${state.pixelOverride ? '<span style="color:var(--text-faint)">(override)</span>' : '<span style="color:var(--text-faint)">(from CSV)</span>'} ${!pixelValid && effPixel ? '<span style="color:var(--crit)">⚠ invalid format</span>' : ''} ${pixelValid && state.pixelsList.length && !pixelInAccount ? '<span style="color:var(--crit)">⚠ not in this account</span>' : ''}</div>
+        ${plan.adsMode ? `<div style="color:var(--good)">⚡ ads-mode: each adset gets ${plan.adsModeItems.length} new ads from creatives JSON (CSV Ad Name/Image Hash/Video ID ignored)</div>` : ''}
+        ${plan.sacList.length ? `<div style="color:var(--warn)">SAC: <b>${esc(plan.sacList[0])}</b> (region-targeting disabled)</div>` : ''}
       </div>` : '';
 
     // Determine launch button state + label (tells user what's missing)
@@ -3585,8 +3574,8 @@
     const buttonLabel = blockReason
       ? blockReason
       : isMulti
-        ? `🚀 LAUNCH ▸ ${totalAds} ads × ${state.targetAccIds.length} accounts (${totalAds * state.targetAccIds.length} ops)`
-        : `🚀 LAUNCH ▸ ${totalAds} ads to ${esc(selectedAccs[0]?.name || 'account')}`;
+        ? `Запустить · ${totalAds} ads × ${state.targetAccIds.length} accounts (${totalAds * state.targetAccIds.length} ops)`
+        : `Запустить · ${totalAds} ads → ${esc(selectedAccs[0]?.name || 'account')}`;
     const progressPct = state.progress.total ? Math.round(state.progress.done / state.progress.total * 100) : 0;
     // v0.27.0: repeat-series UI helpers
     const repeatRuns = Math.max(1, Math.min(50, parseInt(state.repeatCount, 10) || 1));
@@ -3603,19 +3592,19 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>METALAUNCH PRO // v0.27.1</span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.28.0</span></span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
         <aside class="fbl-lograil${state.logRailCollapsed ? ' collapsed' : ''}">
           <div class="fbl-railhead">
-            <span class="ttl">◉ LIVE FEED${state.log.length ? ` · ${state.log.length}` : ''}</span>
+            <span class="ttl">Журнал${state.log.length ? ` · ${state.log.length}` : ''}</span>
             <button id="fbl-rail-toggle" title="${state.logRailCollapsed ? 'Expand log' : 'Collapse log'}" style="padding:1px 7px;font-size:12px;border-radius:5px">${state.logRailCollapsed ? '▶' : '◀'}</button>
           </div>
-          <div class="fbl-railstatus ${ledClass}"><span class="dot"></span>STATUS: ${railStatusWord}</div>
+          <div class="fbl-railstatus ${ledClass}"><span class="dot"></span>${railStatusWord}</div>
           <div class="fbl-railbody">
             ${state.progress.total ? `<div class="progress" style="margin:0 0 8px"><div style="width:${progressPct}%"></div></div>` : ''}
-            <div class="log fbl-scroll" id="fbl-log">${state.log.length ? logHtml() : '<div style="color:#475569">Logs appear here when you launch.<br><br>Build &amp; preview the campaign on the right →</div>'}</div>
+            <div class="log fbl-scroll" id="fbl-log">${state.log.length ? logHtml() : '<div style="color:var(--text-faint)">Logs appear here when you launch.<br><br>Build &amp; preview the campaign on the right →</div>'}</div>
           </div>
         </aside>
         <div class="fbl-main fbl-scroll" id="fbl-main">
@@ -3624,7 +3613,7 @@
       ${state.status.text ? `<div class="status ${state.status.type}">${esc(state.status.text)}</div>` : ''}
 
       <div class="field" style="background:rgba(168,85,247,.06);border:1px solid rgba(168,85,247,.2);border-radius:6px;padding:8px 10px">
-        <label style="color:#c084fc">⭐ Presets <span style="color:#6e7681">— ${state.presets.length} saved</span></label>
+        <label style="color:var(--vert-gambling)">⭐ Presets <span style="color:var(--text-faint)">— ${state.presets.length} saved</span></label>
         <div style="display:flex;gap:5px;align-items:center">
           <select id="fbl-preset-select" style="flex:1">
             <option value="">— select preset to load —</option>
@@ -3641,11 +3630,11 @@
           <button id="fbl-preset-delete" ${!state.selectedPresetId ? 'disabled' : ''} title="Delete selected preset">🗑</button>
         </div>
         <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
-          <label style="display:flex;align-items:center;gap:4px;margin:0;cursor:pointer;font-size:11px;color:#cbd5e1">
+          <label style="display:flex;align-items:center;gap:4px;margin:0;cursor:pointer;font-size:11px;color:var(--text-dim)">
             <input type="checkbox" id="fbl-auto-save" ${state.autoSavePreset ? 'checked' : ''} style="width:auto;margin:0">
             🤖 Auto-save preset on successful launch
           </label>
-          <label style="display:flex;align-items:center;gap:4px;margin:0;cursor:pointer;font-size:11px;color:#cbd5e1" title="When loading a preset, also re-select the ad accounts it was saved with">
+          <label style="display:flex;align-items:center;gap:4px;margin:0;cursor:pointer;font-size:11px;color:var(--text-dim)" title="When loading a preset, also re-select the ad accounts it was saved with">
             <input type="checkbox" id="fbl-preset-restore-accs" ${state.presetRestoreAccounts ? 'checked' : ''} style="width:auto;margin:0">
             🎯 Restore accounts from preset
           </label>
@@ -3654,33 +3643,33 @@
           <button id="fbl-preset-import-btn" title="Load presets from JSON" style="padding:4px 8px;font-size:11px">📥 Import</button>
           <input type="file" id="fbl-preset-import" accept=".json,application/json" style="display:none">
         </div>
-        <div style="font-size:10px;color:#6e7681;margin-top:4px">Saves: CSV (if loaded), all manual overrides, prefix, DSA, assignments, create status, repeat settings, target accounts. Excludes: creatives (need fresh hashes).</div>
+        <div style="font-size:10px;color:var(--text-faint);margin-top:4px">Saves: CSV (if loaded), all manual overrides, prefix, DSA, assignments, create status, repeat settings, target accounts. Excludes: creatives (need fresh hashes).</div>
       </div>
 
-      <div class="field" ${!state.rows.length ? 'style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.25);border-radius:6px;padding:8px 10px"' : ''}>
-        <label>1. CSV file ${!state.rows.length ? '<span style="color:#ef4444">⚠ required — defines campaign, adsets, geo, budget</span>' : ''}</label>
+      <div class="field" ${!state.rows.length ? 'style="background:var(--surface);border:1px solid var(--crit);border-radius:var(--r);padding:8px 10px"' : ''}>
+        <label>1. CSV file ${!state.rows.length ? '<span style="color:var(--crit)">⚠ required — defines campaign, adsets, geo, budget</span>' : ''}</label>
         <input type="file" id="fbl-csv" accept=".csv,.tsv,.txt">
-        ${state.fileName ? `<div style="font-size:11px;color:#22c55e;margin-top:4px">📄 ${esc(state.fileName)} · ${state.rows.length} rows parsed</div>` : ''}
+        ${state.fileName ? `<div style="font-size:11px;color:var(--good);margin-top:4px">📄 ${esc(state.fileName)} · ${state.rows.length} rows parsed</div>` : ''}
         <div style="margin-top:8px">
-          <div style="font-size:11px;color:#94a3b8;margin-bottom:3px">Campaign name prefix (optional) <span style="color:#6e7681">— launcher appends "| ${plan?.isCBO ? 'CBO' : 'ABO'} $X/d | Nas Mads | MMDDYY | acc_id"</span></div>
+          <div style="font-size:11px;color:var(--text-faint);margin-bottom:3px">Campaign name prefix (optional) <span style="color:var(--text-faint)">— launcher appends "| ${plan?.isCBO ? 'CBO' : 'ABO'} $X/d | Nas Mads | MMDDYY | acc_id"</span></div>
           <input type="text" id="fbl-camp-prefix" value="${esc(state.campNamePrefix)}" placeholder="e.g. VERT | Multi | COLD TEST">
-          ${state.campNamePrefix && plan ? `<div style="font-size:10px;color:#22c55e;margin-top:3px;font-family:ui-monospace,monospace;word-break:break-all">Preview: ${esc(state.campNamePrefix)} | ${plan.isCBO ? 'CBO' : 'ABO'} $${plan.isCBO ? plan.cboBudget : plan.aboTotal}/d | ${plan.adsetCount}as${plan.adCount}ads | ${(() => { const n = new Date(); return String(n.getMonth()+1).padStart(2,'0') + String(n.getDate()).padStart(2,'0') + String(n.getFullYear()).slice(-2); })()} | ${esc(isMulti ? '<acc_id>' : (primaryAcc || '<acc_id>'))}</div>` : ''}
+          ${state.campNamePrefix && plan ? `<div style="font-size:10px;color:var(--good);margin-top:3px;font-family:var(--font-mono);word-break:break-all">Preview: ${esc(state.campNamePrefix)} | ${plan.isCBO ? 'CBO' : 'ABO'} $${plan.isCBO ? plan.cboBudget : plan.aboTotal}/d | ${plan.adsetCount}as${plan.adCount}ads | ${(() => { const n = new Date(); return String(n.getMonth()+1).padStart(2,'0') + String(n.getDate()).padStart(2,'0') + String(n.getFullYear()).slice(-2); })()} | ${esc(isMulti ? '<acc_id>' : (primaryAcc || '<acc_id>'))}</div>` : ''}
         </div>
         <div style="margin-top:10px">
-          <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Name markers <span style="color:#6e7681">— appended " | X" to campaign + adset + ad names. CTRL = autorule opt-in.</span></div>
+          <div style="font-size:11px;color:var(--text-faint);margin-bottom:4px">Name markers <span style="color:var(--text-faint)">— appended " | X" to campaign + adset + ad names. CTRL = autorule opt-in.</span></div>
           <div class="chips">
             ${MARKER_PRESETS.map(m => `<span class="chip ${state.markers.includes(m) ? 'on' : ''}" data-marker="${esc(m)}">${esc(m)}</span>`).join('')}
           </div>
           <input type="text" id="fbl-markers-freeform" value="${esc(state.markersFreeform)}" placeholder="extra markers, pipe-separated — e.g. COLD | Q2" style="margin-top:6px">
-          ${state.markers.length ? `<div style="font-size:10px;color:#22c55e;margin-top:4px;font-family:ui-monospace,monospace;word-break:break-all">Names get: <b>${esc(state.markers.map(m => '| ' + m).join(' '))}</b> ${state.markers.includes('CTRL') ? '' : '<span style="color:#fbbf24">· no CTRL → autorules skip these</span>'}</div>` : ''}
+          ${state.markers.length ? `<div style="font-size:10px;color:var(--good);margin-top:4px;font-family:var(--font-mono);word-break:break-all">Names get: <b>${esc(state.markers.map(m => '| ' + m).join(' '))}</b> ${state.markers.includes('CTRL') ? '' : '<span style="color:var(--warn)">· no CTRL → autorules skip these</span>'}</div>` : ''}
         </div>
       </div>
 
       <div class="field">
-        <label>1b. Campaign · objective, budget, schedule <span style="color:#6e7681">— fill to override CSV. Objective required for CSV-less.</span></label>
+        <label>1b. Campaign · objective, budget, schedule <span style="color:var(--text-faint)">— fill to override CSV. Objective required for CSV-less.</span></label>
         <div class="grid2">
           <div class="field">
-            <label>Campaign objective ${plan?.csvless ? '<span style="color:#fbbf24">⚠ required (no CSV)</span>' : ''}</label>
+            <label>Campaign objective ${plan?.csvless ? '<span style="color:var(--warn)">⚠ required (no CSV)</span>' : ''}</label>
             <select id="fbl-objective">
               <option value="" ${state.objectiveOverride === '' ? 'selected' : ''}>— CSV —</option>
               <option value="OUTCOME_SALES" ${state.objectiveOverride === 'OUTCOME_SALES' ? 'selected' : ''}>Sales (conversions)</option>
@@ -3692,7 +3681,7 @@
             </select>
           </div>
           <div class="field">
-            <label>Start time <span style="color:#6e7681">— empty = now (Kyiv→US timing)</span></label>
+            <label>Start time <span style="color:var(--text-faint)">— empty = now (Kyiv→US timing)</span></label>
             <input type="datetime-local" id="fbl-start-date" value="${esc(state.startDate)}">
           </div>
         </div>
@@ -3720,7 +3709,7 @@
         </div>
         ${isLifetimeUI ? `
         <div class="field" style="margin-top:10px">
-          <label>Lifetime end date <span style="color:${budgetEndTimeUnix() ? '#22c55e' : '#fbbf24'}">${budgetEndTimeUnix() ? '✓' : '⚠ required for lifetime budget'}</span></label>
+          <label>Lifetime end date <span style="color:${budgetEndTimeUnix() ? 'var(--good)' : 'var(--warn)'}">${budgetEndTimeUnix() ? '✓' : '⚠ required for lifetime budget'}</span></label>
           <input type="datetime-local" id="fbl-budget-end" value="${esc(state.budgetEndDate)}">
         </div>` : ''}
         <div class="grid2" style="margin-top:10px">
@@ -3734,7 +3723,7 @@
             </select>
           </div>
           <div class="field">
-            <label>Bid / cost cap ($) <span style="color:#6e7681">${bidNeedsCapUI ? '' : '(no cap → unused)'}</span></label>
+            <label>Bid / cost cap ($) <span style="color:var(--text-faint)">${bidNeedsCapUI ? '' : '(no cap → unused)'}</span></label>
             <input type="text" id="fbl-bid-amount" value="${esc(state.bidAmountOverride)}" placeholder="${bidNeedsCapUI ? 'e.g. 12.50' : 'n/a for highest-volume'}"${bidNeedsCapUI ? '' : ' disabled style="opacity:.4"'}>
           </div>
         </div>
@@ -3743,7 +3732,7 @@
       ${previewHtml}
 
       <div class="field">
-        <label>2. Target accounts <span style="color:#6e7681">— ${hasAccounts ? `<span class="fbl-readout">${state.targetAccIds.length}</span> selected` : 'pick one or more'}</span></label>
+        <label>2. Target accounts <span style="color:var(--text-faint)">— ${hasAccounts ? `<span class="fbl-readout">${state.targetAccIds.length}</span> selected` : 'pick one or more'}</span></label>
         <div class="row">
           <input type="text" id="fbl-acc-filter" placeholder="Filter by name, ID, BM..." value="${esc(state.accFilter)}" style="flex:2">
           <button id="fbl-reload-acc" ${accountsLoading ? 'disabled' : ''}>${accountsLoading ? '⏳' : '↻'}</button>
@@ -3752,27 +3741,27 @@
         ${selectedAccs.length ? `
         <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">
           ${selectedAccs.map(a => `
-            <span style="background:rgba(56,189,248,.12);border:1px solid rgba(56,189,248,.4);border-radius:6px;padding:2px 8px;font-size:11px;color:#cffafe;display:inline-flex;align-items:center;gap:5px;font-family:ui-monospace,monospace;box-shadow:0 0 8px rgba(56,189,248,.2)" title="${esc(a.id)} · BM: ${esc(a.bm)}">
-              <span style="color:#38bdf8;opacity:.8">[</span>${esc(a.label)}<span style="color:#38bdf8;opacity:.8">]</span>
-              <button class="fbl-acc-remove" data-acc="${esc(a.id)}" style="background:none;border:none;color:#fca5a5;padding:0 2px;cursor:pointer;font-size:13px;line-height:1" title="Remove">✕</button>
+            <span style="background:var(--accent-bg);border:1px solid var(--accent);border-radius:6px;padding:2px 8px;font-size:11px;color:var(--text);display:inline-flex;align-items:center;gap:5px;font-family:var(--font-mono);" title="${esc(a.id)} · BM: ${esc(a.bm)}">
+              <span style="color:var(--accent);opacity:.8">[</span>${esc(a.label)}<span style="color:var(--accent);opacity:.8">]</span>
+              <button class="fbl-acc-remove" data-acc="${esc(a.id)}" style="background:none;border:none;color:var(--crit);padding:0 2px;cursor:pointer;font-size:13px;line-height:1" title="Remove">✕</button>
             </span>
           `).join('')}
         </div>` : ''}
         ${state.showAccountPicker ? `
-        <div id="fbl-acc-list" style="margin-top:6px;max-height:240px;overflow:auto;border:1px solid #334155;border-radius:5px;background:#1e293b">
+        <div id="fbl-acc-list" style="margin-top:6px;max-height:240px;overflow:auto;border:1px solid var(--border);border-radius:5px;background:var(--surface)">
           ${visibleAccs.length ? visibleAccs.map(a => {
             const isSel = state.targetAccIds.includes(a.id);
-            return `<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;font-size:12px;${isSel ? 'background:rgba(34,197,94,.08)' : ''};border-bottom:1px solid #0f172a">
+            return `<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;font-size:12px;${isSel ? 'background:var(--good-bg)' : ''};border-bottom:1px solid var(--bg)">
               <input type="checkbox" class="fbl-acc-cb" data-acc="${esc(a.id)}" ${isSel ? 'checked' : ''}>
-              <span style="flex:1;color:#cbd5e1"><span style="color:#94a3b8">${esc(a.bm)}</span> · ${esc(a.label)} <span style="color:#64748b;font-size:10px">${esc(a.id)}</span></span>
+              <span style="flex:1;color:var(--text-dim)"><span style="color:var(--text-faint)">${esc(a.bm)}</span> · ${esc(a.label)} <span style="color:var(--text-faint);font-size:10px">${esc(a.id)}</span></span>
             </label>`;
-          }).join('') : '<div style="padding:8px 10px;color:#64748b;font-size:11px">No accounts match filter</div>'}
+          }).join('') : '<div style="padding:8px 10px;color:var(--text-faint);font-size:11px">No accounts match filter</div>'}
         </div>` : ''}
       </div>
 
       <div class="grid2">
       <div class="field">
-        <label>3. Page ID <span style="color:#6e7681">— ${state.pagesLoading ? 'loading pages...' : (() => {
+        <label>3. Page ID <span style="color:var(--text-faint)">— ${state.pagesLoading ? 'loading pages...' : (() => {
           const promo = state.pagesList.filter(p => p.promotable).length;
           const other = state.pagesList.length - promo;
           return `<span class="fbl-readout">${state.pagesList.length}</span> pages found${other ? ` (<span class="fbl-readout">${promo}</span> promotable + ${other} more)` : ''}`;
@@ -3791,10 +3780,10 @@
         <input type="text" id="fbl-page-id" value="${esc(state.pageIdOverride)}" placeholder="${state.pagesList.length ? 'or paste custom page ID' : 'page ID (14-20 digits) — empty = use CSV'}" style="margin-bottom:8px">
         <label style="display:flex;align-items:center;gap:6px;margin-top:5px;cursor:pointer">
           <input type="checkbox" id="fbl-use-page-as-actor" ${state.usePageAsActor ? 'checked' : ''}>
-          <span><b style="color:${state.usePageAsActor ? '#fbbf24' : 'inherit'}">⛔ FB-only — БЕЗ Instagram</b> <span style="color:#6e7681">— ставь ТОЛЬКО если IG не нужен совсем: шлёт один page_id, instagram_user_id НЕ отправляется → объявление НЕ крутится в Instagram, IG-слот пустой. ${state.usePageAsActor ? '<b style="color:#fbbf24">⚠ сейчас включено — IG выключен</b>' : ''}</span></span>
+          <span><b style="color:${state.usePageAsActor ? 'var(--warn)' : 'inherit'}">⛔ FB-only — БЕЗ Instagram</b> <span style="color:var(--text-faint)">— ставь ТОЛЬКО если IG не нужен совсем: шлёт один page_id, instagram_user_id НЕ отправляется → объявление НЕ крутится в Instagram, IG-слот пустой. ${state.usePageAsActor ? '<b style="color:var(--warn)">⚠ сейчас включено — IG выключен</b>' : ''}</span></span>
         </label>
-        ${!state.usePageAsActor ? `<div style="font-size:11px;color:#94a3b8;margin-top:3px;padding-left:22px">дефолт (галка снята): лаунчер ищет IG страницы по лестнице (page IG → account actor → PBIA → история каба) и шлёт его явным <b>instagram_user_id</b> — как AM. Нашёл → крутится в FB и IG под именем Страницы. Не нашёл → предупреждение, IG-слот будет пустой.</div>` : ''}
-        <label style="margin-top:5px;${state.usePageAsActor ? 'opacity:.4;pointer-events:none' : ''}">Instagram Account ID <span style="color:#6e7681">— empty = auto-fetch from Page's connected IG${isMulti ? ' · ⚠ same ID for all accounts' : ''}</span></label>
+        ${!state.usePageAsActor ? `<div style="font-size:11px;color:var(--text-faint);margin-top:3px;padding-left:22px">дефолт (галка снята): лаунчер ищет IG страницы по лестнице (page IG → account actor → PBIA → история каба) и шлёт его явным <b>instagram_user_id</b> — как AM. Нашёл → крутится в FB и IG под именем Страницы. Не нашёл → предупреждение, IG-слот будет пустой.</div>` : ''}
+        <label style="margin-top:5px;${state.usePageAsActor ? 'opacity:.4;pointer-events:none' : ''}">Instagram Account ID <span style="color:var(--text-faint)">— empty = auto-fetch from Page's connected IG${isMulti ? ' · ⚠ same ID for all accounts' : ''}</span></label>
         <input type="text" id="fbl-ig-id" value="${esc(state.instagramOverride)}" placeholder="leave empty → launcher auto-detects from Page · or paste IG actor ID to override"${state.usePageAsActor ? ' disabled style="opacity:.4"' : ''}>
         ${(() => {
           // v0.6.4: cache key changed to "acc__page" since same page can resolve differently
@@ -3805,11 +3794,11 @@
           const key = `${probeAcc}__${probePage}`;
           const ig = state.pageIgMap[key];
           if (state.pageIgLoading[key]) {
-            return `<div style="font-size:11px;color:#94a3b8;margin-top:4px">🔄 fetching Instagram actor for account ${esc(probeAcc || '?')}...</div>`;
+            return `<div style="font-size:11px;color:var(--text-faint);margin-top:4px">🔄 fetching Instagram actor for account ${esc(probeAcc || '?')}...</div>`;
           }
           if (!ig) return '';
           if (state.instagramOverride) {
-            return `<div style="font-size:11px;color:#6e7681;margin-top:4px">Override active — auto-detected (${esc(ig.igId || 'none')}) ignored</div>`;
+            return `<div style="font-size:11px;color:var(--text-faint);margin-top:4px">Override active — auto-detected (${esc(ig.igId || 'none')}) ignored</div>`;
           }
           if (ig.igId) {
             // v0.11.0 sources: connected_instagram_account+promotable / *-unverified / account-substitute / pbia / page
@@ -3821,15 +3810,15 @@
               : s === 'pbia' ? 'page-backed IG (PBIA)'
               : s === 'history' ? `page-backed IG from account history (reused PBIA · seen in ${ig.count} ad${ig.count > 1 ? 's' : ''})`
               : s === 'page' ? '⚠ page actor (may not be promotable here)' : 'detected';
-            const color = (promotable || s === 'pbia' || s === 'history') ? '#22c55e' : '#fbbf24';
+            const color = (promotable || s === 'pbia' || s === 'history') ? 'var(--good)' : 'var(--warn)';
             return `<div style="font-size:11px;color:${color};margin-top:4px">🔗 ${srcLabel}: <b>${esc(ig.igId)}</b>${ig.igName ? ` @${esc(ig.igName)}` : ''}${isMulti ? ' · lookup runs per account at launch' : ''}</div>`;
           }
-          return `<div style="font-size:11px;color:#fbbf24;margin-top:4px">⚠ No Instagram identity for account ${esc(probeAcc || '?')} — page has no linked IG, no readable PBIA, nothing in account history. Ads run FB-only, the <b>AM IG field stays empty</b> (use_page_actor_override does NOT fill it). Link an IG, paste an IG ID above, or run one ad on this page from AM once.</div>`;
+          return `<div style="font-size:11px;color:var(--warn);margin-top:4px">⚠ No Instagram identity for account ${esc(probeAcc || '?')} — page has no linked IG, no readable PBIA, nothing in account history. Ads run FB-only, the <b>AM IG field stays empty</b> (use_page_actor_override does NOT fill it). Link an IG, paste an IG ID above, or run one ad on this page from AM once.</div>`;
         })()}
       </div>
 
       <div class="field">
-        <label>4. Pixel &amp; Conversion event <span style="color:#6e7681">— ${state.pixelsLoading ? 'loading pixels...' : `<span class="fbl-readout">${state.pixelsList.length}</span> pixels in account`}</span></label>
+        <label>4. Pixel &amp; Conversion event <span style="color:var(--text-faint)">— ${state.pixelsLoading ? 'loading pixels...' : `<span class="fbl-readout">${state.pixelsList.length}</span> pixels in account`}</span></label>
         ${state.pixelsList.length ? `
         <select id="fbl-pixel-select" style="margin-bottom:5px">
           <option value="">— from CSV column —</option>
@@ -3849,7 +3838,7 @@
           <option value="SEARCH" ${state.customEventOverride === 'SEARCH' ? 'selected' : ''}>SEARCH</option>
           <option value="CONTACT" ${state.customEventOverride === 'CONTACT' ? 'selected' : ''}>CONTACT</option>
         </select>
-        <label style="margin-top:6px">Attribution window <span style="color:#6e7681">— how FB credits conversions to clicks/views</span></label>
+        <label style="margin-top:6px">Attribution window <span style="color:var(--text-faint)">— how FB credits conversions to clicks/views</span></label>
         <select id="fbl-attribution">
           <option value="" ${state.attributionOverride === '' ? 'selected' : ''}>— CSV / default (1-day click) —</option>
           <option value="1d_click" ${state.attributionOverride === '1d_click' ? 'selected' : ''}>1-day click</option>
@@ -3860,8 +3849,8 @@
       </div>
       </div>
 
-      <div class="field" ${!state.dsaBeneficiary ? 'style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:6px;padding:8px 10px"' : ''}>
-        <label>5. DSA Advertiser <span style="color:${state.dsaBeneficiary ? '#22c55e' : '#fbbf24'}">${state.dsaBeneficiary ? '✓ set' : '⚠ required — FB rejects ad sets without it'}</span>${hasEuTargeting(state.rows) ? ' <span style="color:#fbbf24">· EU targeting detected</span>' : ''}</label>
+      <div class="field" ${!state.dsaBeneficiary ? 'style="background:var(--surface);border:1px solid var(--warn);border-radius:var(--r);padding:8px 10px"' : ''}>
+        <label>5. DSA Advertiser <span style="color:${state.dsaBeneficiary ? 'var(--good)' : 'var(--warn)'}">${state.dsaBeneficiary ? '✓ set' : '⚠ required — FB rejects ad sets without it'}</span>${hasEuTargeting(state.rows) ? ' <span style="color:var(--warn)">· EU targeting detected</span>' : ''}</label>
         <div class="grid2">
           <div class="field"><input type="text" id="fbl-dsa-beneficiary" value="${esc(state.dsaBeneficiary)}" placeholder="Beneficiary — business or page name"></div>
           <div class="field"><input type="text" id="fbl-dsa-payer" value="${esc(state.dsaPayer)}" placeholder="Payer (optional — defaults to beneficiary)"></div>
@@ -3869,9 +3858,9 @@
       </div>
 
       <div class="field">
-        <label>5b. Targeting <span style="color:#6e7681">— fill to override CSV for ALL adsets; empty = use CSV column</span>${plan?.sacList.length ? ` <span style="color:#fbbf24">· SAC: ${esc(plan.sacList[0])} — state targeting disabled</span>` : ''}</label>
+        <label>5b. Targeting <span style="color:var(--text-faint)">— fill to override CSV for ALL adsets; empty = use CSV column</span>${plan?.sacList.length ? ` <span style="color:var(--warn)">· SAC: ${esc(plan.sacList[0])} — state targeting disabled</span>` : ''}</label>
         <div class="field">
-          <label>Special Ad Category <span style="color:#6e7681">— lead-gen insurance = Financial; restricts state targeting</span></label>
+          <label>Special Ad Category <span style="color:var(--text-faint)">— lead-gen insurance = Financial; restricts state targeting</span></label>
           <select id="fbl-sac">
             <option value="" ${state.sacOverride === '' ? 'selected' : ''}>— CSV —</option>
             <option value="NONE" ${state.sacOverride === 'NONE' ? 'selected' : ''}>None (no restriction)</option>
@@ -3884,30 +3873,30 @@
           </select>
         </div>
         <div class="field">
-          <label>Geo preset <span style="color:#6e7681">— lead-gen tiers fill US states · gambling pools fill countries (editable after)</span></label>
+          <label>Geo preset <span style="color:var(--text-faint)">— lead-gen tiers fill US states · gambling pools fill countries (editable after)</span></label>
           <select id="fbl-geo-cluster">
             <option value="">— pick a preset to fill geo —</option>
             ${['Lead-gen — US states', 'Gambling — countries'].map(g => `<optgroup label="${esc(g)}">${GEO_PRESETS.map((p, i) => p.group === g ? `<option value="${i}">${esc(p.label)}</option>` : '').join('')}</optgroup>`).join('')}
           </select>
         </div>
-        <div class="field" ${splitActive ? 'style="border-left-color:#22c55e"' : ''}>
-          <label>Split into ad sets by cluster <span style="color:#6e7681">— click clusters → one ad set EACH, own geo. Waterfall in one launch.</span></label>
+        <div class="field" ${splitActive ? 'style="border-left-color:var(--good)"' : ''}>
+          <label>Split into ad sets by cluster <span style="color:var(--text-faint)">— click clusters → one ad set EACH, own geo. Waterfall in one launch.</span></label>
           <div class="chips">
             ${GEO_PRESETS.map((p, i) => `<span class="chip ${state.adsetSplitClusters.includes(i) ? 'on' : ''}" data-clusteridx="${i}" title="${esc(clusterGeoValue(i))}">${esc(p.label.replace(/ \(.*\)$/, '').replace(/ · .*/, ''))}${clusterEdited(i) ? ' ✎' : ''}</span>`).join('')}
           </div>
           ${splitActive ? `
-          <div style="margin-top:8px;background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.25);border-radius:6px;padding:7px 9px">
-            <div style="font-size:11px;color:#4ade80;font-weight:600;margin-bottom:5px">→ ${splitClustersSel.length} ad set${splitClustersSel.length > 1 ? 's' : ''} will be created (creatives go into each):</div>
+          <div style="margin-top:8px;background:var(--surface);border:1px solid var(--good);border-radius:var(--r);padding:7px 9px">
+            <div style="font-size:11px;color:var(--good);font-weight:600;margin-bottom:5px">→ ${splitClustersSel.length} ad set${splitClustersSel.length > 1 ? 's' : ''} will be created (creatives go into each):</div>
             ${splitClustersSel.map((p, i) => {
               const defToks = GEO_PRESETS[p.idx].value.split(',').map(s => s.trim()).filter(Boolean);
               const onToks = clusterTokens(p.idx);
-              return `<div style="font-size:11px;color:#cbd5e1;line-height:2;margin-bottom:3px"><b style="color:#fff">${String(i + 1).padStart(2, '0')} ${esc(p.label.replace(/ \(.*\)$/, '').replace(/ · .*/, ''))}</b> <span style="color:#6e7681">${p.field === 'states' ? 'states' : 'countries'} ${onToks.length}/${defToks.length}:</span> ${defToks.map(t => `<span class="geo-tok${onToks.includes(t) ? '' : ' off'}" data-geocluster="${p.idx}" data-geotok="${esc(t)}" title="${onToks.includes(t) ? 'click to exclude from this ad set' : 'click to re-include'}">${esc(t)}</span>`).join(' ')}${clusterEdited(p.idx) ? ` <span class="geo-tok-reset" data-clusterreset="${p.idx}" title="restore full preset">↺ reset</span>` : ''}</div>`;
+              return `<div style="font-size:11px;color:var(--text-dim);line-height:2;margin-bottom:3px"><b style="color:#fff">${String(i + 1).padStart(2, '0')} ${esc(p.label.replace(/ \(.*\)$/, '').replace(/ · .*/, ''))}</b> <span style="color:var(--text-faint)">${p.field === 'states' ? 'states' : 'countries'} ${onToks.length}/${defToks.length}:</span> ${defToks.map(t => `<span class="geo-tok${onToks.includes(t) ? '' : ' off'}" data-geocluster="${p.idx}" data-geotok="${esc(t)}" title="${onToks.includes(t) ? 'click to exclude from this ad set' : 'click to re-include'}">${esc(t)}</span>`).join(' ')}${clusterEdited(p.idx) ? ` <span class="geo-tok-reset" data-clusterreset="${p.idx}" title="restore full preset">↺ reset</span>` : ''}</div>`;
             }).join('')}
-            <div style="font-size:10px;color:#fbbf24;margin-top:4px">↑ single Countries / US-states fields below are ignored while split is on. Click a chip again to remove. Click a country/state above to exclude it from that ad set.</div>
+            <div style="font-size:10px;color:var(--warn);margin-top:4px">↑ single Countries / US-states fields below are ignored while split is on. Click a chip again to remove. Click a country/state above to exclude it from that ad set.</div>
           </div>` : ''}
         </div>
         <div class="field">
-          <label>Or — number of ad sets <span style="color:#6e7681">${
+          <label>Or — number of ad sets <span style="color:var(--text-faint)">${
             !plan?.csvless ? '(driven by CSV ad-set names — ignored here)'
             : splitActive ? '(ignored — cluster split defines ad sets)'
             : '— CSV-less: make N identical ad sets (same targeting). Distribute creatives in 6.5 below.'
@@ -3916,11 +3905,11 @@
         </div>
         <div class="grid2" style="margin-top:10px">
           <div class="field">
-            <label>Countries <span style="color:#6e7681">${splitActive ? '(ignored — cluster split on)' : '(codes, e.g. US,CA)'}</span></label>
+            <label>Countries <span style="color:var(--text-faint)">${splitActive ? '(ignored — cluster split on)' : '(codes, e.g. US,CA)'}</span></label>
             <input type="text" id="fbl-geo-countries" value="${esc(state.geoCountriesOverride)}" placeholder="${splitActive ? 'using cluster split ↑' : 'empty = CSV (default US)'}"${splitActive ? ' disabled style="opacity:.4"' : ''}>
           </div>
           <div class="field">
-            <label>US states <span style="color:#6e7681">${splitActive ? '(ignored — cluster split on)' : plan?.sacList.length ? '(disabled under SAC)' : '(names, comma-separated)'}</span></label>
+            <label>US states <span style="color:var(--text-faint)">${splitActive ? '(ignored — cluster split on)' : plan?.sacList.length ? '(disabled under SAC)' : '(names, comma-separated)'}</span></label>
             <input type="text" id="fbl-geo-states" value="${esc(state.geoStatesOverride)}" placeholder="${splitActive ? 'using cluster split ↑' : 'empty = CSV'}"${(splitActive || plan?.sacList.length) ? ' disabled style="opacity:.4"' : ''}>
           </div>
         </div>
@@ -3944,7 +3933,7 @@
           </div>
         </div>
         <div class="field" style="margin-top:10px">
-          <label>Placements <span style="color:#6e7681">— preset fills the boxes, then toggle. Empty = CSV / automatic.</span></label>
+          <label>Placements <span style="color:var(--text-faint)">— preset fills the boxes, then toggle. Empty = CSV / automatic.</span></label>
           <div class="grid3">
             <div class="field">
               <label style="font-size:10px">Quick preset</label>
@@ -3969,7 +3958,7 @@
               </select>
             </div>
             <div class="field">
-              <label style="font-size:10px">Advantage Audience <span style="color:#475569">(On → age 18-65)</span></label>
+              <label style="font-size:10px">Advantage Audience <span style="color:var(--text-faint)">(On → age 18-65)</span></label>
               <select id="fbl-advantage">
                 <option value="" ${state.advantageAudienceOverride === '' ? 'selected' : ''}>— CSV —</option>
                 <option value="0" ${state.advantageAudienceOverride === '0' ? 'selected' : ''}>Off</option>
@@ -3977,11 +3966,11 @@
               </select>
             </div>
           </div>
-          <div style="font-size:10px;color:#6e7681;margin:6px 0 3px">Platforms</div>
+          <div style="font-size:10px;color:var(--text-faint);margin:6px 0 3px">Platforms</div>
           <div class="chips">
             ${PLACEMENT_PLATFORMS.map(([id, label]) => `<span class="chip ${state.placementPlatforms.includes(id) ? 'on' : ''}" data-platform="${esc(id)}">${esc(label)}</span>`).join('')}
           </div>
-          <div style="font-size:10px;color:#6e7681;margin:6px 0 3px">Position groups <span style="color:#475569">(none = all positions)</span></div>
+          <div style="font-size:10px;color:var(--text-faint);margin:6px 0 3px">Position groups <span style="color:var(--text-faint)">(none = all positions)</span></div>
           <div class="chips">
             ${Object.entries(PLACEMENT_POSITION_GROUPS).map(([k, def]) => `<span class="chip ${state.placementPositionGroups.includes(k) ? 'on' : ''}" data-posgroup="${esc(k)}">${esc(def.label)}</span>`).join('')}
           </div>
@@ -3989,20 +3978,20 @@
       </div>
 
       <div class="field">
-        <label>6. Creatives — upload files OR paste hashes/JSON <span style="color:#6e7681">— overrides CSV Image Hash &amp; Video ID</span></label>
+        <label>6. Creatives — upload files OR paste hashes/JSON <span style="color:var(--text-faint)">— overrides CSV Image Hash &amp; Video ID</span></label>
         <div style="margin-bottom:8px">
-          <div style="font-size:10px;color:#6e7681;margin-bottom:5px">💡 Upload <code>video1.mp4</code> + <code>video1.jpg</code> (same base name) → auto-pairs as video + thumbnail</div>
-          ${!hasAccounts ? '<div style="font-size:11px;color:#fbbf24;padding:6px 8px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:5px;margin-bottom:5px">⚠ Select at least one target account (step 2) before uploading</div>' : ''}
-          ${isMulti ? `<div style="font-size:11px;color:#22c55e;padding:6px 8px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);border-radius:5px;margin-bottom:5px">🌐 Multi-account: each file will be uploaded into all ${state.targetAccIds.length} selected accounts (sequential)</div>` : ''}
-          <div id="fbl-drop" style="border:2px dashed #334155;border-radius:8px;padding:20px 12px;text-align:center;cursor:${hasAccounts && !state.uploading ? 'pointer' : 'not-allowed'};color:#475569;font-size:12px;user-select:none;transition:border-color .15s,background .15s;${hasAccounts && !state.uploading ? '' : 'opacity:.5'}">
-            <div style="font-size:13px;font-weight:600;letter-spacing:2px;margin-bottom:4px;color:#475569">[ DROP ZONE ]</div>
+          <div style="font-size:10px;color:var(--text-faint);margin-bottom:5px">💡 Upload <code>video1.mp4</code> + <code>video1.jpg</code> (same base name) → auto-pairs as video + thumbnail</div>
+          ${!hasAccounts ? '<div style="font-size:11px;color:var(--warn);padding:6px 8px;background:var(--warn-bg);border:1px solid var(--warn);border-radius:5px;margin-bottom:5px">⚠ Select at least one target account (step 2) before uploading</div>' : ''}
+          ${isMulti ? `<div style="font-size:11px;color:var(--good);padding:6px 8px;background:var(--good-bg);border:1px solid var(--good);border-radius:5px;margin-bottom:5px">🌐 Multi-account: each file will be uploaded into all ${state.targetAccIds.length} selected accounts (sequential)</div>` : ''}
+          <div id="fbl-drop" style="border:2px dashed var(--border);border-radius:8px;padding:20px 12px;text-align:center;cursor:${hasAccounts && !state.uploading ? 'pointer' : 'not-allowed'};color:var(--text-faint);font-size:12px;user-select:none;transition:border-color .15s,background .15s;${hasAccounts && !state.uploading ? '' : 'opacity:.5'}">
+            <div style="font-size:13px;font-weight:600;margin-bottom:4px;color:var(--text-faint)">[ DROP ZONE ]</div>
             Drop images or videos here<br>
-            <span style="font-size:10px;color:#334155">PNG / JPG / MP4 / MOV — or click to browse</span>
+            <span style="font-size:10px;color:var(--border)">PNG / JPG / MP4 / MOV — or click to browse</span>
           </div>
           <input type="file" id="fbl-upload-files" multiple accept="image/*,video/*" ${!hasAccounts || state.uploading ? 'disabled' : ''} style="display:none">
           ${state.uploads.length ? `<div style="margin-top:8px;display:flex;flex-direction:column;gap:4px">${state.uploads.map((u, idx) => {
             const fmtSize = (b) => b < 1024 ? b + 'B' : b < 1048576 ? (b/1024).toFixed(0)+'KB' : (b/1048576).toFixed(1)+'MB';
-            const iconBg = u.type === 'video' ? '#c084fc' : '#60a5fa';
+            const iconBg = u.type === 'video' ? 'var(--vert-gambling)' : 'var(--accent)';
             const statusMap = {
               pending: { text: 'pending', cls: 's-pending', barCls: '' },
               uploading: { text: 'uploading', cls: 's-uploading', barCls: 'uploading' },
@@ -4014,22 +4003,22 @@
             const wasPairedThumb = u.type === 'image' && u.status === 'done' && state.creativesParsed?.mode === 'ads'
               && state.creativesParsed.items.some(it => it.videoId && it.thumbnailHash === u.imageHash);
             const meta = u.status === 'done'
-              ? wasPairedThumb ? '<span style="color:#a78bfa">🔗 thumb</span>' : `<code style="font-size:10px;color:#64748b">${esc((u.imageHash || u.videoId || '').slice(0, 12))}…</code>`
-              : u.status === 'error' ? `<span style="color:#f87171;font-size:10px">${esc((u.error || '').slice(0, 22))}</span>`
-              : `<span style="color:#475569;font-size:10px">${fmtSize(u.size || 0)}</span>`;
+              ? wasPairedThumb ? '<span style="color:var(--vert-gambling)">🔗 thumb</span>' : `<code style="font-size:10px;color:var(--text-faint)">${esc((u.imageHash || u.videoId || '').slice(0, 12))}…</code>`
+              : u.status === 'error' ? `<span style="color:var(--crit);font-size:10px">${esc((u.error || '').slice(0, 22))}</span>`
+              : `<span style="color:var(--text-faint);font-size:10px">${fmtSize(u.size || 0)}</span>`;
             const showBar = u.status !== 'pending';
             const showErrToggle = u.status === 'error';
             return `
-            <div class="fbl-uitem ${u.status === 'error' ? 'has-error' : ''}" style="padding:5px 8px;background:#1e293b;border-radius:5px;border:1px solid ${u.status === 'error' ? '#7f1d1d' : '#334155'}">
+            <div class="fbl-uitem ${u.status === 'error' ? 'has-error' : ''}" style="padding:5px 8px;background:var(--surface);border-radius:5px;border:1px solid ${u.status === 'error' ? 'var(--crit)' : 'var(--border)'}">
               <div style="display:grid;grid-template-columns:24px 1fr auto auto;align-items:center;gap:6px">
                 <div style="font-size:9px;font-weight:700;text-align:center;padding:1px 3px;border-radius:3px;border:1px solid ${iconBg};color:${iconBg}">${u.type === 'video' ? 'VID' : 'IMG'}</div>
-                <div style="font-size:11px;color:#cbd5e1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(u.name)}">${esc(u.name)}</div>
+                <div style="font-size:11px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(u.name)}">${esc(u.name)}</div>
                 <div style="font-size:10px;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${meta}</div>
                 <div class="${s.cls}" style="font-size:11px;min-width:60px;text-align:right">${esc(s.text)}</div>
               </div>
-              ${showBar ? `<div style="height:3px;background:#0f172a;border-radius:2px;overflow:hidden;margin-top:3px"><div class="fbl-bar ${s.barCls}"></div></div>` : ''}
-              ${showErrToggle ? `<div class="fbl-err-toggle" data-idx="${idx}" style="font-size:10px;color:#94a3b8;cursor:pointer;margin-top:4px;background:#0f172a;padding:2px 6px;border-radius:3px;border:1px solid #334155;display:inline-block">${u.expanded ? '[−] hide details' : '[+] show details'}</div>` : ''}
-              ${showErrToggle && u.expanded ? `<div style="margin-top:6px;padding:8px;background:#020617;border:1px solid #7f1d1d;border-radius:4px;font-size:10.5px;line-height:1.5;color:#cbd5e1;white-space:pre-wrap;word-break:break-all;font-family:ui-monospace,monospace">${renderErrorPanel(u)}</div>` : ''}
+              ${showBar ? `<div style="height:3px;background:var(--bg);border-radius:2px;overflow:hidden;margin-top:3px"><div class="fbl-bar ${s.barCls}"></div></div>` : ''}
+              ${showErrToggle ? `<div class="fbl-err-toggle" data-idx="${idx}" style="font-size:10px;color:var(--text-faint);cursor:pointer;margin-top:4px;background:var(--bg);padding:2px 6px;border-radius:3px;border:1px solid var(--border);display:inline-block">${u.expanded ? '[−] hide details' : '[+] show details'}</div>` : ''}
+              ${showErrToggle && u.expanded ? `<div style="margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--crit);border-radius:4px;font-size:10.5px;line-height:1.5;color:var(--text-dim);white-space:pre-wrap;word-break:break-all;font-family:var(--font-mono)">${renderErrorPanel(u)}</div>` : ''}
             </div>`;
           }).join('')}</div>` : ''}
         </div>
@@ -4038,15 +4027,15 @@
           if (!hj) return '';
           const n = (() => { try { return JSON.parse(hj).length; } catch { return ''; } })();
           return `
-          <div class="field" style="border-left-color:#a78bfa;margin-bottom:8px">
+          <div class="field" style="border-left-color:var(--vert-gambling);margin-bottom:8px">
             <label style="display:flex;align-items:center;justify-content:space-between">
-              <span>📋 Hashes <span style="color:#6e7681">— ${n} item(s), ready to copy</span></span>
+              <span>📋 Hashes <span style="color:var(--text-faint)">— ${n} item(s), ready to copy</span></span>
               <button id="fbl-copy-hashes" style="padding:4px 10px;font-size:11px">Copy JSON</button>
             </label>
-            <textarea id="fbl-hashes-out" readonly style="width:100%;min-height:70px;padding:6px 8px;background:#0d1726;border:1px solid #2b3a55;border-radius:6px;color:#a5b4fc;font-size:11px;font-family:ui-monospace,monospace;box-sizing:border-box;resize:vertical">${esc(hj)}</textarea>
+            <textarea id="fbl-hashes-out" readonly style="width:100%;min-height:70px;padding:6px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--accent);font-size:11px;font-family:var(--font-mono);box-sizing:border-box;resize:vertical">${esc(hj)}</textarea>
           </div>`;
         })()}
-        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Or paste manually:</div>
+        <div style="font-size:11px;color:var(--text-faint);margin-bottom:4px">Or paste manually:</div>
         <textarea id="fbl-creatives" placeholder='Paste any of:
 
 ADS-MODE (each item = new ad, replicated per adset, CSV ads ignored):
@@ -4056,9 +4045,9 @@ Override CSV per-ad creative (legacy, keeps CSV ad count):
 JSON list:  ["abc123", "vid:567890"]
 JSON map:   {"GMB-ROM-01": "abc123", "GMB-DACH": "vid:567890"}
 Newline:    abc123\nvid:567890
-Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;padding:6px 8px;background:#1e293b;border:1px solid #334155;border-radius:5px;color:#e2e8f0;font-size:11px;font-family:ui-monospace,monospace;box-sizing:border-box;resize:vertical">${esc(state.creativesInput)}</textarea>
-        ${state.creativesError ? `<div style="color:#ef4444;font-size:11px;margin-top:4px">⚠ ${esc(state.creativesError)}</div>` : ''}
-        ${state.creativesParsed ? `<div style="color:#22c55e;font-size:11px;margin-top:4px">✓ ${
+Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;padding:6px 8px;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:11px;font-family:var(--font-mono);box-sizing:border-box;resize:vertical">${esc(state.creativesInput)}</textarea>
+        ${state.creativesError ? `<div style="color:var(--crit);font-size:11px;margin-top:4px">⚠ ${esc(state.creativesError)}</div>` : ''}
+        ${state.creativesParsed ? `<div style="color:var(--good);font-size:11px;margin-top:4px">✓ ${
           state.creativesParsed.mode === 'ads' ? `Ads-mode: ${state.creativesParsed.items.length} new ads per adset`
           : state.creativesParsed.mode === 'map' ? `Map: ${Object.keys(state.creativesParsed.map).length} entries (per ad name)`
           : state.creativesParsed.mode === 'list' ? `List: ${state.creativesParsed.list.length} items (per ad index)`
@@ -4067,21 +4056,21 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       </div>
 
       ${plan?.adsMode && plan.adsModeItems.length > 1 && plan.adsetCount > 1 ? `
-      <div class="field" style="background:rgba(34,197,94,.05);border:1px solid rgba(34,197,94,.2);border-radius:6px;padding:8px 10px">
+      <div class="field" style="background:var(--surface);border:1px solid var(--good);border-radius:var(--r);padding:8px 10px">
         <label style="cursor:pointer" id="fbl-assign-toggle">
           ${state.showAssignments ? '▼' : '▶'} 6.5. Per-adset creative assignment (optional)
-          <span style="color:#6e7681">— ${Object.keys(state.adsetAssignments).length ? `${Object.keys(state.adsetAssignments).length} adset(s) customized` : 'all creatives → all adsets'}</span>
+          <span style="color:var(--text-faint)">— ${Object.keys(state.adsetAssignments).length ? `${Object.keys(state.adsetAssignments).length} adset(s) customized` : 'all creatives → all adsets'}</span>
         </label>
         ${state.showAssignments ? `
-        <div style="margin-top:8px;font-size:11px;color:#94a3b8">
+        <div style="margin-top:8px;font-size:11px;color:var(--text-faint)">
           Click+drag to paint cells · Shift+click column/row header to toggle whole column/row · Use buttons below for bulk actions.
         </div>
-        <div id="fbl-matrix-scroll" style="margin-top:6px;max-height:280px;overflow:auto;border:1px solid #334155;border-radius:5px;user-select:none">
+        <div id="fbl-matrix-scroll" style="margin-top:6px;max-height:280px;overflow:auto;border:1px solid var(--border);border-radius:5px;user-select:none">
           <table style="border-collapse:collapse;font-size:11px;min-width:100%">
-            <thead style="position:sticky;top:0;background:#1e293b;z-index:2">
+            <thead style="position:sticky;top:0;background:var(--surface);z-index:2">
               <tr>
-                <th style="text-align:left;padding:5px 8px;border-bottom:1px solid #334155;color:#94a3b8;font-weight:600;position:sticky;left:0;background:#1e293b;z-index:3;min-width:180px">Adset <span style="color:#64748b;font-weight:400">(shift+click = whole row)</span></th>
-                ${plan.adsModeItems.map((it, i) => `<th class="fbl-col-header" data-col="${i}" style="padding:5px 6px;border-bottom:1px solid #334155;border-left:1px solid #334155;color:${it.videoId ? '#c084fc' : '#60a5fa'};font-weight:600;font-size:10px;text-align:center;white-space:nowrap;cursor:pointer" title="Shift+click to toggle whole column: ${esc(it.name)}">${esc(it.name.length > 14 ? it.name.slice(0, 14) + '…' : it.name)}</th>`).join('')}
+                <th style="text-align:left;padding:5px 8px;border-bottom:1px solid var(--border);color:var(--text-faint);font-weight:600;position:sticky;left:0;background:var(--surface);z-index:3;min-width:180px">Adset <span style="color:var(--text-faint);font-weight:400">(shift+click = whole row)</span></th>
+                ${plan.adsModeItems.map((it, i) => `<th class="fbl-col-header" data-col="${i}" style="padding:5px 6px;border-bottom:1px solid var(--border);border-left:1px solid var(--border);color:${it.videoId ? 'var(--vert-gambling)' : 'var(--accent)'};font-weight:600;font-size:10px;text-align:center;white-space:nowrap;cursor:pointer" title="Shift+click to toggle whole column: ${esc(it.name)}">${esc(it.name.length > 14 ? it.name.slice(0, 14) + '…' : it.name)}</th>`).join('')}
               </tr>
             </thead>
             <tbody>
@@ -4089,10 +4078,10 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
                 const assigned = state.adsetAssignments[adsetName] || [];
                 const allChecked = assigned.length === 0; // empty = all
                 return `<tr>
-                  <td class="fbl-row-header" data-adset="${esc(adsetName)}" style="padding:5px 8px;border-bottom:1px solid #1e293b;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:sticky;left:0;background:#0f172a;z-index:1;max-width:220px;cursor:pointer" title="Shift+click to toggle whole row: ${esc(adsetName)}">${esc(adsetName)}</td>
+                  <td class="fbl-row-header" data-adset="${esc(adsetName)}" style="padding:5px 8px;border-bottom:1px solid var(--surface);color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:sticky;left:0;background:var(--bg);z-index:1;max-width:220px;cursor:pointer" title="Shift+click to toggle whole row: ${esc(adsetName)}">${esc(adsetName)}</td>
                   ${plan.adsModeItems.map((_, i) => {
                     const checked = allChecked || assigned.includes(i);
-                    return `<td class="fbl-assign-cell" data-adset="${esc(adsetName)}" data-idx="${i}" style="padding:3px 6px;border-bottom:1px solid #1e293b;border-left:1px solid #1e293b;text-align:center;cursor:pointer;background:${checked ? 'rgba(34,197,94,.12)' : 'transparent'}"><input type="checkbox" class="fbl-assign-cb" data-adset="${esc(adsetName)}" data-idx="${i}" ${checked ? 'checked' : ''} style="pointer-events:none"></td>`;
+                    return `<td class="fbl-assign-cell" data-adset="${esc(adsetName)}" data-idx="${i}" style="padding:3px 6px;border-bottom:1px solid var(--surface);border-left:1px solid var(--surface);text-align:center;cursor:pointer;background:${checked ? 'var(--good-bg)' : 'transparent'}"><input type="checkbox" class="fbl-assign-cb" data-adset="${esc(adsetName)}" data-idx="${i}" ${checked ? 'checked' : ''} style="pointer-events:none"></td>`;
                   }).join('')}
                 </tr>`;
               }).join('')}
@@ -4109,17 +4098,17 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       </div>` : ''}
 
       <div class="field">
-        <label>7. Link override (optional) <span style="color:#6e7681">— tokens: {pixel_id} {account_id} {adset_name} {ad_name} {geo} {date}</span></label>
+        <label>7. Link override (optional) <span style="color:var(--text-faint)">— tokens: {pixel_id} {account_id} {adset_name} {ad_name} {geo} {date}</span></label>
         <input type="text" id="fbl-link-override" value="${esc(state.linkOverride)}" placeholder="empty = use CSV Link column. e.g. https://t.com/click?p={pixel_id}&amp;geo={geo}">
       </div>
 
       <div class="field">
-        <label>8. URL Tags override (optional) <span style="color:#6e7681">— same tokens; {{fb.macros}} preserved</span></label>
+        <label>8. URL Tags override (optional) <span style="color:var(--text-faint)">— same tokens; {{fb.macros}} preserved</span></label>
         <input type="text" id="fbl-tags-override" value="${esc(state.urlTagsOverride)}" placeholder="empty = use CSV URL Tags. e.g. keyword={pixel_id}&amp;sub2={account_id}&amp;sub5={{ad.name}}">
         <details style="margin-top:6px">
-          <summary style="cursor:pointer;font-size:10px;color:#38bdf8;user-select:none">ℹ macros reference — everything usable in steps 7 / 8</summary>
-          <div style="font-size:10px;line-height:1.8;color:#94a3b8;padding:6px 2px 2px">
-            <b style="color:#e2e8f0">Launcher tokens</b> — single braces, substituted at CREATE time (fixed value baked into the ad):<br>
+          <summary style="cursor:pointer;font-size:10px;color:var(--accent);user-select:none">ℹ macros reference — everything usable in steps 7 / 8</summary>
+          <div style="font-size:10px;line-height:1.8;color:var(--text-faint);padding:6px 2px 2px">
+            <b style="color:var(--text)">Launcher tokens</b> — single braces, substituted at CREATE time (fixed value baked into the ad):<br>
             <code>{pixel_id}</code> pixel from step 4 (override &gt; CSV) &nbsp;·&nbsp;
             <code>{account_id}</code> ad account ID — per-account in multi-launch &nbsp;·&nbsp;
             <code>{adset_name}</code> clean ad set name (markers stripped) &nbsp;·&nbsp;
@@ -4127,19 +4116,19 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
             <code>{geo}</code> first country of the ad set &nbsp;·&nbsp;
             <code>{date}</code> launch date MMDDYY &nbsp;·&nbsp;
             <code>{adset_idx}</code> ad set number 01, 02, …<br>
-            <b style="color:#e2e8f0">FB macros</b> — double braces, sent as-is, FB fills them at AD DELIVERY:<br>
+            <b style="color:var(--text)">FB macros</b> — double braces, sent as-is, FB fills them at AD DELIVERY:<br>
             <code>{{campaign.id}}</code> <code>{{adset.id}}</code> <code>{{ad.id}}</code>
             <code>{{campaign.name}}</code> <code>{{adset.name}}</code> <code>{{ad.name}}</code>
             <code>{{placement}}</code> <code>{{site_source_name}}</code><br>
-            <span style="color:#6e7681">Typo in a single-brace token → sent as literal text + ⚠ warning in LIVE FEED (not silently blanked). Writing a launcher token FB-style ({{pixel_id}}) is auto-corrected.</span>
+            <span style="color:var(--text-faint)">Typo in a single-brace token → sent as literal text + ⚠ warning in LIVE FEED (not silently blanked). Writing a launcher token FB-style ({{pixel_id}}) is auto-corrected.</span>
           </div>
         </details>
       </div>
 
       <div class="field">
-        <label>9. Ad copy override (optional) <span style="color:#6e7681">— same for all ads; per-creative title/body/cta in ads-mode JSON wins</span></label>
+        <label>9. Ad copy override (optional) <span style="color:var(--text-faint)">— same for all ads; per-creative title/body/cta in ads-mode JSON wins</span></label>
         <div class="field">
-          <label style="font-size:10px">AIDA phrase library <span style="color:#6e7681">— pick to fill a field, then edit. Attention=title · Interest+Desire=body · Action=description</span></label>
+          <label style="font-size:10px">AIDA phrase library <span style="color:var(--text-faint)">— pick to fill a field, then edit. Attention=title · Interest+Desire=body · Action=description</span></label>
           <select id="fbl-phrase-vertical">
             ${Object.entries(PHRASE_LIB).map(([k, v]) => `<option value="${esc(k)}" ${state.phraseVertical === k ? 'selected' : ''}>${esc(v.label)}</option>`).join('')}
           </select>
@@ -4155,7 +4144,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
             </select>
           </div>
         </div>
-        <textarea id="fbl-body-override" placeholder="Body (primary text) — empty = use CSV Body" style="width:100%;min-height:50px;padding:6px 8px;background:#1e293b;border:1px solid #334155;border-radius:5px;color:#e2e8f0;font-size:12px;font-family:inherit;box-sizing:border-box;resize:vertical;margin:5px 0">${esc(state.bodyOverride)}</textarea>
+        <textarea id="fbl-body-override" placeholder="Body (primary text) — empty = use CSV Body" style="width:100%;min-height:50px;padding:6px 8px;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:12px;font-family:inherit;box-sizing:border-box;resize:vertical;margin:5px 0">${esc(state.bodyOverride)}</textarea>
         <select id="fbl-phrase-body" style="margin-bottom:5px">
           <option value="">↳ insert primary text (Interest+Desire)…</option>
           ${phr.body.map(b => `<option value="${esc(b)}">${esc(b.length > 70 ? b.slice(0, 70) + '…' : b)}</option>`).join('')}
@@ -4191,7 +4180,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       </div>
 
       <div class="field">
-        <label>10. Quick: replace single URL Tag param <span style="color:#6e7681">— skipped if step 8 is set · adds the param even when URL Tags is empty (CSV-less)</span></label>
+        <label>10. Quick: replace single URL Tag param <span style="color:var(--text-faint)">— skipped if step 8 is set · adds the param even when URL Tags is empty (CSV-less)</span></label>
         <div class="row">
           <input type="text" id="fbl-tag-param" value="${esc(state.urlTagParam)}" placeholder="sub2" style="flex:1">
           <select id="fbl-tag-mode" style="flex:1.5">
@@ -4213,25 +4202,25 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
         </select>
         <label style="display:flex;align-items:center;gap:6px;margin-top:8px;cursor:pointer">
           <input type="checkbox" id="fbl-dry-run" ${state.dryRun ? 'checked' : ''} style="width:auto;margin:0">
-          <span><b>🟦 Dry run</b> <span style="color:#6e7681">— build &amp; log API payloads, don't actually create anything</span></span>
+          <span><b>🟦 Dry run</b> <span style="color:var(--text-faint)">— build &amp; log API payloads, don't actually create anything</span></span>
         </label>
       </div>
 
       <div class="field">
-        <label>11b. Repeat launch <span style="color:#6e7681">— fire this same setup N times with a gap between runs</span></label>
+        <label>11b. Repeat launch <span style="color:var(--text-faint)">— fire this same setup N times with a gap between runs</span></label>
         <div style="display:flex;gap:8px;align-items:flex-end">
           <div style="flex:1">
-            <div style="font-size:10px;color:#8b949e;margin-bottom:3px">Runs (1 = single launch)</div>
+            <div style="font-size:10px;color:var(--text-faint);margin-bottom:3px">Runs (1 = single launch)</div>
             <input type="number" id="fbl-repeat-count" min="1" max="50" step="1" value="${esc(state.repeatCount)}" placeholder="1">
           </div>
           <div style="flex:1">
-            <div style="font-size:10px;color:#8b949e;margin-bottom:3px">Gap between runs (min)</div>
+            <div style="font-size:10px;color:var(--text-faint);margin-bottom:3px">Gap between runs (min)</div>
             <input type="number" id="fbl-repeat-delay" min="0" max="240" step="1" value="${esc(state.repeatDelayMin)}" placeholder="5">
           </div>
         </div>
-        ${repeatRuns > 1 ? `<div style="font-size:10px;color:#22c55e;margin-top:4px;font-family:ui-monospace,monospace">
+        ${repeatRuns > 1 ? `<div style="font-size:10px;color:var(--good);margin-top:4px;font-family:var(--font-mono)">
           ${repeatRuns} runs × ${totalAds * Math.max(1, state.targetAccIds.length)} ads · ~${repeatEtaMin} min total · runs 2+ named "… | R2", "… | R3" · countdown shows in the live feed
-        </div>` : '<div style="font-size:10px;color:#6e7681;margin-top:4px">Countdown to the next run appears in the LIVE FEED on the left. The button becomes ⏹ STOP while a series runs.</div>'}
+        </div>` : '<div style="font-size:10px;color:var(--text-faint);margin-top:4px">Countdown to the next run appears in the LIVE FEED on the left. The button becomes ⏹ STOP while a series runs.</div>'}
       </div>
 
       <hr>
@@ -4241,23 +4230,23 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
           ? (stopStage === 2
               ? `⏹⏹ HARD ABORT ARMED — finishing current account…`
               : stopStage === 1
-                ? `⏹⏹ SKIP QUEUED ACCOUNTS ▸ click again${seriesRunning ? ` · run ${state.repeatCurrent}/${state.repeatTotal} finishing` : ''}`
+                ? `Пропустить очередь · нажми ещё раз${seriesRunning ? ` · run ${state.repeatCurrent}/${state.repeatTotal} finishing` : ''}`
                 : seriesRunning
-                  ? `⏹ STOP SERIES ▸ run ${state.repeatCurrent}/${state.repeatTotal}`
+                  ? `Остановить серию · прогон ${state.repeatCurrent}/${state.repeatTotal}`
                   : `⏹ STOP LAUNCH`)
           : `${state.dryRun && !runDisabled ? '🟦 DRY RUN — ' : ''}${buttonLabel}${repeatRuns > 1 && !runDisabled ? ` × ${repeatRuns} runs` : ''}`}
       </button>
       <div class="fbl-launch-sub${runDisabled && !state.running ? ' blocked' : ''}">${
-        stopStage === 2 ? '◉ HARD ABORT — CURRENT ACCOUNT FINISHES, QUEUED CABS SKIPPED'
+        stopStage === 2 ? 'Жёсткая остановка — текущий каб дорабатывает, очередь пропускается'
         : stopStage === 1 ? (seriesRunning
-            ? `◉ SOFT STOP — RUN ${state.repeatCurrent}/${state.repeatTotal} FINISHES · CLICK AGAIN TO SKIP QUEUED ACCOUNTS`
-            : '◉ SOFT STOP ARMED · CLICK AGAIN TO SKIP QUEUED ACCOUNTS')
-        : seriesRunning ? `◉ SERIES RUNNING — RUN ${state.repeatCurrent}/${state.repeatTotal} · CLICK TO STOP`
-        : state.running ? '◉ LAUNCH SEQUENCE RUNNING… · CLICK TO STOP'
-        : runDisabled ? '▲ AWAITING SETUP — RESOLVE STEP ABOVE'
-        : state.dryRun ? '◇ DRY RUN ARMED — NO LIVE WRITES'
-        : repeatRuns > 1 ? `◈ SERIES ARMED — ${repeatRuns} RUNS · ${state.repeatDelayMin || 0} MIN APART`
-        : '● SYSTEM READY — AWAITING COMMAND'
+            ? `Мягкая остановка — прогон ${state.repeatCurrent}/${state.repeatTotal} дорабатывает · нажми ещё раз, чтобы пропустить очередь`
+            : 'Мягкая остановка взведена · нажми ещё раз, чтобы пропустить очередь')
+        : seriesRunning ? `Серия идёт — прогон ${state.repeatCurrent}/${state.repeatTotal} · нажми, чтобы остановить`
+        : state.running ? 'Залив идёт… · нажми, чтобы остановить'
+        : runDisabled ? 'Не хватает настройки — закрой шаг выше'
+        : state.dryRun ? 'Сухой прогон — ничего не создаётся'
+        : repeatRuns > 1 ? `Серия готова — ${repeatRuns} прогонов · интервал ${state.repeatDelayMin || 0} мин`
+        : 'Готово к запуску'
       }</div>
         </div>
       </div>
@@ -4419,7 +4408,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       return p?.adsMode ? p.adsModeItems.length : 0;
     };
     const paintCellInPlace = (td, checked) => {
-      td.style.background = checked ? 'rgba(34,197,94,.12)' : 'transparent';
+      td.style.background = checked ? 'var(--good-bg)' : 'transparent';
       const cb = td.querySelector('input.fbl-assign-cb');
       if (cb) cb.checked = checked;
     };

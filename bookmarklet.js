@@ -1,6 +1,19 @@
 (() => {
 /* =========================================================
-   FB Autorules — PRO Rules Generator + Rules Manager (2026-05, v24.1)
+   FB Autorules — PRO Rules Generator + Rules Manager (2026-05, v25.1)
+   v25.1 — тема TradingView вместо cyberpunk-HUD:
+   - оба CSS-блока (панель + Inspector) перешли на общий словарь из
+     code/shared/theme/theme.ts; hex в правилах больше нет, только var(--*)
+   - убраны: dot-grid на фоне, скан-линии журнала, glow-тени, градиенты кнопок,
+     uppercase+разрядка вкладок и заголовков, глиф ▸ в секциях, пульсация LED
+   - база с бирюзовой #04141a на сине-серую #131722, панели плоские (4px, без тени),
+     синий #2962FF только на интерактиве, зелёный/красный — вердикт
+   - inline-стили разметки (176 строк) переведены на токены; старые имена
+     (--surf/--card/--acc/--cyan/--txt/--muted) оставлены алиасами
+   Смена цвета: theme.ts -> bun code/shared/theme/theme-cli.ts emit ->
+   перенести TV_TOKENS_BODY в ОБА блока -> регенерить B64.
+   Только оформление: разметка, id, обработчики и логика правил не тронуты.
+
    v24.1 — Analytics CSV Export overhaul:
    ▸ fetchInsightsPaginated — pagination + retry on rate-limit (17/4/613/32)
    ▸ Status filter (Active / Active+Paused / All) via campaign|adset|ad.effective_status
@@ -89,9 +102,9 @@ function createStatusCenter() {
   let total = 0, ok = 0, warn = 0, err = 0;
   let railBody = null, statusEl = null, countEl = null;
 
-  const colorFor = t => t==='error'?'#fca5a5':t==='warning'?'#fcd34d':t==='success'?'#86efac':'#cbd5e1';
+  const colorFor = t => t==='error'?'var(--crit)':t==='warning'?'var(--warn)':t==='success'?'var(--good)':'var(--text-dim)';
   const iconFor  = t => t==='error'?'⛔':t==='warning'?'⚠️':t==='success'?'✅':'·';
-  const PLACEHOLDER = '<div style="color:#475569">Лог запросов и действий всех вкладок появится здесь.</div>';
+  const PLACEHOLDER = '<div style="color:var(--text-faint)">Лог запросов и действий всех вкладок появится здесь.</div>';
   const lineHtml = e => `<span style="opacity:.45">${e.ts}</span> ${iconFor(e.type)} <span style="color:${colorFor(e.type)}">${escapeHtml(e.msg)}</span>`;
   function refreshHead(){
     if (countEl) countEl.textContent = entries.length ? ` · ${entries.length}` : '';
@@ -99,7 +112,7 @@ function createStatusCenter() {
       statusEl.classList.remove('warn','err');
       if (err>0) statusEl.classList.add('err'); else if (warn>0) statusEl.classList.add('warn');
       const w = statusEl.querySelector('.ar-railword');
-      if (w) w.textContent = 'STATUS: ' + (err>0 ? 'ERRORS' : warn>0 ? 'WARNINGS' : 'ONLINE');
+      if (w) w.textContent = err>0 ? 'ошибки' : warn>0 ? 'предупреждения' : 'в норме';
     }
   }
 
@@ -485,7 +498,7 @@ function makeSearchableSelect(selectEl, opts) {
     'background:var(--card,#1a1a1a);color:var(--txt,#fff);' +
     'border:1px solid var(--bdr,#444);border-radius:6px;font-size:13px;' +
     'box-sizing:border-box;outline:none';
-  input.addEventListener('focus', () => { input.style.borderColor = 'var(--acc,#3b82f6)'; });
+  input.addEventListener('focus', () => { input.style.borderColor = 'var(--acc,var(--accent))'; });
   input.addEventListener('blur', () => { input.style.borderColor = 'var(--bdr,#444)'; });
 
   selectEl.parentNode.insertBefore(input, selectEl);
@@ -592,104 +605,114 @@ if (!document.getElementById('ar-styles')) {
   const st = document.createElement('style');
   st.id = 'ar-styles';
   st.textContent = `
-    /* === Cyberpunk HUD skin (matches FB Launcher v0.18.0). CSS/skin pass only — no markup/handler ids renamed. ===
-       Accent split: cyan #38bdf8 = HUD chrome/brackets/headers/readouts/logbox (telemetry, read-only state);
-       blue --acc #3b82f6 = primary action + active tab + focus-able interactive. Dial-back levers noted inline. */
-    #ar-modal { --bg:#04141a; --surf:#082530; --card:#06222d; --bdr:#103a47; --txt:#e2e8f0; --muted:#8aa0a8; --acc:#3b82f6; --cyan:#38bdf8; --ok:#22c55e; --warn:#fbbf24; --err:#ef4444; }
+    /* ═══ ТЕМА TRADINGVIEW ═════════════════════════════════════════════════
+       Токены — копия dist/tv-bookmarklet.js (источник: code/shared/theme/theme.ts).
+       Букмарклет — самодостаточный B64-blob, импортировать читателя он не может,
+       поэтому словарь ВШИТ. Меняешь цвет: theme.ts -> bun code/shared/theme/theme-cli.ts emit
+       -> перенести TV_TOKENS_BODY сюда И во второй блок (#fbi-style, Inspector)
+       -> регенерить B64. Правила ниже цвета не хардкодят — только var().
+
+       v25.1: HUD снят целиком (glow, dot-grid, скан-линии, uppercase+разрядка,
+       глиф ▸ в заголовках, бирюзовая база #04141a). Язык TradingView: фон
+       сине-серый #131722, панели плоские (радиус 4px, теней нет), подписи обычным
+       регистром, синий #2962FF только на интерактиве, зелёный/красный — вердикт. */
+    #ar-modal {
+      --bg:#131722; --surface:#1E222D; --surface-2:#2A2E39;
+      --border:#2A2E39; --border-soft:#22262F; --bar:#131722;
+      --text:#D1D4DC; --text-dim:#B2B5BE; --text-faint:#787B86;
+      --accent:#2962FF; --accent-dim:#1E53E5; --accent-bg:rgba(41,98,255,.15); --on-accent:#FFFFFF;
+      --good:#26A69A; --warn:#FF9800; --crit:#EF5350;
+      --good-bg:rgba(38,166,154,.14); --warn-bg:rgba(255,152,0,.14); --crit-bg:rgba(239,83,80,.14);
+      --font-ui:"Trebuchet MS",-apple-system,"Segoe UI",Roboto,sans-serif;
+      --font-mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,monospace;
+      --r:4px; --r-sm:3px;
+      /* Старые имена оставлены алиасами: на них завязаны inline-стили в разметке,
+         и вырезать их значит править сотню мест ради чистоты словаря. */
+      --surf:var(--surface); --card:var(--surface); --bdr:var(--border);
+      --txt:var(--text); --muted:var(--text-faint); --acc:var(--accent);
+      --cyan:var(--accent); --ok:var(--good); --err:var(--crit);
+    }
     #ar-modal,#ar-modal * { box-sizing:border-box; }
-    /* v24.7: removed the cyan corner brackets (#ar-modal::before) — Alexander found them ugly. */
-    /* HUD: faint cyan dot-grid behind the modal body (optional, GPU-cheap). Solid card bgs keep text crisp over it. Lever: alpha .06→.03. */
-    /* v25.0: border-radius matches dock shape (14px 0 0 14px — left corners only, right flush to screen). */
-    #ar-modal::after { content:''; position:absolute; inset:0; pointer-events:none; z-index:0; border-radius:14px 0 0 14px;
-      background-image:radial-gradient(circle, rgba(56,189,248,.06) 1.2px, transparent 1.2px); background-size:22px 22px; }
+    #ar-modal { font-family:var(--font-ui); }
+    /* Фон панели ровный: точечная сетка снята — она конкурировала с плотной формой. */
+    #ar-modal::after { content:none; }
     #ar-modal > * { position:relative; z-index:1; }
-    #ar-modal input,#ar-modal select { background:var(--card); color:var(--txt); border:1px solid #1a4a5a; border-radius:8px; padding:7px 10px; font-size:13px; outline:none; width:100%; transition:border-color .15s,box-shadow .15s; }
+    #ar-modal input,#ar-modal select { background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:var(--r-sm); padding:5px 9px; font-size:12px; outline:none; width:100%; font-family:var(--font-ui); transition:border-color .15s; }
     #ar-modal input[type="checkbox"],#ar-modal input[type="radio"] { width:auto; padding:0; background:transparent; border:none; border-radius:0; flex-shrink:0; }
-    /* HUD: focus = cyan lock-on ring (telemetry state). Primary action stays action-blue. */
-    #ar-modal input:focus,#ar-modal select:focus { border-color:var(--cyan); box-shadow:0 0 0 2px rgba(56,189,248,.25),0 0 10px rgba(56,189,248,.15); }
-    #ar-modal input::placeholder { color:var(--muted); }
-    #ar-modal select option { background:var(--surf); }
-    .ar-label { font-size:12px; color:var(--muted); display:block; margin-bottom:4px; }
-    .ar-btn { padding:9px 16px; border:none; border-radius:8px; font-weight:600; font-size:13px; cursor:pointer; transition:opacity .15s,transform .1s,box-shadow .15s,background .15s; }
-    .ar-btn:hover { opacity:.92; } .ar-btn:active { transform:scale(.97); }
-    /* HUD: primary = glowing blue gradient hero action (the one allowed blue accent on a clickable). Lever: drop the outer two glow rings to calm it. */
-    .ar-btn-primary { background:linear-gradient(100deg,#2563eb,#3b82f6 55%,#4f8df9); color:#f0f7ff; letter-spacing:.4px;
-      box-shadow:0 0 0 1px rgba(125,211,252,.4),0 0 16px rgba(56,189,248,.4),0 0 32px rgba(37,99,235,.28); }
-    .ar-btn-primary:hover { background:linear-gradient(100deg,#3b82f6,#2563eb 55%,#5b95ff);
-      box-shadow:0 0 0 1px rgba(125,211,252,.6),0 0 22px rgba(56,189,248,.6),0 0 44px rgba(37,99,235,.4); }
-    .ar-btn-danger  { background:var(--err); color:#fff; }
-    /* HUD: ghost = thin cyan-outlined transparent. */
-    .ar-btn-ghost   { background:rgba(56,189,248,.05); color:#7dd3fc; border:1px solid rgba(56,189,248,.4); }
-    .ar-btn-ghost:hover { background:rgba(56,189,248,.12); border-color:var(--cyan); box-shadow:0 0 8px rgba(56,189,248,.25); }
-    .ar-btn-success { background:#16a34a; color:#fff; }
-    .ar-btn-sm      { padding:5px 12px; font-size:12px; }
-    /* HUD: tabs = command nav. UPPERCASE + tracking; hover = thin cyan outline; active = blue glow (action). */
-    .ar-tab { padding:8px 16px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--muted); font-weight:600; font-size:12px; letter-spacing:.6px; text-transform:uppercase; cursor:pointer; transition:all .15s; }
-    .ar-tab:hover { color:#cbd5e1; background:rgba(56,189,248,.06); border-color:rgba(56,189,248,.35); }
-    .ar-tab.active { background:linear-gradient(100deg,#2563eb,#3b82f6); color:#fff; border-color:transparent; box-shadow:0 0 12px rgba(56,189,248,.45); }
-    /* HUD: section = framed module. UPPERCASE title + tracking + leading glowing cyan ▸ glyph. Collapse (.ar-chev) unchanged. */
-    .ar-sec-hdr { display:flex; align-items:center; gap:8px; padding:10px 0 8px; margin-top:10px; border-bottom:1px solid var(--bdr); cursor:pointer; user-select:none; }
-    .ar-sec-hdr .ar-sec-title { flex:1; font-weight:700; font-size:12px; letter-spacing:.9px; text-transform:uppercase; color:#d6f3ff; display:flex; align-items:center; gap:6px; }
-    .ar-sec-hdr .ar-sec-title::before { content:'▸'; color:var(--cyan); font-weight:700; text-shadow:0 0 6px rgba(56,189,248,.7); }
-    .ar-sec-hdr .ar-sec-ico   { font-size:15px; filter:drop-shadow(0 0 5px rgba(56,189,248,.4)); }
-    .ar-sec-hdr .ar-chev      { color:var(--cyan); font-size:10px; transition:transform .2s; opacity:.8; }
+    /* Фокус — тонкая синяя рамка, без кольца и свечения. */
+    #ar-modal input:focus,#ar-modal select:focus { border-color:var(--accent); }
+    #ar-modal input::placeholder { color:var(--text-faint); }
+    #ar-modal select option { background:var(--surface); }
+    .ar-label { font-size:11px; color:var(--text-faint); display:block; margin-bottom:4px; font-weight:400; }
+    .ar-btn { padding:5px 12px; border:1px solid var(--border); border-radius:var(--r-sm); font-weight:600; font-size:12px; cursor:pointer; font-family:var(--font-ui); background:none; color:var(--text-dim); transition:border-color .15s,color .15s,background .15s; }
+    .ar-btn:hover { color:var(--text); border-color:var(--accent-dim); }
+    /* Основное действие — единственная заливка акцентом. Градиент и свечение сняты. */
+    .ar-btn-primary { background:var(--accent); border-color:var(--accent-dim); color:var(--on-accent); }
+    .ar-btn-primary:hover { background:var(--accent-dim); color:var(--on-accent); }
+    .ar-btn-danger  { background:var(--crit); border-color:var(--crit); color:var(--on-accent); }
+    .ar-btn-danger:hover { color:var(--on-accent); border-color:var(--crit); }
+    .ar-btn-ghost   { background:none; color:var(--text-dim); border-color:var(--border); }
+    .ar-btn-ghost:hover { color:var(--text); border-color:var(--accent-dim); }
+    .ar-btn-success { background:var(--good); border-color:var(--good); color:var(--on-accent); }
+    .ar-btn-success:hover { color:var(--on-accent); border-color:var(--good); }
+    .ar-btn-sm      { padding:3px 10px; font-size:11px; }
+    /* Вкладки: обычный регистр, активная помечена подложкой акцента. */
+    .ar-tab { padding:6px 14px; border:1px solid transparent; border-radius:var(--r-sm); background:transparent; color:var(--text-faint); font-weight:600; font-size:12px; cursor:pointer; font-family:var(--font-ui); transition:all .15s; }
+    .ar-tab:hover { color:var(--text-dim); background:var(--surface); }
+    .ar-tab.active { background:var(--accent-bg); color:var(--text); border-color:var(--accent); }
+    /* Заголовок секции: вес и подчёркивающая линия вместо капслока и глифа. */
+    .ar-sec-hdr { display:flex; align-items:center; gap:8px; padding:10px 0 8px; margin-top:10px; border-bottom:1px solid var(--border); cursor:pointer; user-select:none; }
+    .ar-sec-hdr .ar-sec-title { flex:1; font-weight:600; font-size:12px; color:var(--text); display:flex; align-items:center; gap:6px; }
+    .ar-sec-hdr .ar-sec-ico   { font-size:14px; }
+    .ar-sec-hdr .ar-chev      { color:var(--text-faint); font-size:10px; transition:transform .2s; }
     .ar-sec-hdr.open .ar-chev { transform:rotate(180deg); }
-    /* HUD: section body = plain padded module. v24.3 de-clutter: dropped per-section corner brackets —
-       on this dense nested form they stacked into boxes-in-boxes. The .ar-sec-hdr (cyan ▸ + UPPERCASE + bottom border)
-       is the only framing device per section now; the form breathes. Lever: re-add brackets here only if a section reads flat. */
     .ar-sec-body { position:relative; padding:12px 12px 4px; margin-top:2px; }
     .ar-sec-body > * { position:relative; z-index:1; }
     .ar-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px 16px; }
     .ar-grid .col2 { grid-column:span 2; }
     .ar-field { display:flex; flex-direction:column; }
-    .ar-rule-new { font-size:10px; font-weight:700; color:#fbbf24; background:rgba(251,191,36,.14); padding:1px 5px; border-radius:4px; margin-left:5px; vertical-align:middle; }
+    .ar-rule-new { font-size:10px; font-weight:600; color:var(--warn); background:var(--warn-bg); padding:1px 5px; border-radius:var(--r-sm); margin-left:5px; vertical-align:middle; }
     .ar-preset-row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
-    /* HUD: preset pills. v24.3 de-clutter: resting = neutral teal hairline (recedes); hover = bright cyan lock-on.
-       Cyan now marks the touched pill, not every resting one. Lever: resting border #1a4a5a→rgba(56,189,248,.35) to brighten. */
-    .ar-preset-btn { padding:5px 13px; border:1px solid #1a4a5a; border-radius:6px; background:rgba(56,189,248,.03); color:#9fd9f5; font-size:12px; font-weight:600; cursor:pointer; transition:all .15s; }
-    .ar-preset-btn:hover { border-color:var(--cyan); color:#cffafe; background:rgba(56,189,248,.14); box-shadow:0 0 8px rgba(56,189,248,.25); }
+    /* Пресеты и метки: нейтральный контур, акцент только под курсором. */
+    .ar-preset-btn { padding:4px 12px; border:1px solid var(--border); border-radius:var(--r-sm); background:none; color:var(--text-dim); font-size:12px; font-weight:600; cursor:pointer; font-family:var(--font-ui); transition:all .15s; }
+    .ar-preset-btn:hover { border-color:var(--accent); color:var(--text); }
     .ar-entity-row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:4px; }
-    /* HUD: entity pills resting = dim teal cell; .sel = bright blue active (a selected state → action accent). */
-    .ar-entity-pill { padding:6px 16px; border:1px solid #1a4a5a; border-radius:20px; background:#06222d; color:var(--muted); font-size:13px; font-weight:600; cursor:pointer; transition:all .15s; }
-    .ar-entity-pill:hover { border-color:#2b6e8a; color:#cbd5e1; }
-    .ar-entity-pill.sel { background:linear-gradient(100deg,#2563eb,#3b82f6); color:#fff; border-color:transparent; box-shadow:0 0 10px rgba(56,189,248,.4); }
-    /* HUD: info panel = recessive telemetry panel. v24.3 de-clutter: dim hairline + near-flat bg + muted text so info
-       boxes recede instead of competing with active controls. Lever: raise border alpha .12→.25 to make it pop again. */
-    .ar-info { background:rgba(56,189,248,.03); border:1px solid rgba(56,189,248,.12); border-radius:8px; padding:10px 14px; font-size:12px; color:#8aa0a8; line-height:1.6; }
-    .ar-divider { border:none; border-top:1px solid var(--bdr); margin:12px 0; }
-    /* HUD: logbox = telemetry feed — darkest surface, cyan mono, faint scanline (matches launcher .log). */
-    .ar-logbox { background:#020a10;
-      background-image:repeating-linear-gradient(0deg, rgba(56,189,248,.035) 0, rgba(56,189,248,.035) 1px, transparent 1px, transparent 3px);
-      border:1px solid #0e3a47; border-radius:8px; padding:8px 10px; height:120px; overflow:auto; font:11px/1.45 ui-monospace,monospace; font-variant-numeric:tabular-nums; color:#7dd3fc; }
-    /* HUD: badges = cyan-tinted readouts; semantic ok/warn keep their hue. */
-    .ar-badge { display:inline-block; padding:2px 8px; border-radius:6px; font-size:11px; font-weight:600; font-family:ui-monospace,monospace; background:rgba(56,189,248,.08); border:1px solid rgba(56,189,248,.28); color:#9fd9f5; }
-    .ar-badge-ok   { background:rgba(34,197,94,.12); border-color:rgba(34,197,94,.3); color:#4ade80; }
-    .ar-badge-warn { background:rgba(251,191,36,.12); border-color:rgba(251,191,36,.3); color:#fbbf24; }
-    /* HUD: account row selected = cyan border + glow (lock-on). */
-    .ar-acc-item   { padding:9px 12px; border-radius:8px; border:1px solid var(--bdr); margin-bottom:6px; background:var(--card); cursor:pointer; display:flex; align-items:center; gap:10px; transition:border-color .15s,box-shadow .15s; }
-    .ar-acc-item:hover { border-color:#2b6e8a; }
-    .ar-acc-item.sel { border-color:var(--cyan); box-shadow:0 0 12px rgba(56,189,248,.25); }
-    /* HUD: progress = segmented glowing cyan→blue meter (matches launcher .progress). The ::after stripes punch gaps between cells. */
-    .ar-progress { position:relative; height:6px; background:#031019; border:1px solid #103a47; border-radius:3px; overflow:hidden; margin-top:8px; box-shadow:inset 0 0 5px rgba(0,0,0,.5); }
-    .ar-progress-bar { height:100%; background:linear-gradient(90deg,#38bdf8,#2563eb); box-shadow:0 0 10px rgba(56,189,248,.7),inset 0 0 4px rgba(224,247,255,.5); width:0%; transition:width .3s; }
-    .ar-progress::after { content:''; position:absolute; inset:0; pointer-events:none; background:repeating-linear-gradient(90deg, transparent 0 9px, #031019 9px 12px); }
-    /* v24.5: two-column body + LIVE FEED rail (ported from FB Launcher's .fbl-lograil). */
+    .ar-entity-pill { padding:5px 14px; border:1px solid var(--border); border-radius:var(--r-sm); background:none; color:var(--text-faint); font-size:12px; font-weight:600; cursor:pointer; font-family:var(--font-ui); transition:all .15s; }
+    .ar-entity-pill:hover { border-color:var(--accent-dim); color:var(--text-dim); }
+    .ar-entity-pill.sel { background:var(--accent-bg); color:var(--text); border-color:var(--accent); }
+    /* Справочная панель — плоская, тише формы. */
+    .ar-info { background:var(--surface); border:1px solid var(--border); border-radius:var(--r); padding:10px 14px; font-size:11px; color:var(--text-faint); line-height:1.6; }
+    .ar-divider { border:none; border-top:1px solid var(--border); margin:12px 0; }
+    /* Журнал — единственное моноширинное место: поток строк, где важно выравнивание. */
+    .ar-logbox { background:var(--bg); border:1px solid var(--border); border-radius:var(--r-sm); padding:8px 10px; height:120px; overflow:auto; font:11px/1.45 var(--font-mono); font-variant-numeric:tabular-nums; color:var(--text-dim); }
+    /* Метка-вердикт: цвет несёт состояние, подложка тихая. */
+    .ar-badge { display:inline-block; padding:2px 8px; border-radius:var(--r-sm); font-size:10.5px; font-weight:600; font-family:var(--font-ui); background:var(--surface-2); border:1px solid var(--border); color:var(--text-dim); }
+    .ar-badge-ok   { background:var(--good-bg); border-color:var(--good); color:var(--good); }
+    .ar-badge-warn { background:var(--warn-bg); border-color:var(--warn); color:var(--warn); }
+    .ar-acc-item   { padding:7px 12px; border-radius:var(--r-sm); border:1px solid var(--border); margin-bottom:6px; background:var(--surface); cursor:pointer; display:flex; align-items:center; gap:10px; transition:border-color .15s; }
+    .ar-acc-item:hover { border-color:var(--accent-dim); }
+    .ar-acc-item.sel { border-color:var(--accent); background:var(--accent-bg); }
+    /* Прогресс: сплошная синяя полоса — сегментация читалась как отдельная величина. */
+    .ar-progress { position:relative; height:4px; background:var(--surface-2); border:none; border-radius:2px; overflow:hidden; margin-top:8px; }
+    .ar-progress-bar { height:100%; background:var(--accent); width:0%; transition:width .3s; }
+    .ar-progress::after { content:none; }
+    /* Две колонки: журнал слева, вкладки справа. */
     #ar-modal .ar-body { display:flex; flex:1; min-height:0; gap:14px; overflow:hidden; }
     #ar-modal #ar-right { flex:1; min-width:0; display:flex; flex-direction:column; overflow:hidden; }
-    #ar-modal .ar-lograil { width:330px; flex-shrink:0; display:flex; flex-direction:column; border:1px solid #0e3a47; border-radius:10px; background:#03101a; overflow:hidden; transition:width .15s; }
+    #ar-modal .ar-lograil { width:330px; flex-shrink:0; display:flex; flex-direction:column; border:1px solid var(--border); border-radius:var(--r); background:var(--bg); overflow:hidden; transition:width .15s; }
     #ar-modal .ar-lograil.collapsed { width:40px; }
-    #ar-modal .ar-railhead { flex-shrink:0; display:flex; align-items:center; justify-content:space-between; gap:6px; padding:9px 11px; font-size:12px; font-weight:700; color:#7dd3fc; border-bottom:1px solid #0e3a47; font-family:ui-monospace,monospace; letter-spacing:.5px; text-shadow:0 0 7px rgba(56,189,248,.5); }
+    #ar-modal .ar-railhead { flex-shrink:0; display:flex; align-items:center; justify-content:space-between; gap:6px; padding:9px 11px; font-size:11px; font-weight:400; color:var(--text-faint); border-bottom:1px solid var(--border); font-family:var(--font-ui); }
     #ar-modal .ar-lograil.collapsed .ar-railhead { justify-content:center; padding:9px 0; }
     #ar-modal .ar-railhead-btns { display:flex; gap:6px; flex-shrink:0; }
-    #ar-modal .ar-railbtn { display:inline-flex; align-items:center; justify-content:center; min-width:24px; height:22px; padding:0 7px; background:rgba(56,189,248,.06); border:1px solid rgba(56,189,248,.3); color:#7dd3fc; border-radius:5px; font-size:12px; line-height:1; cursor:pointer; transition:all .15s; }
-    #ar-modal .ar-railbtn:hover { background:rgba(56,189,248,.14); border-color:var(--cyan); }
-    #ar-modal .ar-railstatus { flex-shrink:0; display:flex; align-items:center; gap:7px; padding:8px 11px 6px; font-family:ui-monospace,monospace; font-size:10.5px; font-weight:700; letter-spacing:1px; color:#4ade80; }
-    #ar-modal .ar-railstatus .dot { width:8px; height:8px; border-radius:50%; background:#22c55e; box-shadow:0 0 8px #22c55e; animation:ar-led-pulse 2.4s ease-in-out infinite; }
-    #ar-modal .ar-railstatus.warn { color:#fbbf24; } #ar-modal .ar-railstatus.warn .dot { background:#fbbf24; box-shadow:0 0 8px #fbbf24; }
-    #ar-modal .ar-railstatus.err  { color:#f87171; } #ar-modal .ar-railstatus.err .dot { background:#ef4444; box-shadow:0 0 8px #ef4444; }
-    #ar-modal .ar-railbody { flex:1; min-height:0; overflow:auto; padding:8px 10px; font:11px/1.45 ui-monospace,monospace; font-variant-numeric:tabular-nums; color:#7dd3fc; background:#020a10; background-image:repeating-linear-gradient(0deg, rgba(56,189,248,.035) 0, rgba(56,189,248,.035) 1px, transparent 1px, transparent 3px); }
+    #ar-modal .ar-railbtn { display:inline-flex; align-items:center; justify-content:center; min-width:24px; height:22px; padding:0 7px; background:none; border:1px solid var(--border); color:var(--text-dim); border-radius:var(--r-sm); font-size:12px; line-height:1; cursor:pointer; transition:all .15s; }
+    #ar-modal .ar-railbtn:hover { color:var(--text); border-color:var(--accent-dim); }
+    /* Состояние ленты: точка + слово, цвет = вердикт. Пульсация и свечение сняты. */
+    #ar-modal .ar-railstatus { flex-shrink:0; display:flex; align-items:center; gap:7px; padding:8px 11px 6px; font-family:var(--font-ui); font-size:11px; font-weight:400; color:var(--good); }
+    #ar-modal .ar-railstatus .dot { width:7px; height:7px; border-radius:50%; background:var(--good); }
+    #ar-modal .ar-railstatus.warn { color:var(--warn); } #ar-modal .ar-railstatus.warn .dot { background:var(--warn); }
+    #ar-modal .ar-railstatus.err  { color:var(--crit); } #ar-modal .ar-railstatus.err .dot { background:var(--crit); }
+    #ar-modal .ar-railbody { flex:1; min-height:0; overflow:auto; padding:8px 10px; font:11px/1.45 var(--font-mono); font-variant-numeric:tabular-nums; color:var(--text-dim); background:var(--bg); }
     #ar-modal .ar-lograil.collapsed .ttl, #ar-modal .ar-lograil.collapsed .ar-railstatus, #ar-modal .ar-lograil.collapsed .ar-railbody, #ar-modal .ar-lograil.collapsed #ar-feed-clear, #ar-modal .ar-lograil.collapsed #ar-progress { display:none; }
-    @keyframes ar-led-pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
     @media (max-width:760px){
       #ar-modal .ar-body { flex-direction:column; gap:10px; }
       #ar-modal .ar-lograil { width:auto !important; max-height:30vh; }
@@ -718,22 +741,22 @@ function makeModal() {
     position:'fixed', top:'0', right:'0', left:'auto', transform:'none',
     width:'1140px', maxWidth:'96vw', height:'100vh', maxHeight:'100vh', overflow:'hidden',
     display:'flex', flexDirection:'column',
-    background:'linear-gradient(180deg,#061a22 0%,#04141a 100%)', color:'var(--txt)', borderRadius:'14px 0 0 14px',
-    padding:'20px 22px', boxShadow:'-8px 0 40px rgba(0,0,0,.7),inset 0 0 0 1px rgba(56,189,248,.1)',
+    background:'linear-gradient(180deg,var(--bg) 0%,var(--bg) 100%)', color:'var(--txt)', borderRadius:'14px 0 0 14px',
+    padding:'20px 22px', boxShadow:'-8px 0 40px rgba(0,0,0,.7),inset 0 0 0 1px var(--accent-bg)',
     zIndex:'2000000001', fontFamily:'system-ui,-apple-system,Segoe UI,Roboto,Arial',
-    border:'1px solid #0e3a47', borderRight:'none'
+    border:'1px solid var(--border)', borderRight:'none'
   });
 
   // HUD: header → mono command-bar. Status LED (green) + "METACTRL // PRO" uppercase tracked title. Version/host badges kept.
   wrap.innerHTML = `
-    <div style="flex-shrink:0;display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding:11px 14px;background:#02101a;border:1px solid #0e3a47;border-radius:10px;box-shadow:inset 0 1px 0 rgba(56,189,248,.1)">
+    <div style="flex-shrink:0;display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding:11px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r)">
       <div style="display:flex;align-items:center;gap:11px">
-        <span style="width:9px;height:9px;border-radius:50%;background:#22c55e;box-shadow:0 0 8px #22c55e;flex-shrink:0;display:inline-block"></span>
-        <h2 style="margin:0;font-size:15px;font-weight:700;color:#e8eef7;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px">METACTRL <span style="color:#38bdf8;text-shadow:0 0 7px rgba(56,189,248,.6)">//</span> PRO</h2>
+        <span style="width:9px;height:9px;border-radius:50%;background:var(--good);box-shadow:0 0 8px var(--good);flex-shrink:0;display:inline-block"></span>
+        <h2 style="margin:0;font-size:13px;font-weight:600;color:var(--text);font-family:var(--font-ui)">MetaCtrl <span style="color:var(--text-faint);font-weight:400">PRO</span></h2>
         <span class="ar-badge" style="font-size:10px">${CONFIG.APP_VERSION}</span>
         <span class="ar-badge" style="font-size:10px;opacity:.7">${CONFIG.HOST.replace('https://','')}</span>
       </div>
-      <button id="ar-close" class="ar-btn ar-btn-danger ar-btn-sm">✕ Close</button>
+      <button id="ar-close" class="ar-btn ar-btn-sm">✕ Close</button>
     </div>
   `;
 
@@ -747,7 +770,7 @@ function makeModal() {
   rail.className = 'ar-lograil' + (STATE_RAIL_COLLAPSED ? ' collapsed' : '');
   rail.innerHTML = `
     <div class="ar-railhead">
-      <span class="ttl">◉ LIVE FEED<span id="ar-feed-count" style="opacity:.55;font-weight:400"></span></span>
+      <span class="ttl">Журнал<span id="ar-feed-count" style="opacity:.55;font-weight:400"></span></span>
       <span class="ar-railhead-btns">
         <button id="ar-feed-clear" class="ar-railbtn" title="Clear feed">⟲</button>
         <button id="ar-rail-toggle" class="ar-railbtn" title="Collapse">${STATE_RAIL_COLLAPSED ? '▶' : '◀'}</button>
@@ -904,9 +927,9 @@ function mountGenerator(container) {
       badge.textContent = 'NEW';
       textWrap.appendChild(badge);
     }
-    lbl.addEventListener('mouseenter', () => { lbl.style.background = 'rgba(59,130,246,.08)'; });
-    lbl.addEventListener('mouseleave', () => { lbl.style.background = cb.checked ? 'rgba(59,130,246,.1)' : ''; });
-    cb.addEventListener('change', () => { lbl.style.background = cb.checked ? 'rgba(59,130,246,.1)' : ''; });
+    lbl.addEventListener('mouseenter', () => { lbl.style.background = 'var(--accent-bg)'; });
+    lbl.addEventListener('mouseleave', () => { lbl.style.background = cb.checked ? 'var(--accent-bg)' : ''; });
+    cb.addEventListener('change', () => { lbl.style.background = cb.checked ? 'var(--accent-bg)' : ''; });
     parent.appendChild(lbl);
     return cb;
   }
@@ -1126,7 +1149,8 @@ function mountGenerator(container) {
   ['CAMPAIGN','ADSET','AD'].forEach(t => {
     const pill = document.createElement('div');
     pill.className = 'ar-entity-pill';
-    pill.textContent = t;
+    // Подпись обычным регистром; значение остаётся CAMPAIGN/ADSET/AD — на нём висит генерация.
+    pill.textContent = t.charAt(0) + t.slice(1).toLowerCase();
     pill.dataset.val = t;
     pill.onclick = () => {
       Object.values(entityPills).forEach(p => p.classList.remove('sel'));
@@ -1250,7 +1274,7 @@ function mountGenerator(container) {
 
   // Count conditions subheader
   const mrCountHdr = document.createElement('div');
-  mrCountHdr.style.cssText = 'grid-column:span 2;font-size:11px;font-weight:700;color:var(--muted);margin-top:8px;letter-spacing:.03em';
+  mrCountHdr.style.cssText = 'grid-column:span 2;font-size:11px;font-weight:700;color:var(--muted);margin-top:8px;';
   mrCountHdr.textContent = 'MIN COUNT CONDITIONS (all levels: CAMPAIGN / ADSET / AD)';
   schGrid.appendChild(mrCountHdr);
 
@@ -1286,14 +1310,14 @@ function mountGenerator(container) {
 
   // Spend-based conditions subheader
   const mrSpendHdr = document.createElement('div');
-  mrSpendHdr.style.cssText = 'grid-column:span 2;font-size:11px;font-weight:700;color:var(--muted);margin-top:8px;letter-spacing:.03em';
+  mrSpendHdr.style.cssText = 'grid-column:span 2;font-size:11px;font-weight:700;color:var(--muted);margin-top:8px;';
   mrSpendHdr.textContent = 'SPEND-BASED CONDITIONS (all levels — AD-safe, uses YESTERDAY window)';
   schGrid.appendChild(mrSpendHdr);
 
   // --- Scenario A: "gave results, not expensive" ---
   // clicks >= minN AND spent < threshold × mult  →  cheap result, worth waking up
   const mrSpAHdr = document.createElement('div');
-  mrSpAHdr.style.cssText = 'grid-column:span 2;font-size:11px;color:#60a5fa;font-weight:600;margin-top:6px';
+  mrSpAHdr.style.cssText = 'grid-column:span 2;font-size:11px;color:var(--accent);font-weight:600;margin-top:6px';
   mrSpAHdr.textContent = 'A — Good result / cheap: clicks ≥ N  AND  spent < threshold × mult';
   schGrid.appendChild(mrSpAHdr);
 
@@ -1341,7 +1365,7 @@ function mountGenerator(container) {
   // --- Scenario B: "barely ran, give another chance" ---
   // clicks < maxN AND spent < threshold × mult  →  almost no activity, retry
   const mrSpBHdr = document.createElement('div');
-  mrSpBHdr.style.cssText = 'grid-column:span 2;font-size:11px;color:#a78bfa;font-weight:600;margin-top:8px';
+  mrSpBHdr.style.cssText = 'grid-column:span 2;font-size:11px;color:var(--vert-gambling);font-weight:600;margin-top:8px';
   mrSpBHdr.textContent = 'B — Barely ran / give chance: clicks < N  AND  spent < threshold × mult';
   schGrid.appendChild(mrSpBHdr);
 
@@ -1575,7 +1599,7 @@ function mountGenerator(container) {
   RULE_DEFS.forEach(entry => {
     if (entry[0] === '__group__') {
       const grp = document.createElement('div');
-      grp.style.cssText = 'width:100%;font-size:11px;font-weight:700;color:var(--muted);padding:8px 8px 4px;letter-spacing:.04em;text-transform:uppercase;border-top:1px solid var(--bdr);margin-top:4px';
+      grp.style.cssText = 'width:100%;font-size:11px;font-weight:700;color:var(--muted);padding:8px 8px 4px;border-top:1px solid var(--bdr);margin-top:4px';
       grp.textContent = entry[1];
       rulesWrap.appendChild(grp);
     } else {
@@ -1637,7 +1661,7 @@ function mountGenerator(container) {
         const o = document.createElement('option');
         o.value = a.id;
         o.textContent = `${a.status === 1 ? '● ' : a.status === 2 || a.status === 101 ? '● ' : '● '}${a.name} (${a.id}) [${a.ruleCount}r] ${a.currency}`;
-        o.style.color = a.status === 1 ? '#22c55e' : (a.status === 2 || a.status === 101) ? '#ef4444' : '#f59e0b';
+        o.style.color = a.status === 1 ? 'var(--good)' : (a.status === 2 || a.status === 101) ? 'var(--crit)' : 'var(--warn)';
         accList.appendChild(o);
       });
       accList.style.display = ACCOUNTS_CACHE.length ? 'block' : 'none';
@@ -1667,14 +1691,14 @@ function mountGenerator(container) {
   // announces the delete before the click (text swap). Actual confirm() guard is in the handler.
   const clearCb = document.createElement('input');
   clearCb.type = 'checkbox'; clearCb.id = 'ar-clear-existing';
-  clearCb.style.cssText = 'margin-left:auto;accent-color:#ef4444';
+  clearCb.style.cssText = 'margin-left:auto;accent-color:var(--crit)';
   const clearLbl = document.createElement('label');
   clearLbl.htmlFor = 'ar-clear-existing';
   clearLbl.textContent = '🗑 Delete existing rules';
-  clearLbl.style.cssText = 'font-size:12px;cursor:pointer;user-select:none;color:#fca5a5';
+  clearLbl.style.cssText = 'font-size:12px;cursor:pointer;user-select:none;color:var(--crit)';
   clearCb.onchange = () => {
     btnGen.textContent = clearCb.checked ? '⚡ Generate & Delete Existing' : '⚡ Generate Rules';
-    btnGen.style.background = clearCb.checked ? 'linear-gradient(135deg,#b91c1c,#ef4444)' : '';
+    btnGen.style.background = clearCb.checked ? 'linear-gradient(135deg,var(--crit),var(--crit))' : '';
   };
   actRow.appendChild(btnGen);
   actRow.appendChild(clearCb);
@@ -1770,7 +1794,7 @@ function mountGenerator(container) {
   // Leadgen preset button (highlighted)
   const leadgenBtn = document.createElement('button');
   leadgenBtn.className = 'ar-preset-btn';
-  leadgenBtn.style.cssText = 'border-color:#3b82f6;color:#3b82f6;font-weight:700';
+  leadgenBtn.style.cssText = 'font-weight:700';
   leadgenBtn.textContent = '🎯 Leadgen';
   leadgenBtn.onclick = () => applyPreset('leadgen');
   presetRow.appendChild(leadgenBtn);
@@ -1778,7 +1802,7 @@ function mountGenerator(container) {
   // Gambling +3 preset button
   const gambPlus3Btn = document.createElement('button');
   gambPlus3Btn.className = 'ar-preset-btn';
-  gambPlus3Btn.style.cssText = 'border-color:#f59e0b;color:#f59e0b;font-weight:700';
+  gambPlus3Btn.style.cssText = 'font-weight:700';
   gambPlus3Btn.textContent = '🎰 Gambl +3';
   gambPlus3Btn.onclick = () => applyPreset('gambling_plus3');
   presetRow.appendChild(gambPlus3Btn);
@@ -1786,7 +1810,7 @@ function mountGenerator(container) {
   // Gambling -7 preset button
   const gambMinus7Btn = document.createElement('button');
   gambMinus7Btn.className = 'ar-preset-btn';
-  gambMinus7Btn.style.cssText = 'border-color:#f59e0b;color:#f59e0b;font-weight:700';
+  gambMinus7Btn.style.cssText = 'font-weight:700';
   gambMinus7Btn.textContent = '🎰 Gambl -7';
   gambMinus7Btn.onclick = () => applyPreset('gambling_minus7');
   presetRow.appendChild(gambMinus7Btn);
@@ -2714,7 +2738,7 @@ function mountManager(container) {
   const localLog = (msg, type = 'info') => {
     const d = document.createElement('div');
     d.style.margin = '2px 0';
-    const color = type==='error'?'#fca5a5':type==='warning'?'#fcd34d':type==='success'?'#86efac':'#cbd5e1';
+    const color = type==='error'?'var(--crit)':type==='warning'?'var(--warn)':type==='success'?'var(--good)':'var(--text-dim)';
     d.innerHTML = `<span style="opacity:.45">${new Date().toLocaleTimeString()}</span> <span style="color:${color}">${escapeHtml(msg)}</span>`;
     logEl.appendChild(d);
     logEl.scrollTop = logEl.scrollHeight;
@@ -2731,7 +2755,7 @@ function mountManager(container) {
       const o = document.createElement('option');
       o.value = a.id;
       o.textContent = `● ${a.name} (${a.id}) [${a.ruleCount}r] ${a.currency}`;
-      o.style.color = a.status === 1 ? '#22c55e' : (a.status === 2 || a.status === 101) ? '#ef4444' : '#f59e0b';
+      o.style.color = a.status === 1 ? 'var(--good)' : (a.status === 2 || a.status === 101) ? 'var(--crit)' : 'var(--warn)';
       sel.appendChild(o);
     });
     host.appendChild(sel);
@@ -2786,7 +2810,7 @@ function mountManager(container) {
       const o = document.createElement('option');
       o.value = a.id;
       o.textContent = `● ${a.name} (${a.id}) [${a.ruleCount}r] ${a.currency}`;
-      o.style.color = a.status === 1 ? '#22c55e' : (a.status === 2 || a.status === 101) ? '#ef4444' : '#f59e0b';
+      o.style.color = a.status === 1 ? 'var(--good)' : (a.status === 2 || a.status === 101) ? 'var(--crit)' : 'var(--warn)';
       sel.appendChild(o);
     });
     host.appendChild(sel);
@@ -3013,7 +3037,7 @@ function mountMetrics(container) {
         <button class="cm-create ar-btn ar-btn-primary ar-btn-sm" style="white-space:nowrap">＋ Создать</button>
         <button class="cm-del ar-btn ar-btn-danger ar-btn-sm" style="display:none">🗑</button>
       </div>
-      <input class="cm-formula" spellcheck="false" title="Машинная формула — правь и жми «Создать» если ключ не подошёл" value="${m.formula.replace(/"/g, '&quot;')}" style="font:12px/1.4 ui-monospace,monospace;color:#7dd3fc">`;
+      <input class="cm-formula" spellcheck="false" title="Машинная формула — правь и жми «Создать» если ключ не подошёл" value="${m.formula.replace(/"/g, '&quot;')}" style="font:12px/1.4 var(--font-mono);color:var(--accent)">`;
     list.appendChild(el);
     const ref = { m, el, st: el.querySelector('.cm-st'), bC: el.querySelector('.cm-create'), bD: el.querySelector('.cm-del'), fInp: el.querySelector('.cm-formula'), id: null };
     ref.bC.onclick = () => cmCreate(ref);
@@ -3333,7 +3357,7 @@ function mountColumnManager(container) {
     STATUS.log(msg, type);  // v25.12: mirror tab actions into the LIVE FEED rail
     const d = document.createElement('div');
     d.style.margin = '2px 0';
-    const c = type==='error'?'#fca5a5':type==='warning'?'#fcd34d':type==='success'?'#86efac':'#cbd5e1';
+    const c = type==='error'?'var(--crit)':type==='warning'?'var(--warn)':type==='success'?'var(--good)':'var(--text-dim)';
     d.innerHTML = `<span style="opacity:.45">${new Date().toLocaleTimeString()}</span> <span style="color:${c}">${escapeHtml(String(msg))}</span>`;
     logEl.appendChild(d);
     logEl.scrollTop = logEl.scrollHeight;
@@ -3371,19 +3395,19 @@ function mountColumnManager(container) {
       if (isDefault) {
         const badge = document.createElement('span');
         badge.textContent = '✅ default';
-        badge.style.cssText = 'font-size:10px;font-weight:600;color:#22c55e;background:rgba(34,197,94,.12);padding:1px 6px;border-radius:4px;margin-left:6px;vertical-align:middle;';
+        badge.style.cssText = 'font-size:10px;font-weight:600;color:var(--good);background:var(--good-bg);padding:1px 6px;border-radius:4px;margin-left:6px;vertical-align:middle;';
         lbl.appendChild(badge);
       }
       const meta = document.createElement('div');
       meta.textContent = `${p.id} · ${cols} cols${date ? ' · ' + date : ''}`;
       meta.style.cssText = 'font-size:10px;color:var(--muted);margin-left:22px;margin-top:1px;';
       lbl.appendChild(meta);
-      lbl.addEventListener('mouseenter', () => { if (selectedPresetId !== p.id) lbl.style.borderColor = '#4b80c8'; });
+      lbl.addEventListener('mouseenter', () => { if (selectedPresetId !== p.id) lbl.style.borderColor = 'var(--accent)'; });
       lbl.addEventListener('mouseleave', () => { if (selectedPresetId !== p.id) lbl.style.borderColor = 'var(--bdr)'; });
       lbl.addEventListener('click', () => {
         listEl.querySelectorAll('[data-pid]').forEach(r => { r.style.borderColor = 'var(--bdr)'; r.style.background = 'var(--card)'; });
         lbl.style.borderColor = 'var(--acc)';
-        lbl.style.background = 'rgba(59,130,246,.07)';
+        lbl.style.background = 'var(--accent-bg)';
         rb.checked = true;
         selectedPresetId = p.id;
       });
@@ -3499,7 +3523,7 @@ function mountColumnManager(container) {
         const o = document.createElement('option');
         o.value = a.id;
         o.textContent = `${a.name} (${a.id}) ${a.currency}`;
-        o.style.color = a.status === 1 ? '#22c55e' : (a.status === 2 || a.status === 101) ? '#ef4444' : '#f59e0b';
+        o.style.color = a.status === 1 ? 'var(--good)' : (a.status === 2 || a.status === 101) ? 'var(--crit)' : 'var(--warn)';
         cpAccList.appendChild(o);
       });
       cpAccList.style.display = ACCOUNTS_CACHE.length ? 'block' : 'none';
@@ -3674,7 +3698,7 @@ function mountAnalytics(container) {
       filter:'all', preset:'today', dateFrom:'', dateTo:'',
       status:{type:'info',text:'Select a period and click Load.'},
     };
-    const SC={info:'#3b82f6',success:'#22c55e',error:'#ef4444',warning:'#f59e0b'};
+    const SC={info:'var(--accent)',success:'var(--good)',error:'var(--crit)',warning:'var(--warn)'};
 
     async function sdLoad() {
       sd.loading=true; sd.accounts=[];
@@ -3721,7 +3745,7 @@ function mountAnalytics(container) {
 
     function sdRender() {
       const SL={1:'Active',2:'Disabled',3:'Unsettled',7:'Pending',8:'Pending',9:'In Review',100:'Closed',101:'Any Closed',201:'Flagged'};
-      const SC2={1:'#22c55e',2:'#ef4444',3:'#f59e0b',7:'#f59e0b',8:'#f59e0b',9:'#f59e0b',100:'#64748b',101:'#64748b',201:'#ef4444'};
+      const SC2={1:'var(--good)',2:'var(--crit)',3:'var(--warn)',7:'var(--warn)',8:'var(--warn)',9:'var(--warn)',100:'var(--text-faint)',101:'var(--text-faint)',201:'var(--crit)'};
       const fmt=(n,cur)=>n==null?'—':n.toLocaleString('en',{style:'currency',currency:cur||'USD',minimumFractionDigits:2,maximumFractionDigits:2});
       const fmtUsd=n=>n==null?'—':'≈'+n.toLocaleString('en',{style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:2});
       const toUsd=(n,rate)=>n==null?0:n/(rate||1);
@@ -3743,25 +3767,25 @@ function mountAnalytics(container) {
       const rows=accs.map(a=>`<tr>
         <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
           <div style="font-size:12px;font-weight:600;color:var(--txt)">${esc(a.name)}</div>
-          <div style="font-size:10px;color:#64748b">${esc(a.id)}${a.bm?` · ${esc(a.bm)}`:''}</div>
+          <div style="font-size:10px;color:var(--text-faint)">${esc(a.id)}${a.bm?` · ${esc(a.bm)}`:''}</div>
         </td>
         <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
-          <span style="font-size:11px;font-weight:700;color:${SC2[a.status]||'#64748b'}">${SL[a.status]||a.status}</span>
+          <span style="font-size:11px;font-weight:700;color:${SC2[a.status]||'var(--text-faint)'}">${SL[a.status]||a.status}</span>
         </td>
-        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:13px;font-weight:700;color:${(a.spend||0)>0?'var(--txt)':'#64748b'};text-align:right">${fmt(a.spend,a.currency)}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:#64748b;text-align:right">${a.impressions!=null?a.impressions.toLocaleString():'—'}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:#64748b;text-align:right">${a.clicks!=null?a.clicks.toLocaleString():'—'}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:13px;font-weight:700;color:${(a.spend||0)>0?'var(--txt)':'var(--text-faint)'};text-align:right">${fmt(a.spend,a.currency)}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--text-faint);text-align:right">${a.impressions!=null?a.impressions.toLocaleString():'—'}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--text-faint);text-align:right">${a.clicks!=null?a.clicks.toLocaleString():'—'}</td>
         <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--txt);text-align:right">${fmt(a.balance,a.currency)}</td>
       </tr>`).join('');
 
       c.innerHTML = `
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
           ${presetBtns}
-          <span style="color:#64748b;font-size:11px">|</span>
+          <span style="color:var(--text-faint);font-size:11px">|</span>
           <button class="ar-btn ar-btn-ghost ar-btn-sm${sd.preset==='custom'?' active':''}" data-sdact="preset" data-preset="custom">📅 Custom</button>
           ${sd.preset==='custom'?`
             <input type="date" id="sd-from" value="${sd.dateFrom||''}" style="background:var(--card);border:1px solid var(--bdr);border-radius:6px;padding:3px 8px;font-size:12px;color:var(--txt)">
-            <span style="color:#64748b;font-size:11px">–</span>
+            <span style="color:var(--text-faint);font-size:11px">–</span>
             <input type="date" id="sd-to" value="${sd.dateTo||''}" style="background:var(--card);border:1px solid var(--bdr);border-radius:6px;padding:3px 8px;font-size:12px;color:var(--txt)">
           `:''}
           <button class="ar-btn ar-btn-primary ar-btn-sm" data-sdact="load" ${sd.loading?'disabled':''}>${sd.loading?'Loading…':'↻ Load'}</button>
@@ -3770,11 +3794,11 @@ function mountAnalytics(container) {
           ${[
             ['Spend ('+presetLabel+') ≈USD', fmtUsd(totalSpend), 'var(--txt)', '110px'],
             ['Total Balance ≈USD', fmtUsd(totalBalance), 'var(--txt)', '110px'],
-            ['Active', activeCount, '#22c55e', '70px'],
-            ['Spending', spendingCount, '#3b82f6', '70px'],
-            ['Issues', issueCount, '#ef4444', '70px'],
+            ['Active', activeCount, 'var(--good)', '70px'],
+            ['Spending', spendingCount, 'var(--accent)', '70px'],
+            ['Issues', issueCount, 'var(--crit)', '70px'],
           ].map(([lbl,val,clr,w])=>`<div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 14px;min-width:${w}">
-            <div style="font-size:10px;color:#64748b">${lbl}</div>
+            <div style="font-size:10px;color:var(--text-faint)">${lbl}</div>
             <div style="font-size:16px;font-weight:700;color:${clr}">${val}</div>
           </div>`).join('')}
         </div>
@@ -3789,17 +3813,17 @@ function mountAnalytics(container) {
           <div style="overflow:auto;max-height:380px;background:var(--card);border:1px solid var(--bdr);border-radius:8px">
             <table style="width:100%;border-collapse:collapse">
               <thead><tr style="background:var(--bg);position:sticky;top:0">
-                <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Account</th>
-                <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Status</th>
-                <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Spend</th>
-                <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Impr.</th>
-                <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Clicks</th>
-                <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Balance</th>
+                <th style="padding:6px 8px;text-align:left;font-size:11px;color:var(--text-faint);font-weight:700;border-bottom:1px solid var(--bdr)">Account</th>
+                <th style="padding:6px 8px;text-align:left;font-size:11px;color:var(--text-faint);font-weight:700;border-bottom:1px solid var(--bdr)">Status</th>
+                <th style="padding:6px 8px;text-align:right;font-size:11px;color:var(--text-faint);font-weight:700;border-bottom:1px solid var(--bdr)">Spend</th>
+                <th style="padding:6px 8px;text-align:right;font-size:11px;color:var(--text-faint);font-weight:700;border-bottom:1px solid var(--bdr)">Impr.</th>
+                <th style="padding:6px 8px;text-align:right;font-size:11px;color:var(--text-faint);font-weight:700;border-bottom:1px solid var(--bdr)">Clicks</th>
+                <th style="padding:6px 8px;text-align:right;font-size:11px;color:var(--text-faint);font-weight:700;border-bottom:1px solid var(--bdr)">Balance</th>
               </tr></thead>
               <tbody>${rows}</tbody>
             </table>
           </div>
-        `:`<div style="font-size:13px;color:#64748b;padding:16px 0">Select a period and click Load.</div>`}
+        `:`<div style="font-size:13px;color:var(--text-faint);padding:16px 0">Select a period and click Load.</div>`}
         <div style="margin-top:10px;padding:8px 12px;border-radius:8px;border:1px solid;font-size:12px;color:${SC[sd.status.type]};background:${SC[sd.status.type]}18;border-color:${SC[sd.status.type]}30">
           ${esc(sd.status.text)}
         </div>
@@ -3878,7 +3902,7 @@ function mountAnalytics(container) {
   /* ---- small UI helpers ---- */
   function sectionLabel(text) {
     const d = document.createElement('div');
-    d.style.cssText = 'font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin:12px 0 5px;';
+    d.style.cssText = 'font-size:10px;color:var(--muted);font-weight:700;margin:12px 0 5px;';
     d.textContent = text;
     return d;
   }
@@ -3974,7 +3998,7 @@ function mountAnalytics(container) {
   dTo.type = 'date'; dTo.value = saved.dateTo || '';
   dTo.style.cssText = 'flex:1;background:var(--card);border:1px solid var(--bdr);border-radius:6px;padding:4px 6px;font-size:11px;color:var(--txt);';
   const dSep = document.createElement('span'); dSep.textContent = '–';
-  dSep.style.cssText = 'color:#64748b;font-size:11px;';
+  dSep.style.cssText = 'color:var(--text-faint);font-size:11px;';
   dateWrap.appendChild(dFrom); dateWrap.appendChild(dSep); dateWrap.appendChild(dTo);
   left.appendChild(dateWrap);
 
@@ -4022,7 +4046,7 @@ function mountAnalytics(container) {
   rightTitle.textContent = '📋 Progress';
   right.appendChild(rightTitle);
   const logEl = document.createElement('div');
-  logEl.style.cssText = 'background:var(--bg);border:1px solid var(--bdr);border-radius:6px;padding:8px 10px;height:560px;overflow:auto;font:11px/1.5 ui-monospace,monospace;color:var(--txt);';
+  logEl.style.cssText = 'background:var(--bg);border:1px solid var(--bdr);border-radius:6px;padding:8px 10px;height:560px;overflow:auto;font:11px/1.5 var(--font-mono);color:var(--txt);';
   right.appendChild(logEl);
 
   grid.appendChild(left);
@@ -4031,7 +4055,7 @@ function mountAnalytics(container) {
 
   /* ---- log + action helpers ---- */
   function log(msg, type) {
-    const colors = {info:'var(--txt)',success:'#22c55e',warning:'#f59e0b',error:'#ef4444'};
+    const colors = {info:'var(--txt)',success:'var(--good)',warning:'var(--warn)',error:'var(--crit)'};
     const line = document.createElement('div');
     line.style.color = colors[type || 'info'] || colors.info;
     line.textContent = new Date().toLocaleTimeString() + ' ' + msg;
@@ -4468,21 +4492,21 @@ const ACC_STATUS = {
 
 function statusBadge(code) {
   const label = ACC_STATUS[code] || ('Status ' + code);
-  const color = code === 1 ? '#22c55e' : (code === 2 || code === 101) ? '#ef4444' : '#f59e0b';
-  const bg    = code === 1 ? 'rgba(34,197,94,.12)' : (code === 2 || code === 101) ? 'rgba(239,68,68,.12)' : 'rgba(245,158,11,.12)';
+  const color = code === 1 ? 'var(--good)' : (code === 2 || code === 101) ? 'var(--crit)' : 'var(--warn)';
+  const bg    = code === 1 ? 'var(--good-bg)' : (code === 2 || code === 101) ? 'var(--crit-bg)' : 'var(--warn-bg)';
   return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:' + bg + ';color:' + color + '">' + label + '</span>';
 }
 
 function accStatusDot(code) {
-  const color = code === 1 ? '#22c55e' : (code === 2 || code === 101) ? '#ef4444' : code ? '#f59e0b' : '#64748b';
+  const color = code === 1 ? 'var(--good)' : (code === 2 || code === 101) ? 'var(--crit)' : code ? 'var(--warn)' : 'var(--text-faint)';
   const title = ACC_STATUS[code] || (code ? 'Status ' + code : '');
   return '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:' + color + ';flex-shrink:0;vertical-align:middle;margin-right:2px" title="' + title + '"></span>';
 }
 
 function verBadge(v) {
   const ok    = v === 'verified';
-  const color = ok ? '#22c55e' : '#94a3b8';
-  const bg    = ok ? 'rgba(34,197,94,.12)' : 'rgba(148,163,184,.08)';
+  const color = ok ? 'var(--good)' : 'var(--text-faint)';
+  const bg    = ok ? 'var(--good-bg)' : 'rgba(148,163,184,.08)';
   return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:' + bg + ';color:' + color + '">' + (v || 'n/a') + '</span>';
 }
 
@@ -4518,22 +4542,22 @@ function tzOffset(tzName) {
 function miniBar(spentN, capN, cur, label) {
   var spentFmt = spentN.toLocaleString('en-US', { style:'currency', currency:cur, maximumFractionDigits:0 });
   if (!capN) return '<div style="margin-bottom:6px">'
-    + '<div style="font-size:10px;color:#64748b;margin-bottom:2px">' + label + '</div>'
-    + '<span style="color:#22c55e;font-weight:600;font-size:12px">' + spentFmt + '</span>'
-    + '<span style="color:#64748b;font-size:10px"> / no limit</span>'
+    + '<div style="font-size:10px;color:var(--text-faint);margin-bottom:2px">' + label + '</div>'
+    + '<span style="color:var(--good);font-weight:600;font-size:12px">' + spentFmt + '</span>'
+    + '<span style="color:var(--text-faint);font-size:10px"> / no limit</span>'
     + '</div>';
   var pct      = Math.min(100, Math.round(spentN / capN * 100));
   var capFmt   = capN.toLocaleString('en-US', { style:'currency', currency:cur, maximumFractionDigits:0 });
   var rem      = Math.max(0, capN - spentN);
   var remFmt   = rem.toLocaleString('en-US', { style:'currency', currency:cur, maximumFractionDigits:0 });
-  var barColor = pct >= 90 ? '#ef4444' : pct >= 70 ? '#f59e0b' : '#22c55e';
+  var barColor = pct >= 90 ? 'var(--crit)' : pct >= 70 ? 'var(--warn)' : 'var(--good)';
   return '<div style="margin-bottom:8px">'
-    + '<div style="font-size:10px;color:#64748b;margin-bottom:3px;font-weight:600;text-transform:uppercase;letter-spacing:.03em">' + label + '</div>'
+    + '<div style="font-size:10px;color:var(--text-faint);margin-bottom:3px;font-weight:600;">' + label + '</div>'
     + '<div style="white-space:nowrap;margin-bottom:3px">'
-    + '<span style="color:#22c55e;font-weight:700;font-size:13px">' + spentFmt + '</span>'
-    + '<span style="color:#64748b;font-size:11px"> / ' + capFmt + '</span>'
+    + '<span style="color:var(--good);font-weight:700;font-size:13px">' + spentFmt + '</span>'
+    + '<span style="color:var(--text-faint);font-size:11px"> / ' + capFmt + '</span>'
     + '</div>'
-    + '<div style="background:#0a2c38;border-radius:3px;height:5px;width:140px;margin-bottom:2px">'
+    + '<div style="background:var(--surface);border-radius:3px;height:5px;width:140px;margin-bottom:2px">'
     + '<div style="height:5px;border-radius:3px;background:' + barColor + ';width:' + pct + '%"></div>'
     + '</div>'
     + '<div style="font-size:10px;color:' + barColor + '">' + pct + '% used &middot; left: ' + remFmt + '</div>'
@@ -4549,38 +4573,46 @@ function miniBar(spentN, capN, cur, label) {
   // v24.3 de-navy: this whole tab was a navy island (#1f2937/#374151) inside the teal HUD frame. Retuned surfaces to the
   // teal palette — tiles/cards #082530/#06222d, borders teal #103a47, search/headers #082530. Semantic value colors
   // (green balance, red disabled, amber appeal, blue accent) kept. Skin only — no data/logic touched.
+  // v25.1: тема TradingView. Inspector жил отдельным островом с собственными hex —
+  // теперь берёт те же токены (наследует их от #ar-modal, но объявляет и сам:
+  // #fbi-style инжектится отдельным <style> и может пережить пересборку панели).
+  // Цвета менять в theme.ts -> emit -> перенести TV_TOKENS_BODY в ОБА блока.
   _st.textContent = [
+    '#ar-insp{--bg:#131722;--surface:#1E222D;--surface-2:#2A2E39;--border:#2A2E39;--text:#D1D4DC;--text-dim:#B2B5BE;--text-faint:#787B86;--accent:#2962FF;--accent-dim:#1E53E5;--accent-bg:rgba(41,98,255,.15);--good:#26A69A;--warn:#FF9800;--crit:#EF5350;--warn-bg:rgba(255,152,0,.14);--font-ui:"Trebuchet MS",-apple-system,"Segoe UI",Roboto,sans-serif;--font-mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;--r:4px;--r-sm:3px}',
     '#ar-insp *{box-sizing:border-box;margin:0;padding:0;font-family:inherit}',
-    '#ar-insp{color:#e2e8f0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;padding:4px 0}',
-    '#ar-insp .fbi-tabs{display:flex;gap:2px;padding-bottom:12px;margin-bottom:16px;border-bottom:1px solid #103a47;flex-shrink:0;flex-wrap:wrap}',
-    '#ar-insp .fbi-tab{padding:7px 18px;border:none;border-radius:8px 8px 0 0;background:transparent;color:#8aa0a8;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;border-bottom:2px solid transparent}',
-    '#ar-insp .fbi-tab.active{color:#fff;border-bottom-color:#3b82f6;background:#082530}',
-    '#ar-insp .fbi-tab:hover:not(.active){color:#cbd5e1;background:rgba(56,189,248,.06)}',
+    '#ar-insp{color:var(--text);font-family:var(--font-ui);font-size:12px;padding:4px 0}',
+    '#ar-insp .fbi-tabs{display:flex;gap:2px;padding-bottom:12px;margin-bottom:16px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap}',
+    '#ar-insp .fbi-tab{padding:6px 14px;border:none;border-radius:var(--r-sm) var(--r-sm) 0 0;background:transparent;color:var(--text-faint);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;border-bottom:2px solid transparent}',
+    /* Активная вкладка — подложка акцента + синяя линия снизу. Единственный синий здесь. */
+    '#ar-insp .fbi-tab.active{color:var(--text);border-bottom-color:var(--accent);background:var(--accent-bg)}',
+    '#ar-insp .fbi-tab:hover:not(.active){color:var(--text-dim);background:var(--surface)}',
     '#ar-insp .fbi-body{padding:4px 2px}',
     '#ar-insp .fbi-stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px}',
-    '#ar-insp .fbi-stat{background:#082530;border:1px solid #103a47;border-radius:10px;padding:12px 18px;min-width:130px}',
-    '#ar-insp .fbi-stat-v{font-size:28px;font-weight:700;color:#fff;line-height:1}',
-    '#ar-insp .fbi-stat-l{font-size:11px;color:#8aa0a8;margin-top:5px}',
-    '#ar-insp .fbi-warn-box{background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:8px;padding:9px 13px;font-size:12px;color:#f59e0b;margin-bottom:10px}',
-    '#ar-insp .fbi-info-box{background:#082530;border:1px solid #103a47;border-radius:10px;padding:13px 16px;margin-bottom:14px;display:flex;align-items:center;gap:14px}',
-    '#ar-insp .fbi-avatar{width:40px;height:40px;border-radius:50%;background:#06222d;border:1px solid #103a47;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}',
+    /* Плитка-показатель: плоская, 4px. Число крупнее подписи — этим и выделяется. */
+    '#ar-insp .fbi-stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:12px 18px;min-width:130px}',
+    '#ar-insp .fbi-stat-v{font-size:24px;font-weight:600;color:var(--text);line-height:1;font-variant-numeric:tabular-nums}',
+    '#ar-insp .fbi-stat-l{font-size:11px;color:var(--text-faint);margin-top:5px}',
+    '#ar-insp .fbi-warn-box{background:var(--warn-bg);border:1px solid var(--warn);border-radius:var(--r-sm);padding:9px 13px;font-size:12px;color:var(--text);margin-bottom:10px}',
+    '#ar-insp .fbi-info-box{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:13px 16px;margin-bottom:14px;display:flex;align-items:center;gap:14px}',
+    '#ar-insp .fbi-avatar{width:40px;height:40px;border-radius:50%;background:var(--bg);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}',
     '#ar-insp .fbi-table-wrap{overflow-x:auto}',
-    '#ar-insp .fbi-table{width:100%;border-collapse:collapse;font-size:13px}',
-    '#ar-insp .fbi-table th{text-align:left;padding:9px 12px;background:#082530;color:#8aa0a8;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em;position:sticky;top:0;z-index:1;white-space:nowrap}',
-    '#ar-insp .fbi-table td{padding:10px 12px;border-bottom:1px solid #103a47;color:#e2e8f0;vertical-align:middle}',
-    '#ar-insp .fbi-table tr:hover td{background:rgba(56,189,248,.05)}',
+    /* Стол: компактная строка, шапка без капслока, подсветка строки целиком. */
+    '#ar-insp .fbi-table{width:100%;border-collapse:collapse;font-size:12px}',
+    '#ar-insp .fbi-table th{text-align:left;padding:5px 12px;background:var(--bg);color:var(--text-faint);font-weight:400;font-size:11px;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:1;white-space:nowrap}',
+    '#ar-insp .fbi-table td{height:28px;padding:0 12px;border-bottom:1px solid var(--border);color:var(--text);vertical-align:middle}',
+    '#ar-insp .fbi-table tr:hover td{background:var(--surface-2)}',
     '#ar-insp .fbi-name{font-weight:500}',
-    '#ar-insp .fbi-sub{font-size:11px;color:#8aa0a8;margin-top:2px}',
-    '#ar-insp .fbi-link{color:#7dd3fc;text-decoration:none;font-size:11px;font-weight:600;padding:3px 8px;border:1px solid rgba(56,189,248,.3);border-radius:5px;transition:all .12s;white-space:nowrap}',
-    '#ar-insp .fbi-link:hover{background:rgba(56,189,248,.12);border-color:var(--cyan)}',
+    '#ar-insp .fbi-sub{font-size:11px;color:var(--text-faint);margin-top:2px}',
+    '#ar-insp .fbi-link{color:var(--text-dim);text-decoration:none;font-size:11px;font-weight:600;padding:2px 8px;border:1px solid var(--border);border-radius:var(--r-sm);transition:all .12s;white-space:nowrap}',
+    '#ar-insp .fbi-link:hover{color:var(--text);border-color:var(--accent)}',
     '#ar-insp .fbi-links{display:flex;gap:5px;flex-wrap:wrap}',
-    '#ar-insp .fbi-empty{color:#8aa0a8;font-size:13px;padding:24px;text-align:center}',
-    '#ar-insp .fbi-search{width:100%;background:#06222d;border:1px solid #1a4a5a;border-radius:7px;padding:7px 11px;color:#e2e8f0;font-size:13px;margin-bottom:10px;outline:none}',
-    '#ar-insp .fbi-search:focus{border-color:#38bdf8;box-shadow:0 0 0 2px rgba(56,189,248,.25),0 0 10px rgba(56,189,248,.15)}',
-    '#ar-insp #fbi-loader{position:absolute;inset:0;background:rgba(4,20,26,.88);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;z-index:10;border-radius:10px}',
-    '#ar-insp .fbi-spinner{width:32px;height:32px;border:3px solid #103a47;border-top-color:#38bdf8;border-radius:50%;animation:fbi-spin .8s linear infinite}',
+    '#ar-insp .fbi-empty{color:var(--text-faint);font-size:12px;padding:24px;text-align:center}',
+    '#ar-insp .fbi-search{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);padding:5px 9px;color:var(--text);font-size:12px;margin-bottom:10px;outline:none}',
+    '#ar-insp .fbi-search:focus{border-color:var(--accent)}',
+    '#ar-insp #fbi-loader{position:absolute;inset:0;background:rgba(19,23,34,.88);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;z-index:10;border-radius:var(--r)}',
+    '#ar-insp .fbi-spinner{width:28px;height:28px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:fbi-spin .8s linear infinite}',
     '@keyframes fbi-spin{to{transform:rotate(360deg)}}',
-    '#ar-insp #fbi-loader p{color:#8aa0a8;font-size:13px}'
+    '#ar-insp #fbi-loader p{color:var(--text-faint);font-size:12px}'
   ].join(' ');
   document.head.appendChild(_st);
 
@@ -4783,7 +4815,7 @@ function getCurrentActId() {
       var cTz      = tzOffset(curAcc.timezone_name);
       var cTzFull  = (curAcc.timezone_name || '').replace(/_/g,' ');
       var cPct     = cCapN > 0 ? Math.min(100, Math.round(cSpentN / cCapN * 100)) : 0;
-      var cBarC    = cPct >= 90 ? '#ef4444' : cPct >= 70 ? '#f59e0b' : '#3b82f6';
+      var cBarC    = cPct >= 90 ? 'var(--crit)' : cPct >= 70 ? 'var(--warn)' : 'var(--accent)';
       var cAdsUrl  = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=' + cActId;
       var cBillUrl = 'https://business.facebook.com/billing_hub/accounts/details/?asset_id=' + cActId + '&payment_account_id=' + cActId + '&placement=ads_manager';
       var cQualUrl = 'https://www.facebook.com/accountquality?act=' + cActId;
@@ -4791,74 +4823,74 @@ function getCurrentActId() {
       var cCapFmt   = cCapN   > 0 ? cCapN.toLocaleString('en-US',{style:'currency',currency:cCur,maximumFractionDigits:0}) : 'no limit';
       var cBalFmt   = cBalN.toLocaleString('en-US',{style:'currency',currency:cCur,maximumFractionDigits:2});
       var cDayFmt   = cDayCapN > 0 ? cDayCapN.toLocaleString('en-US',{style:'currency',currency:cCur,maximumFractionDigits:0}) : null;
-      curHtml = '<div style="background:linear-gradient(135deg,#0c3550 0%,#082530 100%);border:1px solid #2563eb;border-radius:12px;padding:16px 20px;margin-bottom:18px">'
-        + '<div style="font-size:11px;font-weight:700;color:#3b82f6;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Current Account</div>'
+      curHtml = '<div style="background:linear-gradient(135deg,var(--surface) 0%,var(--surface) 100%);border:1px solid var(--accent-dim);border-radius:12px;padding:16px 20px;margin-bottom:18px">'
+        + '<div style="font-size:11px;font-weight:700;color:var(--accent);margin-bottom:10px">Current Account</div>'
         + '<div style="display:flex;align-items:flex-start;gap:20px;flex-wrap:wrap">'
         /* left: name + status + tz */
         + '<div style="flex:1;min-width:220px">'
         + '<div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:4px">' + esc(curAcc.name || 'act_' + cActId) + '</div>'
-        + '<div style="font-size:11px;color:#64748b;margin-bottom:8px">' + (curAcc.id || 'act_' + cActId) + ' &middot; ' + cCur + '</div>'
+        + '<div style="font-size:11px;color:var(--text-faint);margin-bottom:8px">' + (curAcc.id || 'act_' + cActId) + ' &middot; ' + cCur + '</div>'
         + statusBadge(curAcc.account_status)
-        + '<div style="margin-top:8px;font-size:13px;color:#e2e8f0"><span style="font-size:18px;font-weight:700">' + cTz + '</span> <span style="color:#64748b;font-size:11px">' + esc(cTzFull) + '</span></div>'
+        + '<div style="margin-top:8px;font-size:13px;color:var(--text)"><span style="font-size:18px;font-weight:700">' + cTz + '</span> <span style="color:var(--text-faint);font-size:11px">' + esc(cTzFull) + '</span></div>'
         + '</div>'
         /* middle: spend bars */
         + '<div style="flex:1;min-width:200px">'
-        + '<div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Account Limit</div>'
-        + '<div style="margin-bottom:4px"><span style="font-size:16px;font-weight:700;color:#22c55e">' + cSpentFmt + '</span><span style="color:#64748b;font-size:12px"> / ' + cCapFmt + '</span></div>'
-        + (cCapN > 0 ? '<div style="background:#0a2c38;border-radius:4px;height:6px;margin-bottom:3px"><div style="height:6px;border-radius:4px;background:' + cBarC + ';width:' + cPct + '%"></div></div>'
+        + '<div style="font-size:10px;color:var(--text-faint);font-weight:700;margin-bottom:4px">Account Limit</div>'
+        + '<div style="margin-bottom:4px"><span style="font-size:16px;font-weight:700;color:var(--good)">' + cSpentFmt + '</span><span style="color:var(--text-faint);font-size:12px"> / ' + cCapFmt + '</span></div>'
+        + (cCapN > 0 ? '<div style="background:var(--surface);border-radius:4px;height:6px;margin-bottom:3px"><div style="height:6px;border-radius:4px;background:' + cBarC + ';width:' + cPct + '%"></div></div>'
           + '<div style="font-size:11px;color:' + cBarC + '">' + cPct + '% used</div>' : '')
-        + (cDayFmt ? '<div style="margin-top:10px"><div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Daily Limit</div>'
-          + '<div style="font-size:14px;font-weight:700;color:#f59e0b">' + cDayFmt + '</div></div>' : '')
+        + (cDayFmt ? '<div style="margin-top:10px"><div style="font-size:10px;color:var(--text-faint);font-weight:700;margin-bottom:3px">Daily Limit</div>'
+          + '<div style="font-size:14px;font-weight:700;color:var(--warn)">' + cDayFmt + '</div></div>' : '')
         + '</div>'
         /* right: balance + links */
         + '<div style="min-width:140px">'
-        + '<div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Balance</div>'
-        + '<div style="font-size:18px;font-weight:700;color:#3b82f6;margin-bottom:12px">' + cBalFmt + '</div>'
+        + '<div style="font-size:10px;color:var(--text-faint);font-weight:700;margin-bottom:4px">Balance</div>'
+        + '<div style="font-size:18px;font-weight:700;color:var(--accent);margin-bottom:12px">' + cBalFmt + '</div>'
         + '<div class="fbi-links">'
         + '<a class="fbi-link" href="' + cAdsUrl  + '" target="_blank">Ads</a>'
         + '<a class="fbi-link" href="' + cBillUrl + '" target="_blank">Billing</a>'
-        + ([2,3,7,8,9,101].indexOf(curAcc.account_status) > -1 ? '<a class="fbi-link" href="' + cQualUrl + '" target="_blank" style="color:#f59e0b;border-color:rgba(245,158,11,.3)">Quality</a>' : '')
+        + ([2,3,7,8,9,101].indexOf(curAcc.account_status) > -1 ? '<a class="fbi-link" href="' + cQualUrl + '" target="_blank" style="color:var(--warn);border-color:var(--warn)">Quality</a>' : '')
         + '</div>'
         + '</div>'
         + '</div>'
         + '</div>';
     } else if (curActId) {
-      curHtml = '<div style="background:#082530;border:1px solid #103a47;border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:12px;color:#8aa0a8">Current account: act_' + curActId + ' (not in accessible accounts list)</div>';
+      curHtml = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:12px;color:var(--text-faint)">Current account: act_' + curActId + ' (not in accessible accounts list)</div>';
     }
 
     let html = curHtml + '<div class="fbi-info-box">'
       + '<div class="fbi-avatar">' + (picUrl ? '<img src="' + picUrl + '" width="42" height="42" style="border-radius:50%">' : '') + '</div>'
       + '<div><div style="font-size:16px;font-weight:700;color:#fff">' + esc(me.name) + '</div>'
-      + '<div style="font-size:12px;color:#64748b;margin-top:3px">ID: ' + me.id + (me.email ? ' - ' + esc(me.email) : '') + '</div></div></div>';
+      + '<div style="font-size:12px;color:var(--text-faint);margin-top:3px">ID: ' + me.id + (me.email ? ' - ' + esc(me.email) : '') + '</div></div></div>';
 
     if (disabled.length > 0) html += '<div class="fbi-warn-box">[!] ' + disabled.length + ' ad account(s) DISABLED</div>';
     if (appeal.length > 0)   html += '<div class="fbi-warn-box">[~] ' + appeal.length + ' account(s) pending review / appeal</div>';
 
     html += '<div class="fbi-stats">'
       + '<div class="fbi-stat"><div class="fbi-stat-v">' + adAccounts.length + '</div><div class="fbi-stat-l">Total Ad Accounts</div></div>'
-      + '<div class="fbi-stat"><div class="fbi-stat-v" style="color:#22c55e">' + active.length   + '</div><div class="fbi-stat-l">Active</div></div>'
-      + '<div class="fbi-stat"><div class="fbi-stat-v" style="color:#ef4444">' + disabled.length + '</div><div class="fbi-stat-l">Disabled</div></div>'
-      + '<div class="fbi-stat"><div class="fbi-stat-v" style="color:#f59e0b">' + appeal.length   + '</div><div class="fbi-stat-l">In Appeal</div></div>'
+      + '<div class="fbi-stat"><div class="fbi-stat-v" style="color:var(--good)">' + active.length   + '</div><div class="fbi-stat-l">Active</div></div>'
+      + '<div class="fbi-stat"><div class="fbi-stat-v" style="color:var(--crit)">' + disabled.length + '</div><div class="fbi-stat-l">Disabled</div></div>'
+      + '<div class="fbi-stat"><div class="fbi-stat-v" style="color:var(--warn)">' + appeal.length   + '</div><div class="fbi-stat-l">In Appeal</div></div>'
       + '<div class="fbi-stat"><div class="fbi-stat-v">' + pages.length      + '</div><div class="fbi-stat-l">Pages</div></div>'
       + '<div class="fbi-stat"><div class="fbi-stat-v">' + businesses.length + '</div><div class="fbi-stat-l">Business Mgrs</div></div>'
-      + '<div class="fbi-stat"><div class="fbi-stat-v" style="color:#3b82f6">$' + Math.round(totalSpent).toLocaleString() + '</div><div class="fbi-stat-l">Total Spend (all)</div></div>'
-      + '<div class="fbi-stat"><div class="fbi-stat-v" style="color:#22c55e">$' + Math.round(totalBal).toLocaleString()   + '</div><div class="fbi-stat-l">Total Balance</div></div>'
-      + (totalCap > 0 ? '<div class="fbi-stat"><div class="fbi-stat-v" style="color:' + (capPct >= 90 ? '#ef4444' : capPct >= 70 ? '#f59e0b' : '#e2e8f0') + '">' + capPct + '%</div><div class="fbi-stat-l">Cap used (avg)</div></div>' : '')
+      + '<div class="fbi-stat"><div class="fbi-stat-v" style="color:var(--accent)">$' + Math.round(totalSpent).toLocaleString() + '</div><div class="fbi-stat-l">Total Spend (all)</div></div>'
+      + '<div class="fbi-stat"><div class="fbi-stat-v" style="color:var(--good)">$' + Math.round(totalBal).toLocaleString()   + '</div><div class="fbi-stat-l">Total Balance</div></div>'
+      + (totalCap > 0 ? '<div class="fbi-stat"><div class="fbi-stat-v" style="color:' + (capPct >= 90 ? 'var(--crit)' : capPct >= 70 ? 'var(--warn)' : 'var(--text)') + '">' + capPct + '%</div><div class="fbi-stat-l">Cap used (avg)</div></div>' : '')
       + '</div>'
-      + (totalCap > 0 ? '<div style="background:#082530;border:1px solid #103a47;border-radius:8px;padding:10px 16px;margin-bottom:16px">'
-        + '<div style="display:flex;justify-content:space-between;font-size:12px;color:#8aa0a8;margin-bottom:6px"><span>Total spend vs cap</span><span>$' + Math.round(totalSpent).toLocaleString() + ' / $' + Math.round(totalCap).toLocaleString() + '</span></div>'
-        + '<div style="background:#0a2c38;border-radius:4px;height:6px"><div style="height:6px;border-radius:4px;background:' + (capPct >= 90 ? '#ef4444' : capPct >= 70 ? '#f59e0b' : '#3b82f6') + ';width:' + capPct + '%"></div></div>'
+      + (totalCap > 0 ? '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 16px;margin-bottom:16px">'
+        + '<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-faint);margin-bottom:6px"><span>Total spend vs cap</span><span>$' + Math.round(totalSpent).toLocaleString() + ' / $' + Math.round(totalCap).toLocaleString() + '</span></div>'
+        + '<div style="background:var(--surface);border-radius:4px;height:6px"><div style="height:6px;border-radius:4px;background:' + (capPct >= 90 ? 'var(--crit)' : capPct >= 70 ? 'var(--warn)' : 'var(--accent)') + ';width:' + capPct + '%"></div></div>'
         + '</div>' : '');
 
     if (disabled.length > 0) {
-      html += '<div style="margin-top:4px"><div style="font-size:11px;font-weight:700;color:#8aa0a8;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Disabled Accounts</div>';
+      html += '<div style="margin-top:4px"><div style="font-size:11px;font-weight:700;color:var(--text-faint);margin-bottom:8px">Disabled Accounts</div>';
       disabled.forEach(function(a) {
         const actId = a.id.replace('act_','');
-        html += '<div style="display:flex;align-items:center;gap:10px;padding:7px 10px;background:#06222d;border:1px solid #103a47;border-radius:7px;margin-bottom:5px;font-size:12px">'
-          + '<span style="color:#ef4444">[X]</span>'
+        html += '<div style="display:flex;align-items:center;gap:10px;padding:7px 10px;background:var(--bg);border:1px solid var(--border);border-radius:7px;margin-bottom:5px;font-size:12px">'
+          + '<span style="color:var(--crit)">[X]</span>'
           + '<span style="flex:1;font-weight:500">' + esc(a.name) + '</span>'
-          + '<span style="color:#8aa0a8;font-size:11px">' + a.id + '</span>'
-          + '<a class="fbi-link" href="https://www.facebook.com/accountquality?act=' + actId + '" target="_blank" style="color:#f59e0b;border-color:rgba(245,158,11,.3)">Appeal</a>'
+          + '<span style="color:var(--text-faint);font-size:11px">' + a.id + '</span>'
+          + '<a class="fbi-link" href="https://www.facebook.com/accountquality?act=' + actId + '" target="_blank" style="color:var(--warn);border-color:var(--warn)">Appeal</a>'
           + '</div>';
       });
       html += '</div>';
@@ -4882,9 +4914,9 @@ function getCurrentActId() {
         const tzFull  = (a.timezone_name || '').replace(/_/g,' ');
         const balN    = parseFloat(a.balance || 0) / 100;
         const balFmt  = balN > 0
-          ? '<span style="color:#3b82f6;font-weight:600">' + balN.toLocaleString('en-US',{style:'currency',currency:cur,maximumFractionDigits:0}) + '</span>'
-          : '<span style="color:#64748b">-</span>';
-        const disReason   = a.disable_reason ? '<div style="font-size:10px;color:#ef4444;margin-top:2px">' + esc(a.disable_reason) + '</div>' : '';
+          ? '<span style="color:var(--accent);font-weight:600">' + balN.toLocaleString('en-US',{style:'currency',currency:cur,maximumFractionDigits:0}) + '</span>'
+          : '<span style="color:var(--text-faint)">-</span>';
+        const disReason   = a.disable_reason ? '<div style="font-size:10px;color:var(--crit);margin-top:2px">' + esc(a.disable_reason) + '</div>' : '';
         const spentN      = parseFloat(a.amount_spent || 0) / 100;
         const capN        = parseFloat(a.spend_cap || 0) / 100;
         const spendCell   = miniBar(spentN, capN, cur, 'Account Limit');
@@ -4893,11 +4925,11 @@ function getCurrentActId() {
           + '<td>' + statusBadge(a.account_status) + '</td>'
           + '<td>' + spendCell + '</td>'
           + '<td>' + balFmt + '</td>'
-          + '<td><span style="font-size:15px;font-weight:700;color:#e2e8f0" title="' + esc(tzFull) + '">' + tz + '</span><div style="font-size:10px;color:#64748b;margin-top:2px">' + esc(tzFull) + '</div></td>'
+          + '<td><span style="font-size:15px;font-weight:700;color:var(--text)" title="' + esc(tzFull) + '">' + tz + '</span><div style="font-size:10px;color:var(--text-faint);margin-top:2px">' + esc(tzFull) + '</div></td>'
           + '<td><div class="fbi-links">'
           + '<a class="fbi-link" href="' + adsUrl  + '" target="_blank">Ads</a>'
           + '<a class="fbi-link" href="' + billUrl + '" target="_blank">Billing</a>'
-          + (needQ ? '<a class="fbi-link" href="' + qualUrl + '" target="_blank" style="color:#f59e0b;border-color:rgba(245,158,11,.3)">Quality</a>' : '')
+          + (needQ ? '<a class="fbi-link" href="' + qualUrl + '" target="_blank" style="color:var(--warn);border-color:var(--warn)">Quality</a>' : '')
           + '</div></td>'
           + '</tr>';
       });
@@ -4931,20 +4963,20 @@ function getCurrentActId() {
         const adsUrl   = 'https://adsmanager.facebook.com/?page_id=' + p.id;
         const role     = (p.tasks || []).join(', ') || '-';
         const pubBadge = p.is_published
-          ? '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:rgba(34,197,94,.12);color:#22c55e">PUBLISHED</span>'
-          : '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:rgba(239,68,68,.12);color:#ef4444">UNPUBLISHED</span>';
+          ? '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:var(--good-bg);color:var(--good)">PUBLISHED</span>'
+          : '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:var(--crit-bg);color:var(--crit)">UNPUBLISHED</span>';
         const verRaw  = (p.verification_status || '').toUpperCase();
         const verBadgePg = verRaw === 'BLUE_VERIFIED' || verRaw === 'VERIFIED'
-          ? '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:rgba(59,130,246,.12);color:#3b82f6;margin-top:4px">VERIFIED</span>'
+          ? '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:var(--accent-bg);color:var(--accent);margin-top:4px">VERIFIED</span>'
           : verRaw && verRaw !== 'NOT_VERIFIED'
-            ? '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:rgba(148,163,184,.1);color:#94a3b8;margin-top:4px">' + verRaw + '</span>'
+            ? '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:rgba(148,163,184,.1);color:var(--text-faint);margin-top:4px">' + verRaw + '</span>'
             : '';
         rows += '<tr>'
           + '<td><div class="fbi-name">' + esc(p.name) + '</div><div class="fbi-sub">ID: ' + p.id + '</div></td>'
           + '<td>' + pubBadge + (verBadgePg ? '<br>' + verBadgePg : '') + '</td>'
           + '<td style="font-size:12px">' + (p.fan_count||0).toLocaleString() + '</td>'
-          + '<td style="color:#64748b;font-size:11px">' + esc(p.category||'-') + '</td>'
-          + '<td style="color:#64748b;font-size:11px">' + esc(role) + '</td>'
+          + '<td style="color:var(--text-faint);font-size:11px">' + esc(p.category||'-') + '</td>'
+          + '<td style="color:var(--text-faint);font-size:11px">' + esc(role) + '</td>'
           + '<td><div class="fbi-links">'
           + '<a class="fbi-link" href="' + pageUrl + '" target="_blank">Page</a>'
           + '<a class="fbi-link" href="' + adsUrl  + '" target="_blank">Ads</a>'
@@ -4984,7 +5016,7 @@ function getCurrentActId() {
         const created   = b.created_time ? new Date(b.created_time).toLocaleDateString('en-US') : '-';
         const bsRaw     = (b.business_status || '').toUpperCase();
         const bsOk      = !bsRaw || bsRaw === 'ACTIVE';
-        const bsBadge   = '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:' + (bsOk ? 'rgba(34,197,94,.12)' : 'rgba(239,68,68,.12)') + ';color:' + (bsOk ? '#22c55e' : '#ef4444') + '">' + (bsRaw || 'ACTIVE') + '</span>';
+        const bsBadge   = '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:' + (bsOk ? 'var(--good-bg)' : 'var(--crit-bg)') + ';color:' + (bsOk ? 'var(--good)' : 'var(--crit)') + '">' + (bsRaw || 'ACTIVE') + '</span>';
         const ownedAcc  = b.owned_ad_accounts  && b.owned_ad_accounts.data  ? b.owned_ad_accounts.data.length  : '?';
         const clientAcc = b.client_ad_accounts && b.client_ad_accounts.data ? b.client_ad_accounts.data.length : '?';
         const ownedPg   = b.owned_pages && b.owned_pages.data ? b.owned_pages.data.length : '?';
@@ -4997,7 +5029,7 @@ function getCurrentActId() {
           + 'Client accs: <strong>' + clientAcc + '</strong><br>'
           + 'Pages: <strong>' + ownedPg + '</strong>'
           + '</td>'
-          + '<td style="color:#64748b;font-size:12px">' + created + '</td>'
+          + '<td style="color:var(--text-faint);font-size:12px">' + created + '</td>'
           + '<td><div class="fbi-links">'
           + '<a class="fbi-link" href="' + bmUrl  + '" target="_blank">BM</a>'
           + '<a class="fbi-link" href="' + adsUrl + '" target="_blank">Ads</a>'
@@ -5014,9 +5046,9 @@ function getCurrentActId() {
     const pxDiv = document.getElementById('fbi-tab-pixels');
 
     function pixelTypeBadge(src) {
-      if (src === 'owned')   return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:rgba(34,197,94,.12);color:#22c55e">Owned</span>';
-      if (src === 'client')  return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:rgba(59,130,246,.12);color:#3b82f6">Client</span>';
-      return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:rgba(245,158,11,.12);color:#f59e0b">No BM</span>';
+      if (src === 'owned')   return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:var(--good-bg);color:var(--good)">Owned</span>';
+      if (src === 'client')  return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:var(--accent-bg);color:var(--accent)">Client</span>';
+      return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:var(--warn-bg);color:var(--warn)">No BM</span>';
     }
 
     function renderPixels(list) {
@@ -5025,17 +5057,17 @@ function getCurrentActId() {
       list.forEach(function(px) {
         const lastFired = px.last_fired_time
           ? new Date(px.last_fired_time).toLocaleDateString('en-US', { year:'numeric', month:'short', day:'numeric' })
-          : '<span style="color:#64748b">never</span>';
+          : '<span style="color:var(--text-faint)">never</span>';
         const created = px.creation_time
           ? new Date(px.creation_time).toLocaleDateString('en-US', { year:'numeric', month:'short', day:'numeric' })
           : '-';
         const _mr = px.match_rate_approx;
         const matchRate = (_mr !== undefined && _mr !== null && _mr >= 0)
-          ? '<span style="color:' + (_mr >= 70 ? '#22c55e' : _mr >= 40 ? '#f59e0b' : '#ef4444') + ';font-weight:700">' + _mr + '%</span>'
-          : '<span style="color:#64748b">n/a</span>';
+          ? '<span style="color:' + (_mr >= 70 ? 'var(--good)' : _mr >= 40 ? 'var(--warn)' : 'var(--crit)') + ';font-weight:700">' + _mr + '%</span>'
+          : '<span style="color:var(--text-faint)">n/a</span>';
         const statusBadgePx = px.is_unavailable
-          ? '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:rgba(239,68,68,.12);color:#ef4444">Unavailable</span>'
-          : '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:rgba(34,197,94,.12);color:#22c55e">Active</span>';
+          ? '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:var(--crit-bg);color:var(--crit)">Unavailable</span>'
+          : '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;background:var(--good-bg);color:var(--good)">Active</span>';
         let ownerHtml = '';
         if (px._source === 'owned' || px._source === 'client') {
           ownerHtml = '<div class="fbi-name" style="font-size:12px">' + esc(px._bm_name) + '</div>'
@@ -5052,7 +5084,7 @@ function getCurrentActId() {
           + '<td>' + statusBadgePx + '</td>'
           + '<td style="font-size:12px">' + lastFired + '</td>'
           + '<td style="font-size:12px">' + matchRate + '</td>'
-          + '<td style="color:#64748b;font-size:11px">' + created + '</td>'
+          + '<td style="color:var(--text-faint);font-size:11px">' + created + '</td>'
           + '<td><div class="fbi-links"><a class="fbi-link" href="' + evMgrUrl + '" target="_blank">Events Mgr</a></div></td>'
           + '</tr>';
       });
@@ -5081,7 +5113,7 @@ function getCurrentActId() {
     hideLoader();
     const ovDiv = document.getElementById('fbi-tab-overview');
     ovDiv.innerHTML = '<div class="fbi-warn-box">Error loading data: ' + esc(err.message) + '</div>'
-      + '<div style="font-size:12px;color:#64748b;margin-top:8px">Make sure you opened Ads Manager inside Business Manager and the token is valid.</div>';
+      + '<div style="font-size:12px;color:var(--text-faint);margin-top:8px">Make sure you opened Ads Manager inside Business Manager and the token is valid.</div>';
   }
 })();
 
@@ -5564,7 +5596,7 @@ function mountPixelManager(container) {
   }
 
   /* ---- Render ---- */
-  const SC = { info: '#3b82f6', success: '#22c55e', error: '#ef4444' };
+  const SC = { info: 'var(--accent)', success: 'var(--good)', error: 'var(--crit)' };
   const SI = { info: 'ℹ', success: '✓', error: '!' };
 
   function renderSingleMode() {
@@ -5580,7 +5612,7 @@ function mountPixelManager(container) {
           <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:var(--card);border:1px solid var(--bdr);border-radius:8px;margin-bottom:8px">
             <div>
               <div style="font-size:13px;font-weight:700;color:var(--txt)">${esc(biz.name)}</div>
-              <div style="font-size:11px;color:#64748b">ID: ${esc(biz.id)}</div>
+              <div style="font-size:11px;color:var(--text-faint)">ID: ${esc(biz.id)}</div>
             </div>
             <button class="ar-btn ar-btn-primary ar-btn-sm" data-pxaction="open-biz" data-bizid="${esc(biz.id)}">Open</button>
           </div>
@@ -5592,16 +5624,16 @@ function mountPixelManager(container) {
     const alreadyConn = pxState.connectedAssets.some(a => a.id === pxState.selectedAccountId);
     const shareDisabled = pxState.sharing || pxState.loadingContext || !pxState.selectedPixelId || !pxState.selectedAccountId || alreadyConn;
     const pixOpts = pxState.pixels.map(p => `<option value="${esc(p.id)}" ${p.id===pxState.selectedPixelId?'selected':''}>${esc(p.label)}</option>`).join('') || '<option value="">No pixels</option>';
-    const accOpts = pxState.accounts.map(a => { const c = a.status===1?'#22c55e':(a.status===2||a.status===101)?'#ef4444':a.status?'#f59e0b':''; return `<option value="${esc(a.id)}" ${a.id===pxState.selectedAccountId?'selected':''} style="color:${c}">● ${esc(a.label)}</option>`; }).join('') || '<option value="">No accounts</option>';
+    const accOpts = pxState.accounts.map(a => { const c = a.status===1?'var(--good)':(a.status===2||a.status===101)?'var(--crit)':a.status?'var(--warn)':''; return `<option value="${esc(a.id)}" ${a.id===pxState.selectedAccountId?'selected':''} style="color:${c}">● ${esc(a.label)}</option>`; }).join('') || '<option value="">No accounts</option>';
 
     let connHtml = '';
-    if (pxState.loadingConnectedAssets) connHtml = `<div style="font-size:12px;color:#64748b;padding:6px 0">Loading...</div>`;
-    else if (pxState.connectedError)    connHtml = `<div style="font-size:12px;color:#ef4444;padding:6px 0">${esc(pxState.connectedError)}</div>`;
-    else if (!pxState.connectedAssets.length) connHtml = `<div style="font-size:12px;color:#64748b;padding:6px 0">No connected accounts for this pixel.</div>`;
+    if (pxState.loadingConnectedAssets) connHtml = `<div style="font-size:12px;color:var(--text-faint);padding:6px 0">Loading...</div>`;
+    else if (pxState.connectedError)    connHtml = `<div style="font-size:12px;color:var(--crit);padding:6px 0">${esc(pxState.connectedError)}</div>`;
+    else if (!pxState.connectedAssets.length) connHtml = `<div style="font-size:12px;color:var(--text-faint);padding:6px 0">No connected accounts for this pixel.</div>`;
     else connHtml = pxState.connectedAssets.map(a => `
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;background:var(--bg);border:1px solid ${a.id===pxState.selectedAccountId?'#3b82f6':'var(--bdr)'};border-radius:6px;margin-bottom:5px">
-        <div style="font-size:12px;color:var(--txt)">${esc(a.label)}${a.id===pxState.selectedAccountId?'<span style="margin-left:6px;font-size:10px;background:#3b82f620;color:#3b82f6;padding:2px 5px;border-radius:4px">selected</span>':''}</div>
-        <button class="ar-btn ar-btn-sm" style="background:#ef444420;color:#ef4444;border:1px solid #ef444430;min-width:68px" data-pxaction="remove" data-accid="${esc(a.id)}" ${pxState.removingIds.includes(a.id)?'disabled':''}>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;background:var(--bg);border:1px solid ${a.id===pxState.selectedAccountId?'var(--accent)':'var(--bdr)'};border-radius:6px;margin-bottom:5px">
+        <div style="font-size:12px;color:var(--txt)">${esc(a.label)}${a.id===pxState.selectedAccountId?'<span style="margin-left:6px;font-size:10px;background:var(--accent)20;color:var(--accent);padding:2px 5px;border-radius:4px">selected</span>':''}</div>
+        <button class="ar-btn ar-btn-sm" style="background:var(--crit)20;color:var(--crit);border:1px solid var(--crit)30;min-width:68px" data-pxaction="remove" data-accid="${esc(a.id)}" ${pxState.removingIds.includes(a.id)?'disabled':''}>
           ${pxState.removingIds.includes(a.id)?'…':'Remove'}
         </button>
       </div>
@@ -5618,7 +5650,7 @@ function mountPixelManager(container) {
         <select class="ar-select" data-pxrole="pixel-select" ${pxState.loadingContext?'disabled':''}>${pixOpts}</select>
       </div>
       <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:10px 12px;margin:10px 0">
-        <div style="font-size:12px;font-weight:700;color:var(--txt);margin-bottom:6px">Connected Accounts <span style="font-weight:400;color:#64748b">${pxState.loadingConnectedAssets?'…':pxState.connectedAssets.length+' total'}</span></div>
+        <div style="font-size:12px;font-weight:700;color:var(--txt);margin-bottom:6px">Connected Accounts <span style="font-weight:400;color:var(--text-faint)">${pxState.loadingConnectedAssets?'…':pxState.connectedAssets.length+' total'}</span></div>
         ${connHtml}
       </div>
       <div class="ar-field">
@@ -5634,27 +5666,27 @@ function mountPixelManager(container) {
   }
 
   function renderBulkMode() {
-    const logColors = { info: '#94a3b8', success: '#22c55e', error: '#ef4444' };
+    const logColors = { info: 'var(--text-faint)', success: 'var(--good)', error: 'var(--crit)' };
     const progress = pxState.bulkTotal ? Math.round(pxState.bulkDone / pxState.bulkTotal * 100) : 0;
 
     const pixRows = pxState.pixels.map(p => `
-      <label style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:5px;cursor:pointer;font-size:12px;color:var(--txt);background:${pxState.bulkPixelIds.has(p.id)?'rgba(59,130,246,.1)':''}">
+      <label style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:5px;cursor:pointer;font-size:12px;color:var(--txt);background:${pxState.bulkPixelIds.has(p.id)?'var(--accent-bg)':''}">
         <input type="checkbox" data-pxbulk="pixel" data-id="${esc(p.id)}" ${pxState.bulkPixelIds.has(p.id)?'checked':''} style="accent-color:var(--acc)">
         <span title="${esc(p.label)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(p.label)}</span>
-        <span style="font-size:10px;color:#64748b;flex-shrink:0">${esc(p.source||'')}</span>
+        <span style="font-size:10px;color:var(--text-faint);flex-shrink:0">${esc(p.source||'')}</span>
       </label>
-    `).join('') || '<div style="font-size:12px;color:#64748b;padding:8px">No pixels loaded. Click Scan first.</div>';
+    `).join('') || '<div style="font-size:12px;color:var(--text-faint);padding:8px">No pixels loaded. Click Scan first.</div>';
 
     const accRows = pxState.accounts.map(a => {
-      const stDot = a.status===1?'#22c55e':(a.status===2||a.status===101)?'#ef4444':a.status?'#f59e0b':'#64748b';
+      const stDot = a.status===1?'var(--good)':(a.status===2||a.status===101)?'var(--crit)':a.status?'var(--warn)':'var(--text-faint)';
       const stTitle = ACC_STATUS[a.status]||(a.status?'Status '+a.status:'');
       return `
-      <label style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:5px;cursor:pointer;font-size:12px;color:var(--txt);background:${pxState.bulkAccountIds.has(a.id)?'rgba(59,130,246,.1)':''}">
+      <label style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:5px;cursor:pointer;font-size:12px;color:var(--txt);background:${pxState.bulkAccountIds.has(a.id)?'var(--accent-bg)':''}">
         <input type="checkbox" data-pxbulk="account" data-id="${esc(a.id)}" ${pxState.bulkAccountIds.has(a.id)?'checked':''} style="accent-color:var(--acc)">
         <span style="width:7px;height:7px;border-radius:50%;background:${stDot};flex-shrink:0" title="${stTitle}"></span>
         <span title="${esc(a.label)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(a.label)}</span>
       </label>`;
-    }).join('') || '<div style="font-size:12px;color:#64748b;padding:8px">No accounts. Load a BM first.</div>';
+    }).join('') || '<div style="font-size:12px;color:var(--text-faint);padding:8px">No accounts. Load a BM first.</div>';
 
     const logHtml = pxState.bulkLog.slice(-60).map(l => `
       <div style="font-size:11px;color:${logColors[l.type]||logColors.info};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
@@ -5670,7 +5702,7 @@ function mountPixelManager(container) {
     let coverageHtml = '';
     if (pxState.showCoverage) {
       if (pxState.coverageLoading) {
-        coverageHtml = `<div style="font-size:12px;color:#64748b;padding:10px 0">Loading coverage...</div>`;
+        coverageHtml = `<div style="font-size:12px;color:var(--text-faint);padding:10px 0">Loading coverage...</div>`;
       } else if (pxState.coverage && pxState.coverage.size) {
         /* build account index for name lookup */
         const accById = new Map(pxState.accounts.map(a => [a.id, a.name]));
@@ -5679,23 +5711,23 @@ function mountPixelManager(container) {
           const connIds = pxState.coverage.get(p.id);
           let cell = '';
           if (connIds === undefined) {
-            cell = `<span style="color:#64748b;font-size:11px">—</span>`;
+            cell = `<span style="color:var(--text-faint);font-size:11px">—</span>`;
           } else if (!connIds.length) {
-            cell = `<span style="color:#f59e0b;font-size:11px">None</span>`;
+            cell = `<span style="color:var(--warn);font-size:11px">None</span>`;
           } else {
             cell = connIds.map(id => {
               const name = accById.get(id) || id;
-              return `<span style="display:inline-block;background:rgba(59,130,246,.12);color:#93c5fd;border-radius:4px;padding:1px 6px;font-size:10px;margin:1px 2px 1px 0;white-space:nowrap" title="${esc(id)}">${esc(name)}</span>`;
+              return `<span style="display:inline-block;background:var(--accent-bg);color:var(--accent);border-radius:4px;padding:1px 6px;font-size:10px;margin:1px 2px 1px 0;white-space:nowrap" title="${esc(id)}">${esc(name)}</span>`;
             }).join('');
           }
           const isNoBm = p.source && p.source.startsWith('act:');
           const srcBadge = isNoBm
-            ? `<span style="font-size:10px;background:rgba(245,158,11,.15);color:#f59e0b;border-radius:4px;padding:1px 5px">No BM</span>`
-            : `<span style="font-size:10px;background:rgba(59,130,246,.12);color:#60a5fa;border-radius:4px;padding:1px 5px">BM</span>`;
+            ? `<span style="font-size:10px;background:var(--warn-bg);color:var(--warn);border-radius:4px;padding:1px 5px">No BM</span>`
+            : `<span style="font-size:10px;background:var(--accent-bg);color:var(--accent);border-radius:4px;padding:1px 5px">BM</span>`;
           return `<tr>
             <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);white-space:nowrap">
               <div style="font-size:12px;font-weight:600;color:var(--txt)">${esc(p.name)}</div>
-              <div style="font-size:10px;color:#64748b">${esc(p.id)}</div>
+              <div style="font-size:10px;color:var(--text-faint)">${esc(p.id)}</div>
             </td>
             <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">${srcBadge}</td>
             <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px">${cell}</td>
@@ -5709,9 +5741,9 @@ function mountPixelManager(container) {
               <table style="width:100%;border-collapse:collapse">
                 <thead>
                   <tr style="background:var(--bg)">
-                    <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Pixel</th>
-                    <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Type</th>
-                    <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Connected Ad Accounts</th>
+                    <th style="padding:6px 8px;text-align:left;font-size:11px;color:var(--text-faint);font-weight:700;border-bottom:1px solid var(--bdr)">Pixel</th>
+                    <th style="padding:6px 8px;text-align:left;font-size:11px;color:var(--text-faint);font-weight:700;border-bottom:1px solid var(--bdr)">Type</th>
+                    <th style="padding:6px 8px;text-align:left;font-size:11px;color:var(--text-faint);font-weight:700;border-bottom:1px solid var(--bdr)">Connected Ad Accounts</th>
                   </tr>
                 </thead>
                 <tbody>${rows}</tbody>
@@ -5740,13 +5772,13 @@ function mountPixelManager(container) {
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
         <div>
           <div style="font-size:12px;font-weight:700;color:var(--txt);margin-bottom:6px">
-            Pixels <span style="font-weight:400;color:#64748b">${pxState.bulkPixelIds.size} selected / ${pxState.pixels.length} total</span>
+            Pixels <span style="font-weight:400;color:var(--text-faint)">${pxState.bulkPixelIds.size} selected / ${pxState.pixels.length} total</span>
           </div>
           <div style="max-height:240px;overflow:auto;background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:6px">${pixRows}</div>
         </div>
         <div>
           <div style="font-size:12px;font-weight:700;color:var(--txt);margin-bottom:6px">
-            Ad Accounts <span style="font-weight:400;color:#64748b">${pxState.bulkAccountIds.size} selected / ${pxState.accounts.length} total</span>
+            Ad Accounts <span style="font-weight:400;color:var(--text-faint)">${pxState.bulkAccountIds.size} selected / ${pxState.accounts.length} total</span>
           </div>
           <div style="max-height:240px;overflow:auto;background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:6px">${accRows}</div>
         </div>
@@ -5757,12 +5789,12 @@ function mountPixelManager(container) {
         <button class="ar-btn ar-btn-primary" data-pxaction="bulk-share" ${shareDisabled?'disabled':''}>
           ${pxState.bulkRunning?`Sharing… ${pxState.bulkDone}/${pxState.bulkTotal}`:`▶ Share ${pxState.bulkPixelIds.size}px × ${pxState.bulkAccountIds.size}acc`}
         </button>
-        ${pxState.bulkTotal ? `<div style="flex:1;min-width:100px;background:var(--bdr);border-radius:4px;height:6px"><div style="background:var(--acc);width:${progress}%;height:100%;border-radius:4px;transition:width .3s"></div></div><span style="font-size:11px;color:#64748b">${progress}%</span>` : ''}
+        ${pxState.bulkTotal ? `<div style="flex:1;min-width:100px;background:var(--bdr);border-radius:4px;height:6px"><div style="background:var(--acc);width:${progress}%;height:100%;border-radius:4px;transition:width .3s"></div></div><span style="font-size:11px;color:var(--text-faint)">${progress}%</span>` : ''}
       </div>
 
       <!-- log -->
       ${pxState.bulkLog.length ? `
-        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 10px;max-height:160px;overflow:auto;font-family:ui-monospace,monospace">
+        <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 10px;max-height:160px;overflow:auto;font-family:var(--font-mono)">
           ${logHtml}
         </div>
       ` : ''}
@@ -5987,7 +6019,7 @@ function mountOperations(container) {
 
   function setStatus(type, text) { ops.status={type,text}; render(); }
   function addLog(arr, type, msg) { arr.push({type,msg,ts:new Date().toLocaleTimeString()}); render(); }
-  const SC = {info:'#3b82f6',success:'#22c55e',error:'#ef4444',warning:'#f59e0b'};
+  const SC = {info:'var(--accent)',success:'var(--good)',error:'var(--crit)',warning:'var(--warn)'};
   const SI = {info:'ℹ',success:'✓',error:'!',warning:'⚠'};
 
   function logHtml(arr) {
@@ -6140,15 +6172,15 @@ function mountOperations(container) {
     `).join('');
 
     const result = ops.invResult ? `
-      <div style="margin-top:12px;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:600;background:${ops.invResult.type==='success'?'rgba(34,197,94,.15)':'rgba(239,68,68,.15)'};color:${ops.invResult.type==='success'?'#22c55e':'#ef4444'};border:1px solid ${ops.invResult.type==='success'?'rgba(34,197,94,.3)':'rgba(239,68,68,.3)'}">
+      <div style="margin-top:12px;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:600;background:${ops.invResult.type==='success'?'var(--good-bg)':'var(--crit-bg)'};color:${ops.invResult.type==='success'?'var(--good)':'var(--crit)'};border:1px solid ${ops.invResult.type==='success'?'var(--good-bg)':'var(--crit-bg)'}">
         ${esc(ops.invResult.msg)}
       </div>` : '';
 
     const log = ops.invLog.length ? `
       <div style="margin-top:10px;padding:8px 10px;border-radius:6px;background:rgba(0,0,0,.2);border:1px solid var(--bdr);max-height:200px;overflow-y:auto;font-family:monospace">${logHtml(ops.invLog)}</div>` : '';
 
-    const tokenColor = ops.invToken ? '#22c55e' : '#ef4444';
-    const bmColor    = ops.invBmId  ? '#22c55e' : '#ef4444';
+    const tokenColor = ops.invToken ? 'var(--good)' : 'var(--crit)';
+    const bmColor    = ops.invBmId  ? 'var(--good)' : 'var(--crit)';
 
     return `
       <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap">
@@ -6204,10 +6236,10 @@ function mountOperations(container) {
     const accounts = OPS_ACCOUNTS_CACHE;
     const selCount = ops.pausePreviewSel.size;
     const previewRows = ops.pausePreview.map(i=>`
-      <label style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--txt);cursor:pointer;background:${ops.pausePreviewSel.has(i.id)?'rgba(59,130,246,.06)':''}">
+      <label style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--txt);cursor:pointer;background:${ops.pausePreviewSel.has(i.id)?'var(--accent-bg)':''}">
         <input type="checkbox" data-pauseitem="${esc(i.id)}" ${ops.pausePreviewSel.has(i.id)?'checked':''} style="accent-color:var(--acc);flex-shrink:0">
         <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(i.name)}</span>
-        <span style="font-size:10px;color:#64748b;flex-shrink:0">${esc(i.accName)}</span>
+        <span style="font-size:10px;color:var(--text-faint);flex-shrink:0">${esc(i.accName)}</span>
       </label>`).join('');
 
     return `
@@ -6250,7 +6282,7 @@ function mountOperations(container) {
         <button class="ar-btn ar-btn-primary" data-opsact="pause-run" ${ops.pauseRunning||!selCount?'disabled':''}>
           ${ops.pauseRunning?'Running…':`▶ Apply ${ops.pauseAction} to ${selCount} items`}
         </button>` : ''}
-      ${ops.pauseLog.length?`<div style="margin-top:10px;background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 10px;max-height:140px;overflow:auto;font-family:ui-monospace,monospace">${logHtml(ops.pauseLog)}</div>`:''}
+      ${ops.pauseLog.length?`<div style="margin-top:10px;background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:8px 10px;max-height:140px;overflow:auto;font-family:var(--font-mono)">${logHtml(ops.pauseLog)}</div>`:''}
     `;
   }
 
@@ -6315,10 +6347,10 @@ function mountOperations(container) {
     const rows = ops.zombies.map(z=>`<tr>
       <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
         <div style="font-size:12px;font-weight:600;color:var(--txt)">${esc(z.name)}</div>
-        <div style="font-size:10px;color:#64748b">${esc(z.accName)} · ${esc(z.objective)}</div>
+        <div style="font-size:10px;color:var(--text-faint)">${esc(z.accName)} · ${esc(z.objective)}</div>
       </td>
-      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:#ef4444;text-align:right;font-weight:700">$${z.spend.toFixed(2)}</td>
-      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:#64748b;text-align:center">0</td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--crit);text-align:right;font-weight:700">$${z.spend.toFixed(2)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--text-faint);text-align:center">0</td>
     </tr>`).join('');
 
     return `
@@ -6334,30 +6366,30 @@ function mountOperations(container) {
         <button class="ar-btn ar-btn-primary ar-btn-sm" data-opsact="zombie-scan" ${ops.zombieLoading||ops.zombiePausingAll?'disabled':''}>${ops.zombieLoading?'Scanning…':'🔍 Scan'}</button>
         ${ops.zombies.length?`
           <button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="zombie-csv">⬇ CSV</button>
-          <button class="ar-btn ar-btn-sm" data-opsact="zombie-pause-all" ${ops.zombiePausingAll?'disabled':''} style="background:rgba(239,68,68,.15);color:#ef4444;border:1px solid rgba(239,68,68,.3)">${ops.zombiePausingAll?'Pausing…':'⏸ Pause All Zombies'}</button>
+          <button class="ar-btn ar-btn-sm" data-opsact="zombie-pause-all" ${ops.zombiePausingAll?'disabled':''} style="background:var(--crit-bg);color:var(--crit);border:1px solid var(--crit)">${ops.zombiePausingAll?'Pausing…':'⏸ Pause All Zombies'}</button>
         `:''}
       </div>
       ${ops.zombies.length?`
         <div style="display:flex;gap:10px;margin-bottom:10px">
           <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:10px 14px">
-            <div style="font-size:11px;color:#64748b">Zombie campaigns</div>
-            <div style="font-size:18px;font-weight:700;color:#f59e0b">${ops.zombies.length}</div>
+            <div style="font-size:11px;color:var(--text-faint)">Zombie campaigns</div>
+            <div style="font-size:18px;font-weight:700;color:var(--warn)">${ops.zombies.length}</div>
           </div>
           <div style="background:var(--card);border:1px solid var(--bdr);border-radius:8px;padding:10px 14px">
-            <div style="font-size:11px;color:#64748b">Total wasted spend</div>
-            <div style="font-size:18px;font-weight:700;color:#ef4444">$${totalWaste.toFixed(2)}</div>
+            <div style="font-size:11px;color:var(--text-faint)">Total wasted spend</div>
+            <div style="font-size:18px;font-weight:700;color:var(--crit)">$${totalWaste.toFixed(2)}</div>
           </div>
         </div>
         <div style="overflow:auto;max-height:280px;background:var(--card);border:1px solid var(--bdr);border-radius:8px">
           <table style="width:100%;border-collapse:collapse">
             <thead><tr style="background:var(--bg)">
-              <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Campaign</th>
-              <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Spent</th>
-              <th style="padding:6px 8px;text-align:center;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Leads</th>
+              <th style="padding:6px 8px;text-align:left;font-size:11px;color:var(--text-faint);font-weight:700;border-bottom:1px solid var(--bdr)">Campaign</th>
+              <th style="padding:6px 8px;text-align:right;font-size:11px;color:var(--text-faint);font-weight:700;border-bottom:1px solid var(--bdr)">Spent</th>
+              <th style="padding:6px 8px;text-align:center;font-size:11px;color:var(--text-faint);font-weight:700;border-bottom:1px solid var(--bdr)">Leads</th>
             </tr></thead>
             <tbody>${rows}</tbody>
           </table>
-        </div>` : `<div style="font-size:13px;color:#64748b;padding:16px 0">Set parameters and click Scan.</div>`}
+        </div>` : `<div style="font-size:13px;color:var(--text-faint);padding:16px 0">Set parameters and click Scan.</div>`}
     `;
   }
 
@@ -6396,32 +6428,32 @@ function mountOperations(container) {
     const rows = filtered.map(a=>`<tr>
       <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)">
         <div style="font-size:12px;font-weight:600;color:var(--txt)">${esc(a.name)}</div>
-        <div style="font-size:10px;color:#64748b">${esc(a.accName)}</div>
+        <div style="font-size:10px;color:var(--text-faint)">${esc(a.accName)}</div>
       </td>
-      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)"><span style="font-size:11px;background:rgba(59,130,246,.1);color:#60a5fa;border-radius:4px;padding:1px 6px">${esc(a.subtype)}</span></td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr)"><span style="font-size:11px;background:var(--accent-bg);color:var(--accent);border-radius:4px;padding:1px 6px">${esc(a.subtype)}</span></td>
       <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:var(--txt);text-align:right">${esc(a.count)}</td>
-      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:${a.status==='Ready'?'#22c55e':'#f59e0b'}">${esc(a.status)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid var(--bdr);font-size:12px;color:${a.status==='Ready'?'var(--good)':'var(--warn)'}">${esc(a.status)}</td>
     </tr>`).join('');
 
     return `
       <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
         <button class="ar-btn ar-btn-primary ar-btn-sm" data-opsact="aud-load" ${ops.audLoading?'disabled':''}>${ops.audLoading?'Loading…':'↻ Load Audiences'}</button>
         ${ops.audList.length?`<button class="ar-btn ar-btn-ghost ar-btn-sm" data-opsact="aud-csv">⬇ CSV</button>`:''}
-        ${ops.audList.length?`<span style="font-size:12px;color:#64748b">${filtered.length}${searchLc?` / ${ops.audList.length}`:''} audiences · ${subtypes.length} types</span>`:''}
+        ${ops.audList.length?`<span style="font-size:12px;color:var(--text-faint)">${filtered.length}${searchLc?` / ${ops.audList.length}`:''} audiences · ${subtypes.length} types</span>`:''}
       </div>
       ${ops.audList.length?`
         <input type="text" id="aud-search" placeholder="Search by name, account, type…" value="${esc(ops.audSearch)}" style="width:100%;padding:6px 8px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-size:12px;margin-bottom:8px;box-sizing:border-box">
         <div style="overflow:auto;max-height:360px;background:var(--card);border:1px solid var(--bdr);border-radius:8px">
           <table style="width:100%;border-collapse:collapse">
             <thead><tr style="background:var(--bg)">
-              <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Audience</th>
-              <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Type</th>
-              <th style="padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Size</th>
-              <th style="padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;border-bottom:1px solid var(--bdr)">Status</th>
+              <th style="padding:6px 8px;text-align:left;font-size:11px;color:var(--text-faint);font-weight:700;border-bottom:1px solid var(--bdr)">Audience</th>
+              <th style="padding:6px 8px;text-align:left;font-size:11px;color:var(--text-faint);font-weight:700;border-bottom:1px solid var(--bdr)">Type</th>
+              <th style="padding:6px 8px;text-align:right;font-size:11px;color:var(--text-faint);font-weight:700;border-bottom:1px solid var(--bdr)">Size</th>
+              <th style="padding:6px 8px;text-align:left;font-size:11px;color:var(--text-faint);font-weight:700;border-bottom:1px solid var(--bdr)">Status</th>
             </tr></thead>
-            <tbody>${rows||`<tr><td colspan="4" style="padding:12px;text-align:center;color:#64748b;font-size:12px">No results.</td></tr>`}</tbody>
+            <tbody>${rows||`<tr><td colspan="4" style="padding:12px;text-align:center;color:var(--text-faint);font-size:12px">No results.</td></tr>`}</tbody>
           </table>
-        </div>` : `<div style="font-size:13px;color:#64748b;padding:16px 0">Click Load to scan all accounts for custom audiences.</div>`}
+        </div>` : `<div style="font-size:13px;color:var(--text-faint);padding:16px 0">Click Load to scan all accounts for custom audiences.</div>`}
     `;
   }
 
@@ -6667,7 +6699,7 @@ function mountQuickLinks(container) {
       a.rel = 'noopener noreferrer';
       a.textContent = l.label;
       a.style.cssText = 'display:block;padding:6px 8px;border-radius:6px;font-size:12px;color:var(--acc);text-decoration:none;transition:background .12s;margin-bottom:2px';
-      a.addEventListener('mouseenter', () => { a.style.background = 'rgba(59,130,246,.1)'; });
+      a.addEventListener('mouseenter', () => { a.style.background = 'var(--accent-bg)'; });
       a.addEventListener('mouseleave', () => { a.style.background = ''; });
       card.appendChild(a);
     });

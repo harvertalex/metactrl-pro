@@ -23,11 +23,11 @@ const vm = code.match(/MetaLaunch PRO v(\d+\.\d+\.\d+) — Bookmarklet/);
 if (!vm) { console.error(`✗ version banner not found in ${LAUNCHER}`); process.exit(1); }
 const ver = vm[1];
 
-// 2) Sanity: in-panel заголовок ">FB LAUNCHER // vX.Y.Z<" должен совпадать с баннером.
+// 2) Sanity: in-panel заголовок ">MetaLaunch PRO // vX.Y.Z<" должен совпадать с баннером.
 //    Матчим именно заголовок (в угловых скобках), а не упоминания в changelog-комментах.
-const tm = code.match(/>METALAUNCH PRO \/\/ v(\d+\.\d+\.\d+)</);
+const tm = code.match(/>MetaLaunch PRO <span[^>]*>\/\/ v(\d+\.\d+\.\d+)</);
 if (!tm) {
-  console.warn('⚠ in-panel title ">METALAUNCH PRO // vX.Y.Z<" not found — skip drift check');
+  console.warn('⚠ in-panel title ">MetaLaunch PRO // vX.Y.Z<" not found — skip drift check');
 } else if (tm[1] !== ver) {
   console.warn(`⚠ VERSION DRIFT: banner v${ver} vs in-panel title v${tm[1]} in ${LAUNCHER} — fix the title span.`);
 }

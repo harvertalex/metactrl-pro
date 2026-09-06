@@ -233,6 +233,54 @@ CONFIG.MAX_RETRIES = 5;             // макс 5 попыток перед сд
 
 ---
 
+## Оформление — тема TradingView (с 06.09.2026)
+
+MetaCtrl PRO (v25.1) и MetaLaunch PRO (v0.28.0) больше не держат собственную
+палитру. Цвета приходят из общего источника `code/shared/theme/theme.ts` — того
+же, что красит лабу ARIA и деки-стратегии. Прежний cyberpunk-HUD снят целиком:
+glow-тени, dot-grid на фоне, скан-линии журнала, corner-brackets, uppercase с
+разрядкой, бирюзовая база `#04141a`.
+
+**Где живёт словарь.** Букмарклет — самодостаточный B64-blob, `import` в нём не
+работает, поэтому токены **вшиты строкой** в блок стилей панели:
+
+| Инструмент | Блоки со словарём |
+|---|---|
+| MetaLaunch | `launcher.js` → `injectStyles()` (один блок) |
+| MetaCtrl | `bookmarklet.js` → `#ar-styles` (панель) **и** `#fbi-style` (Inspector) — ДВА места |
+
+**Как поменять цвет** (правка руками в букмарклете разъедется с лабой):
+
+```bash
+# 1. правишь DARK/LIGHT/VERTICALS в code/shared/theme/theme.ts
+bun code/shared/theme/theme-cli.ts emit          # соберёт dist/tv-bookmarklet.js
+# 2. копируешь TV_TOKENS_BODY оттуда в блоки стилей (у MetaCtrl — в оба)
+node regen-launcher.mjs                          # MetaLaunch
+# MetaCtrl — регенерация B64 в install-page.html (см. раздел выше)
+```
+
+Правила в CSS цвета **не хардкодят** — только `var(--*)`. Если добавляешь стиль
+с сырым hex, ты выключаешь связь с темой: бери токен.
+
+**Старые имена оставлены алиасами** (`--surf`, `--card`, `--bdr`, `--txt`,
+`--muted`, `--acc`, `--cyan`): на них завязаны inline-стили в разметке, и
+вырезать их значит править сотню мест ради чистоты словаря.
+
+**Визуальная приёмка обязательна** — правка на сотни мест вслепую не проверяема:
+
+```bash
+bun code/metactrl-pro/_visual-test/shot.ts           # MetaCtrl → panel-top/bottom.png
+bun code/metactrl-pro/_visual-test/shot-launcher.ts  # MetaLaunch → launcher-top/bottom.png
+```
+
+Оба рендерят панель в headless Chrome без FB (stub-токен, заглушённый fetch),
+печатают раскладку и JS-ошибки. Скрин ловит то, чего в коде не видно: так
+всплыли залитая красным карточка обязательного поля, белые `input[type=number]`
+и оставшиеся HUD-надписи.
+
+⚠️ `watchdog.js` (MetaWatch) и `switchboard.js` **на тему не переведены** — они
+всё ещё в HUD-языке и выбиваются из остальных двух.
+
 ## Примечания по кодированию
 
 - **Язык:** JavaScript (ES6+)
