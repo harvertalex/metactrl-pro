@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.28.0 — Bookmarklet
+ * MetaLaunch PRO v0.28.1 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -182,6 +182,15 @@
  *          (4) multi-account launch logs a ⚠ that the ONE pixel (step 4/CSV) is applied to ALL
  *              accounts — promoted_object and {pixel_id} alike.
  *          (5) collapsible "macros reference" under step 8 — all launcher tokens + FB macros.
+ *
+ * v0.28.1: статус кабинета в списке выбора. account_status приходил с FB с v0.1 и
+ *          лежал в ACCOUNTS[].status, но строка списка его не рисовала — баер выбирал
+ *          кабы вслепую и узнавал про DISABLED уже на заливе. Теперь: цветной чип
+ *          (ACTIVE / DISABLED / RISK REVIEW / CLOSED …) в каждой строке и на выбранных,
+ *          причина отключения (disable_reason) в подсказке, неактивные строки
+ *          приглушены, счётчик «N active · M off» в заголовке шага 2, фильтр понимает
+ *          слово статуса («disabled», «active», «risk»). Кэш v0.26 не сбрасывается —
+ *          старые записи без disable_reason показывают чип без причины до ↻.
  *
  * v0.28.0: тема TradingView вместо cyberpunk-HUD. Панель перешла на общий словарь
  *          code/shared/theme/theme.ts: убраны glow-тени, dot-mesh на фоне формы,
@@ -790,6 +799,38 @@
     } catch {}
   }
 
+  // v0.28.1: FB account_status → label + tone. Codes per Marketing API AdAccount.
+  // Anything not listed renders as the raw code in warn tone rather than hiding.
+  const ACC_STATUS = {
+    1:   ['ACTIVE', 'good'],
+    2:   ['DISABLED', 'crit'],
+    3:   ['UNSETTLED', 'warn'],
+    7:   ['RISK REVIEW', 'warn'],
+    8:   ['PENDING SETTLEMENT', 'warn'],
+    9:   ['GRACE PERIOD', 'warn'],
+    100: ['PENDING CLOSURE', 'crit'],
+    101: ['CLOSED', 'crit'],
+  };
+  const ACC_DISABLE_REASON = {
+    1: 'ads integrity policy', 2: 'ads IP review', 3: 'risk payment', 4: 'gray account shut down',
+    5: 'ads AFC review', 6: 'business integrity', 7: 'permanent close', 8: 'unused reseller account',
+    9: 'unused account', 10: 'umbrella ad account', 11: 'BM integrity policy', 12: 'misuse of ad account',
+    13: 'unsupported activity',
+  };
+  function accStatusInfo(a) {
+    const code = Number(a?.status);
+    const known = ACC_STATUS[code];
+    const label = known ? known[0] : (Number.isFinite(code) ? `STATUS ${code}` : 'UNKNOWN');
+    const tone = known ? known[1] : 'warn';
+    const reason = ACC_DISABLE_REASON[Number(a?.disableReason)] || '';
+    return { code, label, tone, active: code === 1, reason };
+  }
+  function accStatusChip(a, extraStyle = '') {
+    const st = accStatusInfo(a);
+    const tip = st.reason ? `${st.label} · ${st.reason}` : st.label;
+    return `<span title="${esc(tip)}" style="display:inline-block;flex-shrink:0;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;letter-spacing:.02em;font-family:var(--font-mono);color:var(--${st.tone});background:var(--${st.tone}-bg);border:1px solid var(--${st.tone});${extraStyle}">${esc(st.label)}</span>`;
+  }
+
   async function loadAccounts(force = false) {
     if (accountsLoading) return;
     if (!force) {
@@ -808,7 +849,7 @@
     setStatus('info', 'Loading ad accounts…');   // transient; cleared by logEvent on completion
     render();
 
-    const fields = 'id,account_id,name,account_status,currency';
+    const fields = 'id,account_id,name,account_status,disable_reason,currency';
     const rows = [];
     let bmCount = 0;
     let personalErr = null;
@@ -882,6 +923,7 @@
         name: a.name || 'Untitled',
         bm: a._bm_name || 'Personal',
         status: a.account_status,
+        disableReason: a.disable_reason,
         currency: a.currency || 'USD',
         label: `${a.name || 'Untitled'} (${id})`,
       });
@@ -3511,8 +3553,15 @@
     const plan = analyzePlan();
     const accFilter = state.accFilter.toLowerCase();
     const visibleAccs = accFilter
-      ? ACCOUNTS.filter(a => a.name.toLowerCase().includes(accFilter) || a.id.includes(accFilter) || a.bm.toLowerCase().includes(accFilter))
+      ? ACCOUNTS.filter(a => {
+          const st = accStatusInfo(a);
+          return a.name.toLowerCase().includes(accFilter) || a.id.includes(accFilter) || a.bm.toLowerCase().includes(accFilter)
+            || st.label.toLowerCase().includes(accFilter) || st.reason.toLowerCase().includes(accFilter);
+        })
       : ACCOUNTS;
+    const accActiveCount = ACCOUNTS.filter(a => accStatusInfo(a).active).length;
+    const accOffCount = ACCOUNTS.length - accActiveCount;
+    const selectedOff = state.targetAccIds.map(id => ACCOUNTS.find(a => a.id === id)).filter(a => a && !accStatusInfo(a).active).length;
 
     const selectedAccs = state.targetAccIds.map(id => ACCOUNTS.find(a => a.id === id)).filter(Boolean);
     const hasAccounts = state.targetAccIds.length > 0;
@@ -3592,7 +3641,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.28.0</span></span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.28.1</span></span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -3732,7 +3781,7 @@
       ${previewHtml}
 
       <div class="field">
-        <label>2. Target accounts <span style="color:var(--text-faint)">— ${hasAccounts ? `<span class="fbl-readout">${state.targetAccIds.length}</span> selected` : 'pick one or more'}</span></label>
+        <label>2. Target accounts <span style="color:var(--text-faint)">— ${hasAccounts ? `<span class="fbl-readout">${state.targetAccIds.length}</span> selected` : 'pick one or more'}${ACCOUNTS.length ? ` · <span style="color:var(--good)">${accActiveCount} active</span>${accOffCount ? ` · <span style="color:var(--crit)">${accOffCount} off</span>` : ''}` : ''}</span>${selectedOff ? `<span style="margin-left:8px;color:var(--warn);font-size:11px" title="Selected cabinet is not ACTIVE — the launch will fail on it">⚠ ${selectedOff} selected not active</span>` : ''}</label>
         <div class="row">
           <input type="text" id="fbl-acc-filter" placeholder="Filter by name, ID, BM..." value="${esc(state.accFilter)}" style="flex:2">
           <button id="fbl-reload-acc" ${accountsLoading ? 'disabled' : ''}>${accountsLoading ? '⏳' : '↻'}</button>
@@ -3741,8 +3790,9 @@
         ${selectedAccs.length ? `
         <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">
           ${selectedAccs.map(a => `
-            <span style="background:var(--accent-bg);border:1px solid var(--accent);border-radius:6px;padding:2px 8px;font-size:11px;color:var(--text);display:inline-flex;align-items:center;gap:5px;font-family:var(--font-mono);" title="${esc(a.id)} · BM: ${esc(a.bm)}">
+            <span style="background:var(--accent-bg);border:1px solid var(--accent);border-radius:6px;padding:2px 8px;font-size:11px;color:var(--text);display:inline-flex;align-items:center;gap:5px;font-family:var(--font-mono);" title="${esc(a.id)} · BM: ${esc(a.bm)} · ${esc(accStatusInfo(a).label)}${accStatusInfo(a).reason ? ' · ' + esc(accStatusInfo(a).reason) : ''}">
               <span style="color:var(--accent);opacity:.8">[</span>${esc(a.label)}<span style="color:var(--accent);opacity:.8">]</span>
+              ${accStatusInfo(a).active ? '' : accStatusChip(a)}
               <button class="fbl-acc-remove" data-acc="${esc(a.id)}" style="background:none;border:none;color:var(--crit);padding:0 2px;cursor:pointer;font-size:13px;line-height:1" title="Remove">✕</button>
             </span>
           `).join('')}
@@ -3751,9 +3801,11 @@
         <div id="fbl-acc-list" style="margin-top:6px;max-height:240px;overflow:auto;border:1px solid var(--border);border-radius:5px;background:var(--surface)">
           ${visibleAccs.length ? visibleAccs.map(a => {
             const isSel = state.targetAccIds.includes(a.id);
-            return `<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;font-size:12px;${isSel ? 'background:var(--good-bg)' : ''};border-bottom:1px solid var(--bg)">
+            const st = accStatusInfo(a);
+            return `<label style="display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;font-size:12px;${isSel ? 'background:var(--good-bg)' : ''};border-bottom:1px solid var(--bg);${st.active ? '' : 'opacity:.6'}" title="${esc(st.label)}${st.reason ? ' · ' + esc(st.reason) : ''}">
               <input type="checkbox" class="fbl-acc-cb" data-acc="${esc(a.id)}" ${isSel ? 'checked' : ''}>
-              <span style="flex:1;color:var(--text-dim)"><span style="color:var(--text-faint)">${esc(a.bm)}</span> · ${esc(a.label)} <span style="color:var(--text-faint);font-size:10px">${esc(a.id)}</span></span>
+              ${accStatusChip(a, 'min-width:58px;text-align:center')}
+              <span style="flex:1;color:var(--text-dim);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><span style="color:var(--text-faint)">${esc(a.bm)}</span> · ${esc(a.label)} <span style="color:var(--text-faint);font-size:10px">${esc(a.id)}</span></span>
             </label>`;
           }).join('') : '<div style="padding:8px 10px;color:var(--text-faint);font-size:11px">No accounts match filter</div>'}
         </div>` : ''}
