@@ -569,79 +569,100 @@
   }
 
   // ─── UI ─────────────────────────────────────────────────────────────────
+  /* ── ТЕМА ────────────────────────────────────────────────────────────────
+     Словарь общий с лабой и остальными тулзами: code/shared/theme/theme.ts.
+     Здесь он КОПИЕЙ — букмарклет живёт одним base64-блобом, import в нём не
+     выполнится. Копия честная: объявлена копией, лежит одним блоком, и ниже в
+     правилах hex нет вовсе, только var(). Поменял цвет: theme-cli.ts emit →
+     перенести TV_TOKENS_BODY сюда → регенерить B64.
+     Токены под селектором панели: тема не должна красить Ads Manager вокруг. */
   const CSS = `
+  #${PANEL_ID}{
+    --bg:#131722; --surface:#1E222D; --surface-2:#2A2E39;
+    --border:#2A2E39; --border-soft:#22262F; --bar:#131722;
+    --text:#D1D4DC; --text-dim:#B2B5BE; --text-faint:#787B86;
+    --accent:#2962FF; --accent-dim:#1E53E5; --accent-bg:rgba(41,98,255,.15); --on-accent:#FFFFFF;
+    --good:#26A69A; --warn:#FF9800; --crit:#EF5350;
+    --good-bg:rgba(38,166,154,.14); --warn-bg:rgba(255,152,0,.14); --crit-bg:rgba(239,83,80,.14);
+    --font-ui:"Trebuchet MS",-apple-system,"Segoe UI",Roboto,sans-serif;
+    --r:4px; --r-sm:3px;
+  }
   #${PANEL_ID}{position:fixed;top:0;right:0;bottom:0;width:600px;max-width:96vw;z-index:2147483646;
-    background:#04141a;color:#cbd5e1;font:12px/1.45 -apple-system,"Segoe UI",Arial,sans-serif;
-    border-left:1px solid #0e3a4a;box-shadow:-12px 0 40px rgba(0,0,0,.55);display:flex;flex-direction:column}
+    background:var(--bg);color:var(--text);font:12px/1.45 var(--font-ui);
+    border-left:1px solid var(--border);box-shadow:-12px 0 40px rgba(0,0,0,.55);display:flex;flex-direction:column}
   #${PANEL_ID} *{box-sizing:border-box}
-  #${PANEL_ID} .mw-head{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#020c10;
-    border-bottom:1px solid #0e3a4a;flex-shrink:0}
-  #${PANEL_ID} .mw-title{font:700 13px/1 ui-monospace,Menlo,monospace;color:#e2f4fb;letter-spacing:.06em}
-  #${PANEL_ID} .mw-led{width:9px;height:9px;border-radius:50%;background:#475569;flex-shrink:0}
-  #${PANEL_ID} .mw-led[data-t=ok]{background:#22c55e;box-shadow:0 0 8px #22c55e}
-  #${PANEL_ID} .mw-led[data-t=busy]{background:#38bdf8;box-shadow:0 0 8px #38bdf8;animation:mwpulse 1s infinite}
-  #${PANEL_ID} .mw-led[data-t=warn]{background:#f59e0b;box-shadow:0 0 8px #f59e0b}
-  #${PANEL_ID} .mw-led[data-t=err]{background:#ef4444;box-shadow:0 0 8px #ef4444}
-  @keyframes mwpulse{50%{opacity:.4}}
-  #${PANEL_ID} .mw-x{margin-left:auto;cursor:pointer;color:#64748b;font-size:18px;background:none;border:none;padding:2px 6px}
-  #${PANEL_ID} .mw-x:hover{color:#e2e8f0}
-  #${PANEL_ID} .mw-bar{display:flex;align-items:center;gap:8px;padding:8px 14px;background:#031920;
-    border-bottom:1px solid #0e3a4a;flex-shrink:0;flex-wrap:wrap}
-  #${PANEL_ID} .mw-run{padding:7px 18px;border-radius:6px;border:none;cursor:pointer;font-weight:800;font-size:12px;
-    letter-spacing:.05em;color:#04141a;background:linear-gradient(135deg,#38bdf8,#2563eb);color:#fff}
-  #${PANEL_ID} .mw-run.on{background:linear-gradient(135deg,#ef4444,#b91c1c)}
-  #${PANEL_ID} .mw-next{font:11px ui-monospace,Menlo,monospace;color:#7dd3fc}
-  #${PANEL_ID} .mw-status{font-size:11px;color:#94a3b8;flex-basis:100%;min-height:14px}
+  #${PANEL_ID} .mw-head{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bar);
+    border-bottom:1px solid var(--border);flex-shrink:0}
+  #${PANEL_ID} .mw-title{font:600 13px/1 var(--font-ui);color:var(--text);letter-spacing:.02em}
+  #${PANEL_ID} .mw-led{width:9px;height:9px;border-radius:50%;background:var(--text-faint);flex-shrink:0}
+  #${PANEL_ID} .mw-led[data-t=ok]{background:var(--good)}
+  #${PANEL_ID} .mw-led[data-t=busy]{background:var(--accent);animation:mwpulse 1s infinite}
+  #${PANEL_ID} .mw-led[data-t=warn]{background:var(--warn)}
+  #${PANEL_ID} .mw-led[data-t=err]{background:var(--crit)}
+  @keyframes mwpulse{0%,100%{opacity:1}50%{opacity:.35}}
+  #${PANEL_ID} .mw-x{margin-left:auto;cursor:pointer;color:var(--text-faint);font-size:18px;background:none;border:none;padding:2px 6px}
+  #${PANEL_ID} .mw-x:hover{color:var(--text)}
+  #${PANEL_ID} .mw-bar{display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--surface);
+    border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap}
+  /* Кнопка запуска — единственное место с акцентом: она и есть действие */
+  #${PANEL_ID} .mw-run{padding:6px 16px;border-radius:var(--r-sm);border:1px solid var(--accent-dim);cursor:pointer;
+    font-weight:600;font-size:12px;color:var(--on-accent);background:var(--accent)}
+  #${PANEL_ID} .mw-run.on{background:var(--crit);border-color:var(--crit)}
+  #${PANEL_ID} .mw-next{font:11px var(--font-ui);font-variant-numeric:tabular-nums;color:var(--text-dim)}
+  #${PANEL_ID} .mw-status{font-size:11px;color:var(--text-faint);flex-basis:100%;min-height:14px}
   #${PANEL_ID} select,#${PANEL_ID} input[type=text],#${PANEL_ID} input[type=number]{
-    background:#06222d;border:1px solid #0e3a4a;border-radius:5px;color:#e2e8f0;padding:5px 7px;font-size:12px;outline:none}
-  #${PANEL_ID} select:focus,#${PANEL_ID} input:focus{border-color:#38bdf8;box-shadow:0 0 0 2px rgba(56,189,248,.18)}
-  #${PANEL_ID} .mw-tabs{display:flex;gap:2px;padding:0 14px;background:#031920;border-bottom:1px solid #0e3a4a;flex-shrink:0}
-  #${PANEL_ID} .mw-tab{padding:8px 14px;cursor:pointer;color:#94a3b8;border:none;background:none;font-size:12px;
-    font-weight:700;border-bottom:2px solid transparent}
-  #${PANEL_ID} .mw-tab.act{color:#7dd3fc;border-bottom-color:#38bdf8}
+    background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text);padding:5px 7px;font-size:12px;outline:none}
+  #${PANEL_ID} select:focus,#${PANEL_ID} input:focus{border-color:var(--accent)}
+  #${PANEL_ID} .mw-tabs{display:flex;gap:2px;padding:0 14px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0}
+  #${PANEL_ID} .mw-tab{padding:8px 14px;cursor:pointer;color:var(--text-faint);border:none;background:none;font-size:12px;
+    font-weight:600;border-bottom:2px solid transparent}
+  #${PANEL_ID} .mw-tab.act{color:var(--text);border-bottom-color:var(--accent)}
   #${PANEL_ID} .mw-body{flex:1;overflow-y:auto;padding:12px 14px}
   #${PANEL_ID} .mw-body::-webkit-scrollbar{width:8px}
-  #${PANEL_ID} .mw-body::-webkit-scrollbar-thumb{background:#0e3a4a;border-radius:4px}
-  #${PANEL_ID} .mw-card{background:#082530;border:1px solid #0e3a4a;border-left:2px solid #164e63;
-    border-radius:7px;padding:10px 12px;margin-bottom:9px}
-  #${PANEL_ID} .mw-card.armed{border-left-color:#ef4444}
+  #${PANEL_ID} .mw-body::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+  #${PANEL_ID} .mw-card{background:var(--surface);border:1px solid var(--border);border-left:2px solid var(--border);
+    border-radius:var(--r);padding:10px 12px;margin-bottom:9px}
+  #${PANEL_ID} .mw-card.armed{border-left-color:var(--crit)}
   #${PANEL_ID} .mw-card.dis{opacity:.5}
-  #${PANEL_ID} .mw-btn{padding:5px 11px;border-radius:5px;border:1px solid #155e75;background:transparent;
-    color:#7dd3fc;cursor:pointer;font-size:11px;font-weight:600}
-  #${PANEL_ID} .mw-btn:hover{background:rgba(56,189,248,.1)}
-  #${PANEL_ID} .mw-btn.danger{border-color:#7f1d1d;color:#fca5a5}
-  #${PANEL_ID} .mw-btn.danger:hover{background:rgba(239,68,68,.1)}
+  #${PANEL_ID} .mw-btn{padding:5px 11px;border-radius:var(--r-sm);border:1px solid var(--border);background:transparent;
+    color:var(--text-dim);cursor:pointer;font-size:11px;font-weight:600}
+  #${PANEL_ID} .mw-btn:hover{background:var(--surface-2);color:var(--text)}
+  #${PANEL_ID} .mw-btn.danger{border-color:var(--crit);color:var(--crit)}
+  #${PANEL_ID} .mw-btn.danger:hover{background:var(--crit-bg)}
   #${PANEL_ID} .mw-toggle{display:inline-flex;align-items:center;gap:5px;cursor:pointer;user-select:none;font-size:11px}
-  #${PANEL_ID} .mw-toggle .tr{width:28px;height:15px;border-radius:8px;background:#1e3a45;position:relative;transition:.15s}
-  #${PANEL_ID} .mw-toggle .tr::after{content:'';position:absolute;top:2px;left:2px;width:11px;height:11px;border-radius:50%;
-    background:#64748b;transition:.15s}
-  #${PANEL_ID} .mw-toggle.on .tr{background:#0e7490}
-  #${PANEL_ID} .mw-toggle.on .tr::after{left:15px;background:#7dd3fc}
-  #${PANEL_ID} .mw-toggle.red.on .tr{background:#b91c1c}
-  #${PANEL_ID} .mw-toggle.red.on .tr::after{background:#fecaca}
+  #${PANEL_ID} .mw-toggle .tr{width:28px;height:15px;border-radius:8px;background:var(--surface-2);position:relative;transition:.15s}
+  #${PANEL_ID} .mw-toggle .tr::after{content:"";position:absolute;top:2px;left:2px;width:11px;height:11px;border-radius:50%;
+    background:var(--text-faint);transition:.15s}
+  #${PANEL_ID} .mw-toggle.on .tr{background:var(--accent)}
+  #${PANEL_ID} .mw-toggle.on .tr::after{left:15px;background:var(--on-accent)}
+  #${PANEL_ID} .mw-toggle.red.on .tr{background:var(--crit)}
+  #${PANEL_ID} .mw-toggle.red.on .tr::after{background:var(--on-accent)}
+  /* Таблица по правилам темы: цифры шрифтом интерфейса с tabular-nums, подсветка строки */
   #${PANEL_ID} table{width:100%;border-collapse:collapse;font-size:11px}
-  #${PANEL_ID} th{color:#64748b;text-align:right;padding:4px 6px;border-bottom:1px solid #0e3a4a;font-weight:600;white-space:nowrap}
-  #${PANEL_ID} td{padding:4px 6px;border-bottom:1px solid rgba(14,58,74,.4);text-align:right;
-    font-family:ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;white-space:nowrap}
-  #${PANEL_ID} th:first-child,#${PANEL_ID} td:first-child{text-align:left;font-family:inherit;white-space:normal}
+  #${PANEL_ID} th{color:var(--text-faint);text-align:right;padding:5px 6px;border-bottom:1px solid var(--border);
+    font-weight:400;white-space:nowrap;text-transform:none;letter-spacing:0}
+  #${PANEL_ID} td{padding:5px 6px;border-bottom:1px solid var(--border-soft);text-align:right;
+    font-family:var(--font-ui);font-variant-numeric:tabular-nums;white-space:nowrap}
+  #${PANEL_ID} tbody tr:hover{background:var(--surface-2)}
+  #${PANEL_ID} th:first-child,#${PANEL_ID} td:first-child{text-align:left;white-space:normal}
   #${PANEL_ID} .mw-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px}
-  #${PANEL_ID} .mw-dot.a{background:#22c55e}
-  #${PANEL_ID} .mw-dot.p{background:#64748b}
-  #${PANEL_ID} .mw-muted{color:#64748b}
-  #${PANEL_ID} .mw-badge{display:inline-block;padding:1px 7px;border-radius:9px;font-size:10px;font-weight:700}
-  #${PANEL_ID} .mw-badge.obs{background:rgba(100,116,139,.25);color:#cbd5e1}
-  #${PANEL_ID} .mw-badge.arm{background:rgba(239,68,68,.22);color:#fca5a5}
-  #${PANEL_ID} .mw-badge.ntf{background:rgba(56,189,248,.18);color:#7dd3fc}
-  #${PANEL_ID} .mw-badge.err{background:rgba(245,158,11,.2);color:#fcd34d}
+  #${PANEL_ID} .mw-dot.a{background:var(--good)}
+  #${PANEL_ID} .mw-dot.p{background:var(--text-faint)}
+  #${PANEL_ID} .mw-muted{color:var(--text-faint)}
+  #${PANEL_ID} .mw-badge{display:inline-block;padding:2px 8px;border-radius:var(--r-sm);font-size:10px;font-weight:600}
+  #${PANEL_ID} .mw-badge.obs{background:var(--surface-2);color:var(--text-dim)}
+  #${PANEL_ID} .mw-badge.arm{background:var(--crit-bg);color:var(--crit)}
+  #${PANEL_ID} .mw-badge.ntf{background:var(--accent-bg);color:var(--accent)}
+  #${PANEL_ID} .mw-badge.err{background:var(--warn-bg);color:var(--warn)}
   #${PANEL_ID} .mw-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   #${PANEL_ID} .mw-cond{display:flex;align-items:center;gap:6px;margin:4px 0}
-  #${PANEL_ID} label.mw-lbl{display:block;color:#7dd3fc;font-size:10px;font-weight:700;letter-spacing:.05em;
-    text-transform:uppercase;margin:10px 0 4px}
-  #${PANEL_ID} .mw-acc{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:5px;cursor:pointer}
-  #${PANEL_ID} .mw-acc:hover{background:rgba(56,189,248,.06)}
-  #${PANEL_ID} .mw-acc input{accent-color:#0ea5e9}
-  #${PANEL_ID} .mw-jr{padding:7px 0;border-bottom:1px solid rgba(14,58,74,.4);font-size:11px}
-  #${PANEL_ID} .mw-jr .t{font-family:ui-monospace,Menlo,monospace;color:#7dd3fc;margin-right:8px}
+  #${PANEL_ID} label.mw-lbl{display:block;color:var(--text-faint);font-size:11px;font-weight:400;letter-spacing:0;
+    text-transform:none;margin:10px 0 4px}
+  #${PANEL_ID} .mw-acc{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:var(--r-sm);cursor:pointer}
+  #${PANEL_ID} .mw-acc:hover{background:var(--surface-2)}
+  #${PANEL_ID} .mw-acc input{accent-color:var(--accent)}
+  #${PANEL_ID} .mw-jr{padding:7px 0;border-bottom:1px solid var(--border-soft);font-size:11px}
+  #${PANEL_ID} .mw-jr .t{font-variant-numeric:tabular-nums;color:var(--text-faint);margin-right:8px}
   `;
 
   function tglHtml(on, red, act, id) {
@@ -662,7 +683,7 @@
         <input type="text" placeholder="фильтр по имени / id / BM" data-act="accfilter" value="${esc(state.ui.accFilter)}" style="flex:1">
         <button class="mw-btn" data-act="reload-acc">↻ обновить</button>
       </div>
-      <div class="mw-muted" style="margin-bottom:8px">выбрано: <b style="color:#7dd3fc">${state.sel.length}</b> из ${ACCOUNTS.length}${accountsLoading ? ' · грузятся…' : ''}</div>
+      <div class="mw-muted" style="margin-bottom:8px">выбрано: <b style="color:var(--text)">${state.sel.length}</b> из ${ACCOUNTS.length}${accountsLoading ? ' · грузятся…' : ''}</div>
       ${rows || `<div class="mw-muted">${accountsLoading ? 'кабинеты грузятся…' : 'пусто — нажми ↻ обновить'}</div>`}`;
   }
 
@@ -679,7 +700,7 @@
 
   function renderEditor() {
     const d = state.ui.draft;
-    return `<div class="mw-card" style="border-left-color:#38bdf8">
+    return `<div class="mw-card" style="border-left-color:var(--accent)">
       <label class="mw-lbl">Название сценария</label>
       <input type="text" data-act="d-name" value="${esc(d.name)}" style="width:100%">
       <label class="mw-lbl">Условия (все должны выполниться — AND)</label>
@@ -727,10 +748,10 @@
     const cards = state.scenarios.map((sc) => `
       <div class="mw-card ${sc.armed && sc.enabled ? 'armed' : ''} ${sc.enabled ? '' : 'dis'}">
         <div class="mw-row">
-          <b style="color:#e2f4fb">${esc(sc.name)}</b>
+          <b style="color:var(--text)">${esc(sc.name)}</b>
           <span style="margin-left:auto" class="mw-row">
             <span class="mw-toggle-wrap" title="включён">${tglHtml(sc.enabled, false, 'sc-en', sc.id)} <span class="mw-muted">вкл</span></span>
-            <span class="mw-toggle-wrap" title="armed = реально паузит">${tglHtml(sc.armed, true, 'sc-arm', sc.id)} <span style="color:${sc.armed ? '#fca5a5' : '#64748b'}">ARMED</span></span>
+            <span class="mw-toggle-wrap" title="armed = реально паузит">${tglHtml(sc.armed, true, 'sc-arm', sc.id)} <span style="color:${sc.armed ? 'var(--crit)' : 'var(--text-faint)'}">ARMED</span></span>
           </span>
         </div>
         <div class="mw-muted" style="margin:5px 0 7px">${esc(describeScenario(sc))}</div>
@@ -747,7 +768,7 @@
           <option value="">+ из пресета…</option>${presetOpts}
         </select>
       </div>
-      <div class="mw-muted" style="margin-bottom:10px">наблюдение по умолчанию: сценарий с «пауза» без <b style="color:#fca5a5">ARMED</b> только пишет в журнал. Авто-возврата из паузы нет и не будет.</div>
+      <div class="mw-muted" style="margin-bottom:10px">наблюдение по умолчанию: сценарий с «пауза» без <b style="color:var(--crit)">ARMED</b> только пишет в журнал. Авто-возврата из паузы нет и не будет.</div>
       ${cards || '<div class="mw-muted">сценариев нет — добавь свой или возьми пресет</div>'}`;
   }
 
@@ -766,8 +787,8 @@
         <td>${fmt(metricValue(r, 'cpm'))}</td><td>${fmt(r.freq, 1)}</td><td>${r.regs}</td><td>${r.purchases}</td>
       </tr>`).join('');
       return `<div class="mw-card">
-        <div class="mw-row"><b style="color:#e2f4fb">${esc(acc?.name || accId)}</b>
-          <span class="mw-muted" style="margin-left:auto">today · спенд <b style="color:#7dd3fc">$${fmt(total)}</b> · ${hhmm(st.ts)}</span></div>
+        <div class="mw-row"><b style="color:var(--text)">${esc(acc?.name || accId)}</b>
+          <span class="mw-muted" style="margin-left:auto">today · спенд <b style="color:var(--text)">$${fmt(total)}</b> · ${hhmm(st.ts)}</span></div>
         <table style="margin-top:6px">
           <tr><th>кампания</th><th>спенд</th><th>CTR</th><th>CPC</th><th>CPM</th><th>частота</th><th>реги</th><th>покупки</th></tr>
           ${trs || '<tr><td colspan="8" class="mw-muted">нет кампаний со спендом</td></tr>'}
@@ -786,8 +807,8 @@
         ? `<span class="mw-badge arm">${j.ok ? '⛔ PAUSED' : 'PAUSE FAIL'}</span>`
         : (j.action === 'pause' ? '<span class="mw-badge obs">👁 OBSERVE</span>' : '<span class="mw-badge ntf">🔔 NOTIFY</span>');
       return `<div class="mw-jr"><span class="t">${hhmm(j.ts)}</span>${badge}
-        <b style="color:#e2f4fb">${esc(j.scName)}</b> · ${esc(j.acc)}<br>
-        <span style="color:#94a3b8">${esc(j.entity)}</span> — ${esc(j.reason)}${j.err ? `<br><span style="color:#fca5a5">${esc(j.err)}</span>` : ''}</div>`;
+        <b style="color:var(--text)">${esc(j.scName)}</b> · ${esc(j.acc)}<br>
+        <span style="color:var(--text-faint)">${esc(j.entity)}</span> — ${esc(j.reason)}${j.err ? `<br><span style="color:var(--crit)">${esc(j.err)}</span>` : ''}</div>`;
     }).join('');
     return `
       <div class="mw-row" style="margin-bottom:8px">
