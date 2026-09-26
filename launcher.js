@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.28.1 — Bookmarklet
+ * MetaLaunch PRO v0.28.2 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -182,6 +182,10 @@
  *          (4) multi-account launch logs a ⚠ that the ONE pixel (step 4/CSV) is applied to ALL
  *              accounts — promoted_object and {pixel_id} alike.
  *          (5) collapsible "macros reference" under step 8 — all launcher tokens + FB macros.
+ *
+ * v0.28.2: переименование пресета — кнопка ✏️ рядом с 💾 и 🗑. Имя задавалось только
+ *          при сохранении, и поправить его (опечатка, «Manual 26 Sep 13:40» вместо
+ *          смысла) можно было лишь пересохранив пресет заново под новым именем.
  *
  * v0.28.1: статус кабинета в списке выбора. account_status приходил с FB с v0.1 и
  *          лежал в ACCOUNTS[].status, но строка списка его не рисовала — баер выбирал
@@ -1152,6 +1156,22 @@
     else if (!checked && pos !== -1) arr.splice(pos, 1);
     // Renormalize: if all checked again, drop the per-adset entry (back to default).
     if (arr.length === totalCreatives) delete state.adsetAssignments[adsetName];
+  }
+
+  // v0.28.2: переименовать выбранный пресет — настройки и дата не меняются.
+  function renamePreset() {
+    if (!state.selectedPresetId) return;
+    const preset = state.presets.find(p => p.id === state.selectedPresetId);
+    if (!preset) return;
+    const input = prompt('New preset name:', preset.name);
+    if (input === null) return;
+    const next = input.trim();
+    if (!next || next === preset.name) return;
+    const was = preset.name;
+    preset.name = next;
+    savePresetsToStorage();
+    logEvent('info', `Preset "${was}" renamed → "${next}".`);
+    render();
   }
 
   function deletePreset() {
@@ -3641,7 +3661,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.28.1</span></span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.28.2</span></span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -3676,6 +3696,7 @@
             }).join('')}
           </select>
           <button id="fbl-preset-save" title="Save current settings as preset (CSV optional — manual setups save too)">💾</button>
+          <button id="fbl-preset-rename" ${!state.selectedPresetId ? 'disabled' : ''} title="Rename selected preset">✏️</button>
           <button id="fbl-preset-delete" ${!state.selectedPresetId ? 'disabled' : ''} title="Delete selected preset">🗑</button>
         </div>
         <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
@@ -4366,6 +4387,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       state.presetRestoreAccounts = e.target.checked;
     });
     document.getElementById('fbl-preset-save')?.addEventListener('click', savePreset);
+    document.getElementById('fbl-preset-rename')?.addEventListener('click', renamePreset);
     document.getElementById('fbl-preset-delete')?.addEventListener('click', deletePreset);
     document.getElementById('fbl-auto-save')?.addEventListener('change', e => { state.autoSavePreset = e.target.checked; });
     document.getElementById('fbl-preset-export')?.addEventListener('click', exportPresets);
