@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>MetaWatch PRO — harness</title>
+<style>html,body{margin:0;padding:0;background:#0a0f14;width:100%;height:100%;overflow:hidden}</style>
+</head>
+<body>
+<script>
+  // Стенд MetaWatch: панель standalone, сеть отвечает пустыми списками (кабов нет, тик
+  // проходит вхолостую). Хватает, чтобы проверить старт/стоп, Web Lock и заморозку.
+  // Сценарий — test-watch-awake.ts.
+  var __accessToken = 'VISUAL_TEST_TOKEN';
+  window.alert = function () {};
+  window.confirm = function () { return true; };
+  window.fetch = function () {
+    return Promise.resolve(new Response(JSON.stringify({ data: [] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  };
+</script>
+<script src="../watchdog.js"></script>
+</body>
+</html>

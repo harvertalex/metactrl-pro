@@ -1,9 +1,18 @@
 /* ===========================================================================
- * MetaWatch PRO v0.2.0 — Bookmarklet
+ * MetaWatch PRO v0.3.0 — Bookmarklet
  *
  * In-browser watchdog for FB Ads Manager — redundancy layer that works even when
  * server-side infra (ARIA / SCAN watchdog) is down. Runs from an open AM tab on
  * the session token (same discovery ladder as MetaLaunch PRO).
+ *
+ * v0.3.0: вкладку не морозят, пока вотчдог включён. Воркер-пульс спасал от замедления
+ *         таймеров, но не от заморозки: Chrome 154 (с 25.09) морозит скрытую тяжёлую
+ *         вкладку Ads Manager целиком, вместе с воркером, и тики молча вставали до первого
+ *         взгляда на окно. Теперь от СТАРТ до СТОП держится Web Lock — вкладку с ним Chrome
+ *         не морозит и не выгружает (то же, что MetaLaunch v0.29.0). Если заморозка или
+ *         простой > 3 мин всё же были — запись в журнал «⏸ … пропущено тиков: N» и, если
+ *         тики пропущены, в TG. После разморозки просроченный тик идёт сразу. Перезапуск
+ *         закладки снимает замок и слушатели старого экземпляра (иначе он тикал бы вторым).
  *
  * v0.2.0: ANTI-FLAG request diet (FB restricted the session for "automation /
  *         multiple sessions" on 2026-07-17, triggered by MetaLaunch — MetaWatch is
@@ -38,9 +47,11 @@
   document.getElementById(PANEL_ID)?.remove();
   try { window.__mwWorker?.terminate(); } catch {}
   try { clearInterval(window.__mwFallbackTimer); } catch {}
+  try { window.__mwAwakeRelease?.(); } catch {}   // v0.3.0: old instance's Web Lock
+  try { window.__mwLifecycleOff?.(); } catch {}   // v0.3.0: old freeze/resume listeners would tick a dead instance
 
   // ─── CONFIG ─────────────────────────────────────────────────────────────
-  const VERSION = '0.2.0';
+  const VERSION = '0.3.0';
   const GRAPH_VER = 'v23.0';
   const HOST_GRAPH = `https://graph.facebook.com/${GRAPH_VER}`;
   const MAX_RETRIES = 4;
@@ -539,8 +550,60 @@
     worker = null;
     try { clearInterval(window.__mwFallbackTimer); } catch {}
   }
+  // ─── KEEP THE TAB AWAKE (v0.3.0) ────────────────────────────────────────
+  // The worker heartbeat beats page-timer THROTTLING, not FREEZING: Chrome 154 freezes a
+  // hidden heavy tab (Ads Manager) whole, workers included, and ticks silently stop until
+  // someone looks at the window. Chrome does not freeze or discard a page holding a Web
+  // Lock, so the watchdog holds one from START to STOP. A freeze or stall that still
+  // happens goes to the journal (and TG when ticks were missed) — a silent gap in a
+  // watchdog is an incident, not slowness.
+  const STALL_MS = 3 * 60e3;   // beats every 20 s (page-timer fallback ~1/min hidden) → 3 min = a real stall
+  let awake = null;            // { stopped, release } while the lock is requested/held
+  let lastBeat = 0;
+  let frozenAt = 0;
+  function holdTabAwake() {
+    if (awake || !navigator.locks?.request) return;
+    const a = awake = { stopped: false, release: null };
+    // Released before the callback ran (START→STOP in a blink) → return at once, don't hang the lock.
+    navigator.locks.request(`metawatch-${INSTANCE_ID}`, () =>
+      a.stopped ? null : new Promise((r) => { a.release = r; })).catch(() => {});
+    window.__mwAwakeRelease = releaseTabAwake;
+  }
+  function releaseTabAwake() {
+    if (!awake) return;
+    awake.stopped = true;
+    awake.release?.();
+    awake = null;
+  }
+  function reportStall(ms, how) {
+    const mins = Math.round(ms / 60e3);
+    const missed = Math.floor(ms / (state.settings.intervalMin * 60e3));
+    const msg = `⏸ вкладка ${how} ~${mins} мин — ${missed ? `пропущено тиков: ${missed}` : 'тик не пропущен'}. ` +
+      'Чтобы не повторялось: chrome://settings/performance → «Всегда оставлять эти сайты активными» → facebook.com';
+    journal({ kind: 'error', acc: '', msg });
+    if (missed) sendTg(`🐕 MetaWatch: ${msg}`);
+    save();
+    render();
+  }
+  const onFreeze = () => { if (state.running) frozenAt = Date.now(); };
+  const onResume = () => {
+    if (frozenAt) reportStall(Date.now() - frozenAt, 'была заморожена браузером');
+    frozenAt = 0;
+    lastBeat = Date.now();
+    onHeartbeat();   // an overdue tick runs right away, not on the next beat
+  };
+  document.addEventListener('freeze', onFreeze);
+  document.addEventListener('resume', onResume);
+  window.__mwLifecycleOff = () => {
+    document.removeEventListener('freeze', onFreeze);
+    document.removeEventListener('resume', onResume);
+  };
+
   function onHeartbeat() {
     if (!state.running) return;
+    const now = Date.now();
+    if (lastBeat && !frozenAt && now - lastBeat > STALL_MS) reportStall(now - lastBeat, 'спала');
+    lastBeat = now;
     refreshLock();
     updateTitle();
     const due = !state.lastTickTs || Date.now() - state.lastTickTs >= state.settings.intervalMin * 60e3;
@@ -561,8 +624,8 @@
       journal({ kind: 'error', acc: '', msg: 'похоже, вотчдог уже крутится в другой вкладке — риск двойных действий!' });
     }
     state.running = on;
-    if (on) { startTimer(); refreshLock(); runTick(false); }
-    else { stopTimer(); setStatus('idle', 'остановлена'); }
+    if (on) { lastBeat = Date.now(); holdTabAwake(); startTimer(); refreshLock(); runTick(false); }
+    else { stopTimer(); releaseTabAwake(); setStatus('idle', 'остановлена'); }
     save();
     updateTitle();
     render();
@@ -1023,6 +1086,8 @@
   if (state.running) {
     // букмарклет перекликнут после reload при активном вотчдоге → возобновляю
     journal({ kind: 'info', msg: 'панель переоткрыта — вотчдог возобновлён' });
+    lastBeat = Date.now();
+    holdTabAwake();
     startTimer();
     updateTitle();
     render();
