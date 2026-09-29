@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.28.2 — Bookmarklet
+ * MetaLaunch PRO v0.29.0 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -182,6 +182,25 @@
  *          (4) multi-account launch logs a ⚠ that the ONE pixel (step 4/CSV) is applied to ALL
  *              accounts — promoted_object and {pixel_id} alike.
  *          (5) collapsible "macros reference" under step 8 — all launcher tokens + FB macros.
+ *
+ * v0.29.0: залив в фоне, память IG по странице, итог по IG, журнал прошлого залива.
+ *          (1) С Chrome 154 (25.09) залив вставал, пока окно Ads Manager не активно: браузер
+ *              морозит скрытую тяжёлую вкладку (Экономия памяти на «максимум»), а скрипт
+ *              живёт внутри страницы и встаёт вместе с ней. На время залива держим Web Lock —
+ *              вкладку с ним Chrome не морозит и не выгружает. Если заморозка всё же была —
+ *              в ленте «⏸ вкладка стояла N» + как добавить facebook.com в исключения.
+ *          (2) IG, который FB принял на креативе со страницей (сверка после создания),
+ *              запоминается по СТРАНИЦЕ в localStorage (fbl_ig_by_page_v1). PBIA принадлежит
+ *              странице, а не кабу — следующий залив этой страницы в любом кабе и в любой
+ *              сессии берёт его сразу, даже когда история каба (300 последних креативов)
+ *              страницу уже не помнит. Ступень после IG страницы, до account actor / PBIA /
+ *              истории. FB отверг запомненный — в этом кабе ступень пропускается.
+ *              Account actor (чужой для страницы IG) в память не пишется.
+ *          (3) Залив без IG не останавливается (решение Верта 29.09: кампания проходит,
+ *              баер доставит руками) — но в конце залива итог: в каких кабах IG не прикреплён
+ *              или FB его выкинул. Пресет с галкой «FB-only» при загрузке пишет предупреждение.
+ *          (4) Журнал залива сохраняется в localStorage (fbl_last_log_v1) по ходу и в конце;
+ *              кнопка 📋 в шапке журнала копирует текущий, а в новой сессии — прошлый.
  *
  * v0.28.2: переименование пресета — кнопка ✏️ рядом с 💾 и 🗑. Имя задавалось только
  *          при сохранении, и поправить его (опечатка, «Manual 26 Sep 13:40» вместо
@@ -435,6 +454,8 @@
     showAccountPicker: false, // v0.6: expanded state of multi-account picker dropdown
     pageIgMap: {},            // v0.6.2: { pageId: { igId, igName, pageName } } — auto-detected IG per page
     pageIgLoading: {},        // v0.6.2: { pageId: true } while IG lookup is in flight
+    igRejected: {},           // v0.29.0: { 'acc__page': igId } — FB rejected this IG here this session → skip the memory rung
+    igReport: [],             // v0.29.0: per-account IG outcome of the current run → end-of-run summary
     dsaBeneficiary: '',       // v0.2.6: EU DSA — name of person/org being advertised
     dsaPayer: '',             // v0.2.6: EU DSA — name of who pays (optional, defaults to beneficiary)
     campNamePrefix: '',       // v0.3: user's prefix; launcher appends "| CBO $X/d | Nads | MMDDYY | acc_id"
@@ -540,6 +561,52 @@
     return mine;
   }
 
+  // ─── KEEP THE TAB AWAKE DURING A LAUNCH (v0.29.0) ───────────────────────
+  // The launcher is a script INSIDE the Ads Manager page. When Chrome freezes a hidden heavy
+  // tab (Memory/Energy Saver — from Chrome 154, 25.09, background launches stood still until
+  // the window was shown), the launch freezes with it. Chrome does not freeze or discard a
+  // page that holds a Web Lock, so a launch holds one for its whole duration. The lock name
+  // is unique per run: two tabs launching in parallel must not queue behind each other.
+  // If a freeze or a long stall still happens, the feed says so, with the settings fix.
+  const STALL_LOG_MS = 120000;  // hidden-tab timers wake at most once a minute; 2 min = a real stall
+  function fmtDur(ms) {
+    const s = Math.round(ms / 1000);
+    return s >= 60 ? `${Math.floor(s / 60)} мин ${s % 60} с` : `${s} с`;
+  }
+  async function withTabAwake(work) {
+    let lastBeat = Date.now();
+    let frozenAt = 0;
+    let hinted = false;
+    const reportStall = (ms, how) => {
+      addLog('warning', `⏸ Вкладка ${how} ${fmtDur(ms)} — залив стоял, теперь продолжается.` +
+        (hinted ? '' : ' Чтобы не повторялось: chrome://settings/performance → «Всегда оставлять эти сайты активными» → добавь facebook.com.'));
+      hinted = true;
+    };
+    const onFreeze = () => { frozenAt = Date.now(); };
+    const onResume = () => {
+      if (frozenAt) reportStall(Date.now() - frozenAt, 'была заморожена браузером');
+      frozenAt = 0;
+      lastBeat = Date.now();
+    };
+    const beat = setInterval(() => {
+      const now = Date.now();
+      if (!frozenAt && now - lastBeat > STALL_LOG_MS) reportStall(now - lastBeat, 'спала');
+      lastBeat = now;
+    }, 5000);
+    document.addEventListener('freeze', onFreeze);
+    document.addEventListener('resume', onResume);
+    try {
+      if (!navigator.locks?.request) return await work();
+      const name = `metalaunch-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      return await navigator.locks.request(name, () => work());
+    } finally {
+      clearInterval(beat);
+      document.removeEventListener('freeze', onFreeze);
+      document.removeEventListener('resume', onResume);
+      saveLastLog();
+    }
+  }
+
   // v0.5.2: locale-aware numeric parse — handles EU "520,99" / "1.234,56" alongside US "520.99" / "1,234.56".
   // Power Editor exports use the OS locale of whoever clicked Export, so a single launcher
   // sees both flavors. JS `+"520,99"` returns NaN and we silently treated it as 0 → budgets dropped.
@@ -571,7 +638,55 @@
   function setStatus(type, text) { state.status = { type, text }; render(); }
   function addLog(type, msg) {
     state.log.push({ type, msg, ts: new Date().toLocaleTimeString() });
+    // v0.29.0: persist the feed while a launch runs. Paced by wall clock, not a timer —
+    // timers are exactly what a hidden tab gets throttled on.
+    if (state.running && Date.now() - _lastLogSaveAt > 3000) saveLastLog();
     render();
+  }
+
+  // v0.29.0: the launch journal outlives the panel. It used to live only in state.log, so
+  // closing the panel (or the tab being discarded) lost the only record of what the launch
+  // did — "why no Instagram today?" had nothing to answer from. 📋 in the journal head
+  // copies the current feed plus the last launch saved by an EARLIER session.
+  const LAST_LOG_KEY = 'fbl_last_log_v1';
+  const LAST_LOG_MAX = 600;
+  const SESSION_ID = Math.random().toString(36).slice(2, 10);
+  let _lastLogSaveAt = 0;
+  function logAsText(lines) {
+    return lines.map(l => `${l.ts} ${String(l.type).toUpperCase().padEnd(7)} ${l.msg}`).join('\n');
+  }
+  function saveLastLog() {
+    _lastLogSaveAt = Date.now();
+    if (!state.log.length) return;
+    try {
+      localStorage.setItem(LAST_LOG_KEY, JSON.stringify({
+        at: new Date().toISOString(), session: SESSION_ID, lines: state.log.slice(-LAST_LOG_MAX),
+      }));
+    } catch { /* quota / storage blocked — the live feed still works */ }
+  }
+  function readLastLog() {
+    try { return JSON.parse(localStorage.getItem(LAST_LOG_KEY) || 'null'); } catch { return null; }
+  }
+  function copyJournal() {
+    const saved = readLastLog();
+    const prev = saved && saved.session !== SESSION_ID && saved.lines?.length ? saved : null;
+    const parts = [];
+    if (prev) parts.push(`=== Прошлый залив (${new Date(prev.at).toLocaleString()}) ===\n${logAsText(prev.lines)}`);
+    if (state.log.length) parts.push(`=== Текущая сессия (${new Date().toLocaleString()}) ===\n${logAsText(state.log)}`);
+    if (!parts.length) { setStatus('info', 'Журнал пуст — заливов в этом браузере ещё не было.'); return; }
+    const text = parts.join('\n\n');
+    const done = () => setStatus('success', `📋 Журнал скопирован${prev ? ' (с прошлым заливом)' : ''} — вставь его в чат.`);
+    const fallback = () => {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;left:-9999px;top:0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); done(); } catch { setStatus('error', 'Не удалось скопировать журнал.'); }
+      ta.remove();
+    };
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(done, fallback);
+    else fallback();
   }
 
   // v0.27.0: milestone events (upload finished, launch finished, preset loaded) used to live
@@ -1078,6 +1193,8 @@
     state.pageIdOverride = s.pageIdOverride || '';
     state.instagramOverride = s.instagramOverride || '';
     state.usePageAsActor = !!s.usePageAsActor;
+    // v0.29.0: the FB-only tick rides along in presets — say so, or a preset silently kills IG.
+    if (state.usePageAsActor) addLog('warning', `⛔ Preset "${preset.name}" turned ON «FB-only — БЕЗ Instagram»: IG will not be attached. Need IG → untick it in step 3.`);
     state.dsaBeneficiary = s.dsaBeneficiary || '';
     state.dsaPayer = s.dsaPayer || '';
     state.urlTagParam = s.urlTagParam || 'sub2';
@@ -1643,6 +1760,37 @@
   //
   // Cache is keyed by (accId, pageId) since the same page can resolve differently
   // in different accounts.
+  //
+  // v0.29.0: IG memory per PAGE — survives the session and crosses cabs. The ladder cache
+  // above lives only until the panel closes, and on rented cabs the one working rung is the
+  // history scan of the cab's 300 newest creatives: once the page drops out of that window
+  // (or the page is new to THIS cab), a page that launched with IG yesterday goes out
+  // Facebook-only today. A page's PBIA belongs to the page, not to the cab, so an IG that FB
+  // KEPT on a creative with this page (post-create readback) is remembered here and reused.
+  const IG_MEMORY_KEY = 'fbl_ig_by_page_v1';
+  function readIgMemory() {
+    try { return JSON.parse(localStorage.getItem(IG_MEMORY_KEY) || '{}') || {}; } catch { return {}; }
+  }
+  function recallPageIg(pageId) {
+    const e = pageId ? readIgMemory()[String(pageId)] : null;
+    return e?.igId ? e : null;
+  }
+  function rememberPageIg(pageId, igId, igName = '') {
+    if (!pageId || !igId) return;
+    try {
+      const mem = readIgMemory();
+      const prev = mem[String(pageId)];
+      const sameIg = prev?.igId === String(igId);
+      mem[String(pageId)] = { igId: String(igId), igName: igName || (sameIg ? prev.igName : '') || '', at: new Date().toISOString() };
+      localStorage.setItem(IG_MEMORY_KEY, JSON.stringify(mem));
+    } catch { /* storage blocked — the ladder still works, just without memory */ }
+  }
+  // An account actor is the CAB's Instagram, not the page's — never remember it as the page's IG.
+  function igIsPageBound(accId, pageId, igId) {
+    const e = state.pageIgMap[`${accId || ''}__${pageId || ''}`];
+    return !(e && e.igId === String(igId) && e.source === 'account-substitute');
+  }
+
   async function loadIgForAccount(accId, pageId) {
     const key = `${accId || ''}__${pageId || ''}`;
     if (key in state.pageIgMap) {
@@ -1690,6 +1838,19 @@
             // "nonexisting field" = token lacks page admin role; not a real error, drop quietly.
             if (!/nonexisting field/i.test(String(e.message || ''))) { anyError = true; addLog('warning', `Page ${pageId} /instagram_accounts lookup failed: ${e.message}`); }
           }
+        }
+      }
+
+      // v0.29.0: MEMORY rung — an IG FB already kept on a creative with THIS page (any cab,
+      // any earlier session). Below a linked page IG (the real one wins), above the account
+      // actor / PBIA / history. Skipped in a cab where FB rejected it this session.
+      if (!pageIg) {
+        const mem = recallPageIg(pageId);
+        if (mem && state.igRejected[key] !== mem.igId) {
+          const entry = { igId: mem.igId, igName: mem.igName || '', pageName, source: 'memory' };
+          state.pageIgMap[key] = entry;
+          addLog('info', `🔗 IG from memory: ${entry.igId}${entry.igName ? ' @' + entry.igName : ''} — FB kept it on a creative with this page (${new Date(mem.at).toLocaleDateString()})`);
+          return entry.igId;
         }
       }
 
@@ -1867,15 +2028,25 @@
   // account), leaving the Ads Manager IG field empty while the launch "succeeds". Read
   // the creative back and warn if the IG we sent didn't stick — you can't patch it onto
   // an existing creative, so the user must fix access/identity and relaunch.
-  async function verifyCreativeIg(creativeId, expectedIg, accLabel, adName) {
-    if (state.dryRun || !creativeId || !expectedIg || String(creativeId).startsWith('DRY')) return;
+  // v0.29.0: returns true (kept) / false (dropped) / null (not checked) for the IG summary,
+  // and a kept IG that belongs to the page it was resolved for goes into the page IG memory.
+  async function verifyCreativeIg(creativeId, expectedIg, accLabel, adName, accId = '', igPageId = '', adPageId = '') {
+    if (state.dryRun || !creativeId || !expectedIg || String(creativeId).startsWith('DRY')) return null;
     try {
       const c = await apiFetch(`/${creativeId}`, { params: { fields: 'object_story_spec{instagram_user_id}' } });
       const got = c?.object_story_spec?.instagram_user_id ? String(c.object_story_spec.instagram_user_id) : '';
       if (got !== String(expectedIg)) {
         addLog('warning', `[${accLabel}] ⚠ FB dropped IG ${expectedIg} on "${adName}" → IG field will be EMPTY (page-only). The IG isn't promotable by this account/token (BM claim / asset assignment / page role). Link a real IG or accept page-only.`);
+        return false;
       }
-    } catch { /* best-effort */ }
+      // Remember only when the ad's page IS the page the IG was resolved for (CSV rows can
+      // mix pages) and the IG is the page's own, not the cab's account actor.
+      if (igPageId && String(adPageId) === String(igPageId) && igIsPageBound(accId, igPageId, expectedIg)) {
+        const e = state.pageIgMap[`${accId}__${igPageId}`];
+        rememberPageIg(igPageId, expectedIg, e?.igId === String(expectedIg) ? e.igName : '');
+      }
+      return true;
+    } catch { return null; /* best-effort */ }
   }
 
   // v0.6.3 compatibility shim: older callers pass just pageId. Resolve via primary
@@ -2626,6 +2797,7 @@
       state.progress = { done: 0, total: totalUnits * state.repeatTotal };
     }
     _tokenWarned.clear();  // v0.26.1: unknown-token warnings dedup per launch
+    state.igReport = [];   // v0.29.0: IG summary is per run
     render();
 
     if (accIds.length > 1) {
@@ -2671,6 +2843,7 @@
         : `🎉 Multi-account done: all ${okAccounts} accounts launched successfully.`;
       logEvent(errAccounts ? 'warning' : 'success', summary);
     }
+    reportIgOutcome();
     // v0.5.3: auto-save preset only when EVERY account succeeded.
     if (state.autoSavePreset && !errAccounts && okAccounts > 0) autoSavePresetSilent();
     render();
@@ -2711,7 +2884,12 @@
       render();
       return;
     }
+    return withTabAwake(runLaunchSeriesBody);
+  }
 
+  // v0.29.0: the series body, split out so withTabAwake holds the tab awake around all runs
+  // AND the countdown gaps between them (a frozen gap = the next run never starts).
+  async function runLaunchSeriesBody() {
     const runs = Math.max(1, Math.min(50, parseInt(state.repeatCount, 10) || 1));
     const delayMin = Math.max(0, parseFloat(String(state.repeatDelayMin).replace(',', '.')) || 0);
     const delayMs = Math.round(delayMin * 60000);
@@ -2808,6 +2986,8 @@
     const probePage = state.pageIdOverride || stripPfx(firstRow?.['Link Object ID'] || '');
     const igResolution = await resolveAccountIg(accId, probePage);
     let resolvedIg = igResolution.igId;
+    let resolvedIgPage = probePage;       // v0.29.0: the page resolvedIg belongs to (for the IG memory)
+    let igKept = 0, igDropped = 0;        // v0.29.0: readback verdicts → end-of-run IG summary
     if (igResolution.source === 'page-only') {
       addLog('info', `[${accLabel}] 🟦 Page-only identity — using Facebook Page ${probePage || '(from CSV)'} as identity, Instagram skipped entirely (instagram_user_id omitted, no IG/PBIA calls)`);
     } else if (igResolution.source === 'desired-valid') {
@@ -2831,9 +3011,9 @@
     // identity (proven live: flag-only creative reads back page-only). If IG is in targeting it
     // stays there (Alexander's call — warn, don't block, don't strip), but the AM IG field will
     // be empty until a real id is secured.
+    const igPlace = resolvePlacements();
+    const igTargeted = !igPlace || !(igPlace.publisher_platforms || []).length || igPlace.publisher_platforms.includes('instagram');
     if (!resolvedIg && !state.usePageAsActor) {
-      const place = resolvePlacements();
-      const igTargeted = !place || !(place.publisher_platforms || []).length || place.publisher_platforms.includes('instagram');
       if (igTargeted) {
         addLog('warning', `[${accLabel}] ⚠⚠ NO Instagram representative secured — IG stays in targeting but the AM IG field will be EMPTY (use_page_actor_override does not fill it). Fix: link an IG to the page (Page Settings → Linked accounts), grant this token ADVERTISER+ on the page, paste a promotable IG ID in step 3, or run one ad on this page from AM once so its PBIA lands in account history. Launch continues.`);
       }
@@ -3230,6 +3410,7 @@
               // ladder runs fresh instead of returning the rejected value again.
               const ladderKey = `${accId || ''}__${pageId || ''}`;
               delete state.pageIgMap[ladderKey];
+              state.igRejected[ladderKey] = String(rejectedIg);  // v0.29.0: the re-run ladder skips a remembered IG FB just refused
               // v0.15.0: the rejected value was usually the page's connected IG (not promotable
               // in THIS account). Re-running the full ladder returns it again → same rejection.
               // PBIA is the page's own IG, guaranteed promotable here, so go straight to it.
@@ -3242,6 +3423,7 @@
                 try {
                   creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: retryBody });
                   resolvedIg = fallbackIg;
+                  resolvedIgPage = pageId;
                 } catch (e2) {
                   addLog('warning', `[${accLabel}] IG fallback ${fallbackIg} also rejected: ${e2.message} — dropping explicit IG, using use_page_actor_override for remaining ads`);
                   const noIgSpec = { ...objectStorySpec };
@@ -3268,7 +3450,8 @@
           }
           }  // end else (non-dry-run creative)
           // v0.11.0: confirm the IG identity actually stuck (catches FB's silent drop).
-          await verifyCreativeIg(creative?.id, resolvedIg, accLabel, adName);
+          const igVerdict = await verifyCreativeIg(creative?.id, resolvedIg, accLabel, adName, accId, resolvedIgPage, pageId);
+          if (igVerdict === true) igKept++; else if (igVerdict === false) igDropped++;
           // v0.7.0: markers on FB ad name only; adName stays clean for token context (sub5/ad_name)
           const adNameFinal = applyMarkers(adName);
           const adBodyPost = {
@@ -3314,8 +3497,31 @@
     } else {
       addLog(totalAdErr ? 'warning' : 'success', okMsg);
     }
+    state.igReport.push({ accLabel, igId: resolvedIg, igTargeted, ads: totalAdOk, kept: igKept, dropped: igDropped });
     render();
     return !totalAdErr;
+  }
+
+  // v0.29.0: IG outcome of the whole run in one line. A missing IG never stops the launch
+  // (Alexander 29.09: the campaign goes out, the buyer sets IG by hand) — so the buyer has to
+  // SEE which cabs need it instead of digging it out of per-ad warnings. addLog, not logEvent:
+  // logEvent would wipe the single-account result from the top bar.
+  function reportIgOutcome() {
+    const rep = state.igReport || [];
+    if (state.dryRun || !rep.some(r => r.ads > 0)) return;
+    if (state.usePageAsActor) {
+      addLog('warning', '· 📷 Instagram выключен галкой «⛔ FB-only» (шаг 3) — IG не прикреплялся ни в одном кабе.');
+      return;
+    }
+    const bad = rep.filter(r => r.igTargeted && r.ads > 0 && (!r.igId || r.dropped > 0));
+    if (bad.length) {
+      const why = r => !r.igId
+        ? `${r.accLabel} — IG не найден (${r.ads} объяв.)`
+        : `${r.accLabel} — FB выкинул IG ${r.igId} в ${r.dropped} из ${r.kept + r.dropped} объяв.`;
+      addLog('warning', `· 📷 Instagram НЕ прикреплён — кампании залиты, реклама идёт. Выставь IG руками в Ads Manager (объявление → Личность → аккаунт Instagram): ${bad.map(why).join(' · ')}`);
+    }
+    const good = rep.filter(r => r.ads > 0 && r.igId && !r.dropped && !bad.includes(r));
+    if (good.length) addLog('success', `· 📷 Instagram прикреплён: ${good.map(r => `${r.accLabel} → ${r.igId}`).join(' · ')}`);
   }
 
   // ─── UI PANEL ───────────────────────────────────────────────────────────
@@ -3374,7 +3580,8 @@
       #${PANEL_ID} .fbl-railstatus.err { color:var(--crit); } #${PANEL_ID} .fbl-railstatus.err .dot { background:var(--crit); }
       #${PANEL_ID} .fbl-lograil.collapsed .fbl-railstatus { display:none; }
       #${PANEL_ID} .fbl-railbody { flex:1; min-height:0; display:flex; flex-direction:column; padding:10px 11px; overflow:hidden; }
-      #${PANEL_ID} .fbl-lograil.collapsed .fbl-railbody, #${PANEL_ID} .fbl-lograil.collapsed .fbl-railhead .ttl { display:none; }
+      #${PANEL_ID} .fbl-lograil.collapsed .fbl-railbody, #${PANEL_ID} .fbl-lograil.collapsed .fbl-railhead .ttl,
+      #${PANEL_ID} .fbl-lograil.collapsed #fbl-log-copy { display:none; }
       /* Форма: ровный фон, никакой сетки. Плотность даёт отступ, а не рисунок. */
       #${PANEL_ID} .fbl-main { flex:1; min-width:0; overflow-y:auto; padding:0 18px 18px; background:var(--bg); }
       /* Шапка — панель управления: имя инструмента слева, индикатор состояния. */
@@ -3661,13 +3868,14 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.28.2</span></span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.29.0</span></span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
         <aside class="fbl-lograil${state.logRailCollapsed ? ' collapsed' : ''}">
           <div class="fbl-railhead">
             <span class="ttl">Журнал${state.log.length ? ` · ${state.log.length}` : ''}</span>
+            <button id="fbl-log-copy" title="Скопировать журнал (+ прошлый залив, если он был в другой сессии)" style="padding:1px 7px;font-size:12px;border-radius:5px;margin-left:auto;margin-right:4px">📋</button>
             <button id="fbl-rail-toggle" title="${state.logRailCollapsed ? 'Expand log' : 'Collapse log'}" style="padding:1px 7px;font-size:12px;border-radius:5px">${state.logRailCollapsed ? '▶' : '◀'}</button>
           </div>
           <div class="fbl-railstatus ${ledClass}"><span class="dot"></span>${railStatusWord}</div>
@@ -4366,6 +4574,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       state.logRailCollapsed = !state.logRailCollapsed;
       render();
     });
+    document.getElementById('fbl-log-copy')?.addEventListener('click', copyJournal);
     document.getElementById('fbl-csv')?.addEventListener('change', e => {
       const f = e.target.files?.[0];
       if (f) onCsvFile(f);

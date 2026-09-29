@@ -1,0 +1,79 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>MetaLaunch PRO — launch harness (IG memory)</title>
+<style>html,body{margin:0;padding:0;background:#0a0f14;width:100%;height:100%;overflow:hidden}</style>
+</head>
+<body>
+<script>
+  // Функциональный стенд v0.29.0: настоящий launcher.js против подставного Graph API.
+  // Три каба на одной «арендной» странице без привязанного IG и без роли на странице:
+  //   Cab A (111) — страница уже крутилась, её PBIA лежит в истории креативов каба;
+  //   Cab B (222) — страница для каба новая, история пустая;
+  //   Cab C (333) — FB молча выкидывает любой instagram_user_id (сверка его не находит).
+  // Сценарий гоняет test-launch-ig.ts.
+  var __accessToken = 'VISUAL_TEST_TOKEN';
+  window.alert = function () {};
+  window.confirm = function () { return true; };
+
+  var PAGE = '1039445349258069', IG = '17841431636764372', PIXEL = '1451350725476785';
+  window.__mock = { n: 0, creatives: {}, sentIg: [], dropIgIn: ['333'], historyIn: ['111'] };
+
+  function ok(b) {
+    return Promise.resolve(new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  }
+  function fbErr(code, message) {
+    return Promise.resolve(new Response(JSON.stringify({ error: { code: code, message: message, type: 'OAuthException' } }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } }));
+  }
+
+  window.fetch = function (input, init) {
+    var u = new URL(typeof input === 'string' ? input : input.url);
+    var method = (init && init.method) || 'GET';
+    var path = u.pathname.replace(/^\/v\d+\.\d+/, '');
+    var fields = u.searchParams.get('fields') || '';
+    var body = {};
+    if (init && init.body instanceof URLSearchParams) init.body.forEach(function (v, k) { body[k] = v; });
+    var m;
+
+    if (path === '/me/adaccounts') return ok({ data: [
+      { id: 'act_111', account_id: '111', name: 'Cab A', account_status: 1, currency: 'USD' },
+      { id: 'act_222', account_id: '222', name: 'Cab B', account_status: 1, currency: 'USD' },
+      { id: 'act_333', account_id: '333', name: 'Cab C', account_status: 1, currency: 'USD' },
+    ] });
+    if (path === '/me/businesses' || path === '/me/accounts') return ok({ data: [] });
+    if (/^\/act_\d+\/adspixels$/.test(path)) return ok({ data: [{ id: PIXEL, name: 'px' }] });
+    if (/^\/act_\d+\/promote_pages$/.test(path)) return ok({ data: [{ id: PAGE, name: 'Drrdasddds' }] });
+    if (/^\/act_\d+\/instagram_accounts$/.test(path)) return ok({ data: [] });
+    if (path === '/' + PAGE + '/instagram_accounts') return fbErr(100, '(#100) Tried accessing nonexisting field (instagram_accounts)');
+    if (path === '/' + PAGE + '/page_backed_instagram_accounts') {
+      return method === 'POST' ? fbErr(10, '(#10) Permission Denied') : fbErr(100, '(#100) Unsupported get request');
+    }
+    if (path === '/' + PAGE) return ok(fields.indexOf('instagram') >= 0 ? { id: PAGE } : { id: PAGE, name: 'Drrdasddds' });
+    if ((m = path.match(/^\/act_(\d+)\/adcreatives$/))) {
+      if (method === 'POST') {
+        var id = 'cr_' + (++__mock.n);
+        var oss = JSON.parse(body.object_story_spec || '{}');
+        var sent = oss.instagram_user_id || '';
+        __mock.sentIg.push({ acc: m[1], ig: sent, override: body.use_page_actor_override || '' });
+        __mock.creatives[id] = { acc: m[1], ig: __mock.dropIgIn.indexOf(m[1]) >= 0 ? '' : sent };
+        return ok({ id: id });
+      }
+      return ok({ data: __mock.historyIn.indexOf(m[1]) >= 0
+        ? [{ id: 'old1', instagram_user_id: IG, object_story_spec: { page_id: PAGE } }] : [] });
+    }
+    if (path === '/' + IG) return ok({ id: IG, username: 'drr_pbia' });
+    if ((m = path.match(/^\/(cr_\d+)$/))) {
+      var c = __mock.creatives[m[1]];
+      return ok({ id: m[1], object_story_spec: c && c.ig ? { instagram_user_id: c.ig } : {} });
+    }
+    if (/^\/act_\d+\/campaigns$/.test(path) && method === 'POST') return ok({ id: 'camp_' + (++__mock.n) });
+    if (/^\/act_\d+\/adsets$/.test(path) && method === 'POST') return ok({ id: 'as_' + (++__mock.n) });
+    if (/^\/act_\d+\/ads$/.test(path) && method === 'POST') return ok({ id: 'ad_' + (++__mock.n) });
+    return ok({ data: [] });
+  };
+</script>
+<script src="../launcher.js"></script>
+</body>
+</html>
