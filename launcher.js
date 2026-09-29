@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.29.0 — Bookmarklet
+ * MetaLaunch PRO v0.29.1 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -183,6 +183,11 @@
  *              accounts — promoted_object and {pixel_id} alike.
  *          (5) collapsible "macros reference" under step 8 — all launcher tokens + FB macros.
  *
+ * v0.29.1: ⚠ если sub2 не равен номеру каба (CORA #61, решение Верта 29.09 — только
+ *          предупреждение). С URL Tags override шаг «sub2 = account ID» не работает, а
+ *          неизвестный {token} уходит литералом: #766 слал sub2={account_id}/{sub2} с 5 кабов
+ *          48 кампаний. Проверка по каждому кабу до первого вызова FB (ссылка + URL Tags
+ *          после подстановки) и страховка на каждом объявлении; один ⚠ на каб, залив идёт.
  * v0.29.0: залив в фоне, память IG по странице, итог по IG, журнал прошлого залива.
  *          (1) С Chrome 154 (25.09) залив вставал, пока окно Ads Manager не активно: браузер
  *              морозит скрытую тяжёлую вкладку (Экономия памяти на «максимум»), а скрипт
@@ -2426,6 +2431,40 @@
    * - Double-brace FB macros {{campaign.id}} → LEFT AS-IS (FB substitutes at runtime)
    */
   const _tokenWarned = new Set();  // dedup unknown-token warnings, cleared per launch
+  // v0.29.1: sub2 = номер каба — по нему трекер связывает конверсии с кабом. С URL Tags
+  // override шаг «sub2 = account ID» не работает (шаблон целиком выигрывает), а неизвестный
+  // {token} уходит литералом — так #766 месяц слал sub2={account_id}/{sub2} с 5 кабов.
+  // Решение Верта 29.09: только предупреждать, залив не останавливать.
+  const _sub2Warned = new Set();  // один ⚠ на каб за залив
+  function sub2Values(link, urlTags) {
+    const vals = [];
+    const scan = s => {
+      for (const part of String(s || '').split(/[?&]/)) {
+        const eq = part.indexOf('=');
+        if (eq > 0 && part.slice(0, eq).trim().toLowerCase() === 'sub2') vals.push(part.slice(eq + 1).trim());
+      }
+    };
+    const q = String(link || '').indexOf('?');
+    if (q >= 0) scan(String(link).slice(q + 1));
+    scan(urlTags);
+    return vals;
+  }
+  function sub2Problem(accId, link, urlTags) {
+    const vals = sub2Values(link, urlTags);
+    if (!vals.length) return `sub2 нет ни в ссылке, ни в URL Tags`;
+    // FB дописывает URL Tags в конец ссылки, трекер берёт последнее значение параметра
+    const eff = vals[vals.length - 1];
+    if (eff === String(accId)) return null;
+    return `sub2 = ${eff === '' ? '(пусто)' : `"${eff}"`}, а каб ${accId}`;
+  }
+  function warnSub2(accLabel, accId, link, urlTags) {
+    if (_sub2Warned.has(accId)) return;
+    const p = sub2Problem(accId, link, urlTags);
+    if (!p) return;
+    _sub2Warned.add(accId);
+    addLog('warning', `[${accLabel}] ⚠ ${p} — трекер не свяжет конверсии с кабом. Залив идёт дальше; поправь URL Tags (sub2={account_id}) до следующего.`);
+  }
+
   function resolveTokens(str, ctx) {
     if (!str) return str;
     let out = String(str);
@@ -2797,6 +2836,7 @@
       state.progress = { done: 0, total: totalUnits * state.repeatTotal };
     }
     _tokenWarned.clear();  // v0.26.1: unknown-token warnings dedup per launch
+    _sub2Warned.clear();
     state.igReport = [];   // v0.29.0: IG summary is per run
     render();
 
@@ -2806,6 +2846,17 @@
       // promoted_object AND the {pixel_id} token on EVERY account. If the cabs use
       // different pixels, this is wrong for accounts 2..N — launch them separately.
       addLog('warning', `⚠ Single pixel ${effectivePixel} will be used on ALL ${accIds.length} accounts (promoted_object + {pixel_id} token). Different pixels per cab → launch per-cab.`);
+    }
+
+    // v0.29.1: sub2 по каждому кабу — ДО первого вызова FB, чтобы ⚠ был виден сразу, а не
+    // когда очередь дойдёт до каба N. Та же сборка, что у объявления (первая строка плана).
+    if (firstAdsetRow) {
+      for (const accId of accIds) {
+        const ctx = { pixel_id: effectivePixel, account_id: accId, adset_name: '', ad_name: '', geo: '', date: dateStr, adset_idx: '01' };
+        const link = resolveTokens(state.linkOverride || (firstAdsetRow['Link'] || ''), ctx);
+        const tags = resolveTokens(state.urlTagsOverride || (firstAdsetRow['URL Tags'] || ''), ctx);
+        warnSub2(accId, accId, link, state.urlTagsOverride ? tags : transformUrlTags(tags, accId, ''));
+      }
     }
 
     let okAccounts = 0, errAccounts = 0;
@@ -3298,6 +3349,7 @@
           const urlTags = state.urlTagsOverride
             ? tagsResolved   // override mode: skip single-param replace (full template wins)
             : transformUrlTags(tagsResolved, accId, adName);
+          warnSub2(accLabel, accId, link, urlTags);  // строка плана со своим шаблоном — страховка
 
           // Resolve creative
           let imageHash, videoId;
@@ -3868,7 +3920,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.29.0</span></span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.29.1</span></span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
