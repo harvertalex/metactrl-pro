@@ -7,7 +7,8 @@
  *   2. Cab B — страница для каба новая → IG берётся из памяти.
  *   3. Cab C — FB выкидывает IG → итог «FB выкинул IG», залив не остановлен.
  *   4. Перезагрузка, память стёрта, Cab B → IG нет нигде → итог «IG не найден»,
- *      кампания всё равно залита; 📋 отдаёт журнал прошлого залива.
+ *      кампания всё равно залита; 📋 отдаёт журнал прошлого залива; итог — «нет роли на странице».
+ *   5. v0.30.0: роль на странице есть → токен страницы → PBIA создан → IG прикреплён.
  * По ходу: во время залива держится Web Lock; заморозка вкладки пишется в ленту.
  *
  *   bun code/metactrl-pro/_visual-test/test-launch-ig.ts
@@ -171,6 +172,23 @@ try {
   check("4. Cab B cold: no memory used", !r4.log.includes("IG from memory"));
   check("4. Cab B cold: campaign still launched", r4.log.includes("✓ ad 1/1"));
   check("4. Cab B cold: summary says IG not found", /📷 Instagram НЕ прикреплён.*Cab B — IG не найден/.test(r4.log));
+  check("4. Cab B cold: summary names the missing page role", /Cab B — IG не найден, у профиля нет роли на странице/.test(r4.log));
+  check("4. Cab B cold: log says no page token", r4.log.includes("no page token"));
+
+  // ── 5. v0.30.0: роль на странице есть → токен страницы → PBIA создан → IG прикреплён ──
+  await page.evaluate(() => localStorage.removeItem("fbl_ig_by_page_v1"));
+  await openPanel(page);
+  await page.evaluate(() => { (window as any).__mock.pageRole = true; });
+  await selectOnly(page, "222");
+  const r5 = await launch(page);
+  const PBIA_NEW = "17841499999999999";
+  const calls5 = await page.evaluate(() => (window as any).__mock.pbiaCalls);
+  check("5. page token obtained", r5.log.includes("page token ✓"));
+  check("5. PBIA GET+POST went with the page token", calls5.length >= 2 && calls5.every((c: any) => c.pageToken),
+    JSON.stringify(calls5));
+  check("5. Cab B: creative sent with the new PBIA", await page.evaluate((ig) =>
+    (window as any).__mock.sentIg.some((s: any) => s.acc === "222" && s.ig === ig), PBIA_NEW));
+  check("5. Cab B: summary says IG attached", /📷 Instagram прикреплён: Cab B → 17841499999999999/.test(r5.log));
 } catch (e: any) {
   check("run", false, e.message);
 }

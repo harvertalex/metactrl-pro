@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.29.1 — Bookmarklet
+ * MetaLaunch PRO v0.30.0 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -183,6 +183,13 @@
  *              accounts — promoted_object and {pixel_id} alike.
  *          (5) collapsible "macros reference" under step 8 — all launcher tokens + FB macros.
  *
+ * v0.30.0: Instagram у фермерских страниц — токен СТРАНИЦЫ для PBIA и IG страницы.
+ *          PBIA (чтение и создание) и привязки IG страницы FB принимает только с токеном самой
+ *          страницы; лаунчер ходил токеном Ads Manager и получал «#100 nonexisting field» / «#10»
+ *          даже там, где у профиля есть роль на странице → страница без своего IG, новая для
+ *          каба, уходила только в FB. Токен берётся из /{page}?fields=access_token, запасной путь
+ *          — /me/accounts (правка fb-ops 06.08, creative-builder.ts). Роли нет → лестница как
+ *          раньше (история каба); в журнале «🔑 no page token», в итоге «нет роли на странице».
  * v0.29.1: ⚠ если sub2 не равен номеру каба (CORA #61, решение Верта 29.09 — только
  *          предупреждение). С URL Tags override шаг «sub2 = account ID» не работает, а
  *          неизвестный {token} уходит литералом: #766 слал sub2={account_id}/{sub2} с 5 кабов
@@ -461,6 +468,8 @@
     pageIgLoading: {},        // v0.6.2: { pageId: true } while IG lookup is in flight
     igRejected: {},           // v0.29.0: { 'acc__page': igId } — FB rejected this IG here this session → skip the memory rung
     igReport: [],             // v0.29.0: per-account IG outcome of the current run → end-of-run summary
+    pageTokens: {},           // v0.30.0: { pageId: token | '' } — Page access token; '' = session has no role on the page
+    pageTokenList: null,      // v0.30.0: /me/accounts id → token, fetched once per session (fallback source)
     dsaBeneficiary: '',       // v0.2.6: EU DSA — name of person/org being advertised
     dsaPayer: '',             // v0.2.6: EU DSA — name of who pays (optional, defaults to beneficiary)
     campNamePrefix: '',       // v0.3: user's prefix; launcher appends "| CBO $X/d | Nads | MMDDYY | acc_id"
@@ -776,7 +785,8 @@
       Object.entries(opts.params || {}).forEach(([k, v]) => {
         if (v != null && v !== '') url.searchParams.set(k, v);
       });
-      url.searchParams.set('access_token', TOKEN);
+      // v0.30.0: opts.token — the Page's own token for page-bound calls (PBIA, page IG)
+      url.searchParams.set('access_token', opts.token || TOKEN);
     }
     const fo = {
       method,
@@ -1796,6 +1806,38 @@
     return !(e && e.igId === String(igId) && e.source === 'account-substitute');
   }
 
+  // v0.30.0: PAGE ACCESS TOKEN for page-bound IG calls. FB takes PBIA read/create and the
+  // page's own IG links ONLY from the Page's token; the Ads Manager user token gets "#100
+  // nonexisting field" / "#10" there even when the session user admins the page — so farm
+  // pages with no linked IG went out Facebook-only on every cold cab. Same fix fb-ops got on
+  // 2026-08-06 (creative-builder.ts pageAccessToken — PBIA created live on a gambling cab).
+  // No role on the page → '' (cached): the ladder goes on to history as before.
+  async function loadPageToken(pageId) {
+    if (!pageId) return '';
+    if (pageId in state.pageTokens) return state.pageTokens[pageId];
+    let tok = '';
+    let failed = false;
+    try {
+      const r = await apiFetch(`/${pageId}`, { params: { fields: 'access_token' } });
+      tok = r?.access_token || '';
+    } catch { failed = true; }
+    if (!tok) {
+      try {
+        if (!state.pageTokenList) {
+          const items = await apiAll('/me/accounts', { fields: 'id,access_token', limit: 100 });
+          state.pageTokenList = Object.fromEntries(items.filter(p => p.access_token).map(p => [String(p.id), p.access_token]));
+        }
+        tok = state.pageTokenList[String(pageId)] || '';
+        failed = false;
+      } catch { failed = true; }
+    }
+    if (tok || !failed) state.pageTokens[pageId] = tok;  // a transient fail retries next time
+    addLog('info', tok
+      ? `🔑 Page ${pageId}: page token ✓ — PBIA and the page's IG are read with it`
+      : `🔑 Page ${pageId}: no page token — this FB profile has no role on the page${failed ? ' (lookup failed, will retry)' : ''}`);
+    return tok;
+  }
+
   async function loadIgForAccount(accId, pageId) {
     const key = `${accId || ''}__${pageId || ''}`;
     if (key in state.pageIgMap) {
@@ -1826,17 +1868,19 @@
       // dropdown — resolve it FIRST (was below the account-actor lookup, which returned an
       // arbitrary/empty actor and left the IG field wrong/blank for pages that DO have a linked IG).
       let pageIg = null;
+      const pTok = await loadPageToken(pageId);  // v0.30.0: '' → user token, as before
       if (pageId) {
         try {
           const pf = await apiFetch(`/${pageId}`, {
             params: { fields: 'connected_instagram_account{id,username},instagram_business_account{id,username}' },
+            token: pTok,
           });
           if (pf?.connected_instagram_account?.id) pageIg = { id: String(pf.connected_instagram_account.id), username: pf.connected_instagram_account.username || '', label: 'connected_instagram_account' };
           else if (pf?.instagram_business_account?.id) pageIg = { id: String(pf.instagram_business_account.id), username: pf.instagram_business_account.username || '', label: 'instagram_business_account' };
         } catch (e) { anyError = true; addLog('warning', `Page ${pageId} connected/business IG lookup failed: ${e.message}`); }
         if (!pageIg) {
           try {
-            const r = await apiFetch(`/${pageId}/instagram_accounts`, { params: { fields: 'id,username', limit: 5 } });
+            const r = await apiFetch(`/${pageId}/instagram_accounts`, { params: { fields: 'id,username', limit: 5 }, token: pTok });
             const item = r?.data?.[0];
             if (item?.id) pageIg = { id: String(item.id), username: item.username || '', label: 'page' };
           } catch (e) {
@@ -1885,7 +1929,7 @@
         addLog('info', `🔗 No IG on page — using account actor ${entry.igId}${entry.igName ? ' @' + entry.igName : ''}${accountActors.length > 1 ? ` (1 of ${accountActors.length})` : ''} as identity`);
         return entry.igId;
       }
-      const pbia = await loadPbiaForPage(pageId, pageName);
+      const pbia = await loadPbiaForPage(pageId, pageName, pTok);
       if (pbia?.igId) { state.pageIgMap[key] = { ...pbia, source: 'pbia' }; return pbia.igId; }
 
       // v0.22.0/v0.24.0: HISTORY rung — rented cabs (partner BM, no page role) can't read page IG
@@ -1908,7 +1952,7 @@
       // WARN LOUDLY — the AM IG field will be empty. Cache terminal ONLY if nothing errored (so
       // transient fails retry next time).
       state.pageIgMap[key] = { igId: '', igName: '', pageName, source: anyError ? 'error' : 'none', terminal: !anyError };
-      addLog('warning', `⚠ Page "${pageName || pageId}" has no attachable Instagram identity (no connected IG, no account actor, PBIA unreadable, nothing in account history). Ads run Facebook-only — the AM IG field stays EMPTY (use_page_actor_override does NOT fill it). Fix: link an IG in Page Settings (business.facebook.com/settings/instagram-accounts), OR paste a promotable IG ID in step 3, OR run one ad on this page from AM once so its PBIA lands in history.`);
+      addLog('warning', `⚠ Page "${pageName || pageId}" has no attachable Instagram identity (no connected IG, no account actor, PBIA ${pTok ? 'denied' : 'unreachable — no role on the page'}, nothing in account history). Ads run Facebook-only — the AM IG field stays EMPTY (use_page_actor_override does NOT fill it). Fix: ${pTok ? '' : 'give this FB profile ADVERTISER+ on the page (Page settings → Page access) — the PBIA is then created automatically, OR '}link an IG in Page Settings (business.facebook.com/settings/instagram-accounts), OR paste a promotable IG ID in step 3, OR run one ad on this page from AM once so its PBIA lands in history.`);
       return '';
     } finally {
       state.pageIgLoading[key] = false;
@@ -1924,7 +1968,8 @@
   // Cache key is `__pbia__<pageId>` since PBIA is per-page, not per-account.
   // v0.6.10: verbose logging — every branch logs its outcome so silent nulls
   // can't happen anymore.
-  async function loadPbiaForPage(pageId, pageName = '') {
+  // v0.30.0: pTok — the Page's own token (undefined → looked up here); '' = no role, user token.
+  async function loadPbiaForPage(pageId, pageName = '', pTok) {
     if (!pageId) {
       addLog('warning', `PBIA: no pageId provided, skipping`);
       return null;
@@ -1935,11 +1980,12 @@
       addLog('info', `PBIA cache hit for page ${pageId}: ${cached?.igId || 'none'}`);
       return cached || null;
     }
-    addLog('info', `🔍 PBIA: looking up Page-Backed IG for page ${pageId}...`);
+    if (pTok === undefined) pTok = await loadPageToken(pageId);
+    addLog('info', `🔍 PBIA: looking up Page-Backed IG for page ${pageId} (${pTok ? 'page token' : 'user token'})...`);
     try {
       let pbia = null;
       try {
-        const g = await apiFetch(`/${pageId}/page_backed_instagram_accounts`, { params: { fields: 'id,username', limit: 1 } });
+        const g = await apiFetch(`/${pageId}/page_backed_instagram_accounts`, { params: { fields: 'id,username', limit: 1 }, token: pTok });
         const items = g?.data || [];
         if (items.length && items[0]?.id) {
           pbia = items[0];
@@ -1955,7 +2001,7 @@
         addLog('info', `🟦 DRY: would create a Page-Backed IG for page ${pageId} (skipped in dry run)`);
       } else if (!pbia?.id) {
         try {
-          const c = await apiFetch(`/${pageId}/page_backed_instagram_accounts`, { method: 'POST' });
+          const c = await apiFetch(`/${pageId}/page_backed_instagram_accounts`, { method: 'POST', token: pTok });
           if (c?.id) {
             pbia = c;
             addLog('info', `PBIA POST created: ${c.id}${c.username ? ' @' + c.username : ''}`);
@@ -1965,7 +2011,9 @@
         } catch (e) {
           const m = String(e.message || '');
           if (/\b10\b|permission/i.test(m)) {
-            addLog('warning', `PBIA POST denied (#10): token lacks ADVERTISER+ role on this Page, or the Page is restricted, or Page+IG+ad-account aren't all assigned to the same Business. Can't create a Page-Backed IG with this token → identity will be page-only.`);
+            addLog('warning', pTok
+              ? `PBIA POST denied (#10) even with the page token: the profile's role on this Page is below ADVERTISER, or the Page is restricted/unpublished. Can't create a Page-Backed IG → identity will be page-only.`
+              : `PBIA POST denied (#10): this FB profile has no role on the Page (rented page) — a Page-Backed IG can't be read or created without one → identity will be page-only.`);
           } else {
             addLog('warning', `PBIA POST failed: ${m}`);
           }
@@ -3549,7 +3597,8 @@
     } else {
       addLog(totalAdErr ? 'warning' : 'success', okMsg);
     }
-    state.igReport.push({ accLabel, igId: resolvedIg, igTargeted, ads: totalAdOk, kept: igKept, dropped: igDropped });
+    state.igReport.push({ accLabel, igId: resolvedIg, igTargeted, ads: totalAdOk, kept: igKept, dropped: igDropped,
+      noPageRole: !!probePage && state.pageTokens[probePage] === '' });  // v0.30.0: why the IG wasn't found
     render();
     return !totalAdErr;
   }
@@ -3568,7 +3617,7 @@
     const bad = rep.filter(r => r.igTargeted && r.ads > 0 && (!r.igId || r.dropped > 0));
     if (bad.length) {
       const why = r => !r.igId
-        ? `${r.accLabel} — IG не найден (${r.ads} объяв.)`
+        ? `${r.accLabel} — IG не найден${r.noPageRole ? ', у профиля нет роли на странице' : ''} (${r.ads} объяв.)`
         : `${r.accLabel} — FB выкинул IG ${r.igId} в ${r.dropped} из ${r.kept + r.dropped} объяв.`;
       addLog('warning', `· 📷 Instagram НЕ прикреплён — кампании залиты, реклама идёт. Выставь IG руками в Ads Manager (объявление → Личность → аккаунт Instagram): ${bad.map(why).join(' · ')}`);
     }
@@ -3920,7 +3969,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.29.1</span></span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.30.0</span></span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">

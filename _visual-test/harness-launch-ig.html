@@ -17,8 +17,11 @@
   window.alert = function () {};
   window.confirm = function () { return true; };
 
+  // v0.30.0: pageRole=true — у профиля есть роль на странице: FB отдаёт токен страницы, и
+  // PBIA читается/создаётся ТОЛЬКО им (пользовательским — те же #100/#10, что на арендной).
   var PAGE = '1039445349258069', IG = '17841431636764372', PIXEL = '1451350725476785';
-  window.__mock = { n: 0, creatives: {}, sentIg: [], dropIgIn: ['333'], historyIn: ['111'] };
+  var PAGE_TOKEN = 'PAGE_TOKEN_TEST', PBIA_NEW = '17841499999999999';
+  window.__mock = { n: 0, creatives: {}, sentIg: [], dropIgIn: ['333'], historyIn: ['111'], pageRole: false, pbiaCalls: [] };
 
   function ok(b) {
     return Promise.resolve(new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } }));
@@ -42,15 +45,25 @@
       { id: 'act_222', account_id: '222', name: 'Cab B', account_status: 1, currency: 'USD' },
       { id: 'act_333', account_id: '333', name: 'Cab C', account_status: 1, currency: 'USD' },
     ] });
+    if (path === '/me/accounts' && fields.indexOf('access_token') >= 0) {
+      return ok({ data: __mock.pageRole ? [{ id: PAGE, access_token: PAGE_TOKEN }] : [] });
+    }
     if (path === '/me/businesses' || path === '/me/accounts') return ok({ data: [] });
     if (/^\/act_\d+\/adspixels$/.test(path)) return ok({ data: [{ id: PIXEL, name: 'px' }] });
     if (/^\/act_\d+\/promote_pages$/.test(path)) return ok({ data: [{ id: PAGE, name: 'Drrdasddds' }] });
     if (/^\/act_\d+\/instagram_accounts$/.test(path)) return ok({ data: [] });
     if (path === '/' + PAGE + '/instagram_accounts') return fbErr(100, '(#100) Tried accessing nonexisting field (instagram_accounts)');
     if (path === '/' + PAGE + '/page_backed_instagram_accounts') {
-      return method === 'POST' ? fbErr(10, '(#10) Permission Denied') : fbErr(100, '(#100) Unsupported get request');
+      var pt = u.searchParams.get('access_token') === PAGE_TOKEN;
+      __mock.pbiaCalls.push({ method: method, pageToken: pt });
+      if (pt) return method === 'POST' ? ok({ id: PBIA_NEW }) : ok({ data: [] });
+      return method === 'POST' ? fbErr(10, '(#10) Permission Denied') : fbErr(100, '(#100) Tried accessing nonexisting field (page_backed_instagram_accounts)');
+    }
+    if (path === '/' + PAGE && fields === 'access_token') {
+      return ok(__mock.pageRole ? { id: PAGE, access_token: PAGE_TOKEN } : { id: PAGE });
     }
     if (path === '/' + PAGE) return ok(fields.indexOf('instagram') >= 0 ? { id: PAGE } : { id: PAGE, name: 'Drrdasddds' });
+    if (path === '/' + PBIA_NEW) return ok({ id: PBIA_NEW, username: '' });
     if ((m = path.match(/^\/act_(\d+)\/adcreatives$/))) {
       if (method === 'POST') {
         var id = 'cr_' + (++__mock.n);
