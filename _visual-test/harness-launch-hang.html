@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>MetaLaunch PRO — launch harness (hung requests)</title>
+<style>html,body{margin:0;padding:0;background:#0a0f14;width:100%;height:100%;overflow:hidden}</style>
+</head>
+<body>
+<script>
+  // Стенд v0.31.0: подставной Graph API, на котором запрос создания может «повиснуть» —
+  // fetch не отвечает никогда, пока его не оборвут (как 01.10 на «creating campaign»).
+  // __mock.hang[level] = 'created' — FB объект создал, ответ потерялся;
+  //                      'lost'    — до FB не дошло, объекта нет.
+  // launcher.js сюда вставляет test-launch-hang.ts — с укороченным таймаутом.
+  var __accessToken = 'VISUAL_TEST_TOKEN';
+  window.alert = function () {};
+  window.confirm = function () { return true; };
+
+  var PAGE = '1039445349258069', PIXEL = '1451350725476785';
+  window.__mock = { n: 0, hang: {}, posts: { campaign: 0, adset: 0, ad: 0 }, objs: [], lookups: 0 };
+
+  function ok(b) {
+    return Promise.resolve(new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  }
+  // Как настоящий fetch: висит, пока не придёт abort по signal.
+  function hung(init) {
+    return new Promise(function (_, rej) {
+      var s = init && init.signal;
+      if (s) s.addEventListener('abort', function () { rej(new DOMException('The operation was aborted.', 'AbortError')); });
+    });
+  }
+  function create(level, acc, body, init) {
+    __mock.posts[level]++;
+    var o = { id: level + '_' + (++__mock.n), level: level, acc: acc, name: body.name,
+      campaign_id: body.campaign_id || '', adset_id: body.adset_id || '',
+      created: Math.floor(Date.now() / 1000) };
+    var h = __mock.hang[level];
+    if (h) {
+      __mock.hang[level] = null;          // виснет только первый запрос
+      if (h === 'created') __mock.objs.push(o);
+      return hung(init);
+    }
+    __mock.objs.push(o);
+    return ok({ id: o.id });
+  }
+  function list(level, acc, u) {
+    __mock.lookups++;
+    var since = 0;
+    try {
+      var f = JSON.parse(u.searchParams.get('filtering') || '[]');
+      f.forEach(function (x) { if (x.field === level + '.created_time' && x.operator === 'GREATER_THAN') since = +x.value; });
+    } catch (e) {}
+    return ok({ data: __mock.objs.filter(function (o) { return o.level === level && o.acc === acc && o.created > since; })
+      .map(function (o) {
+        return { id: o.id, name: o.name, created_time: new Date(o.created * 1000).toISOString().replace('Z', '+0000'),
+          campaign_id: o.campaign_id, adset_id: o.adset_id };
+      }) });
+  }
+
+  window.fetch = function (input, init) {
+    var u = new URL(typeof input === 'string' ? input : input.url);
+    var method = (init && init.method) || 'GET';
+    var path = u.pathname.replace(/^\/v\d+\.\d+/, '');
+    var body = {};
+    if (init && init.body instanceof URLSearchParams) init.body.forEach(function (v, k) { body[k] = v; });
+    var m;
+
+    if (path === '/me/adaccounts') return ok({ data: [
+      { id: 'act_111', account_id: '111', name: 'Cab A', account_status: 1, currency: 'USD' },
+      { id: 'act_222', account_id: '222', name: 'Cab B', account_status: 1, currency: 'USD' },
+      { id: 'act_333', account_id: '333', name: 'Cab C', account_status: 1, currency: 'USD' },
+    ] });
+    if (/^\/act_\d+\/adspixels$/.test(path)) return ok({ data: [{ id: PIXEL, name: 'px' }] });
+    if (/^\/act_\d+\/promote_pages$/.test(path)) return ok({ data: [{ id: PAGE, name: 'Drrdasddds' }] });
+    if (path === '/' + PAGE) return ok({ id: PAGE, name: 'Drrdasddds' });
+    if ((m = path.match(/^\/act_(\d+)\/adcreatives$/)) && method === 'POST') return ok({ id: 'cr_' + (++__mock.n) });
+    if ((m = path.match(/^\/act_(\d+)\/(campaigns|adsets|ads)$/))) {
+      var level = m[2] === 'campaigns' ? 'campaign' : m[2].slice(0, -1);
+      return method === 'POST' ? create(level, m[1], body, init) : list(level, m[1], u);
+    }
+    return ok({ data: [] });
+  };
+</script>
+</body>
+</html>

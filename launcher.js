@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.30.0 — Bookmarklet
+ * MetaLaunch PRO v0.31.0 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -183,6 +183,14 @@
  *              accounts — promoted_object and {pixel_id} alike.
  *          (5) collapsible "macros reference" under step 8 — all launcher tokens + FB macros.
  *
+ * v0.31.0: запрос к FB, который не отвечает, больше не вешает залив навсегда.
+ *          01.10 залив встал на «creating campaign» третьего каба и стоял 25 мин — и после
+ *          возврата в окно тоже: вкладку не морозило (журнал без «⏸»), висел сам fetch, а у
+ *          запросов не было таймаута, и Stop ждал его вечно. Теперь: (1) каждый вызов Graph —
+ *          60 с на ответ, загрузка файла — 10 мин; через 20 с ожидания в ленте «⌛ ждёт ответа».
+ *          (2) Создание кампании/адсета/объявления без ответа не повторяется вслепую: сначала
+ *          ищем объект по имени, созданный после отправки, — нашёлся → берём его id, дубля нет.
+ *          (3) Загрузка креативов держит Web Lock, как и запуск (в v0.29 её прикрыть забыли).
  * v0.30.0: Instagram у фермерских страниц — токен СТРАНИЦЫ для PBIA и IG страницы.
  *          PBIA (чтение и создание) и привязки IG страницы FB принимает только с токеном самой
  *          страницы; лаунчер ходил токеном Ads Manager и получал «#100 nonexisting field» / «#10»
@@ -435,6 +443,11 @@
   const RATE_ACCOUNT_MS = 8000;
   const MAX_RETRIES = 4;
   const BACKOFF_BASE_MS = 5000;
+  // v0.31.0: a call FB never answers used to hang the launch forever (no timeout, Stop waits on it).
+  const REQ_TIMEOUT_MS = 60000;      // one Graph call; FB answers writes in 1-10 s
+  const UPLOAD_TIMEOUT_MS = 600000;  // one image/video upload (big video over a slow proxy)
+  const SLOW_REQ_LOG_MS = 20000;     // say in the feed that a call is still waiting
+  const CREATED_SKEW_MS = 120000;    // created_time (FB clock) vs our send time (local clock)
 
   // ─── STATE ──────────────────────────────────────────────────────────────
   let TOKEN = '';
@@ -573,6 +586,50 @@
     });
     _gateChain = mine.catch(() => {}); // never let one slot poison the chain
     return mine;
+  }
+
+  // v0.31.0: fetch + body read under one deadline. No answer in timeoutMs → aborted with
+  // err.timedOut (before, one stuck call stalled the launch for good and Stop waited on it).
+  // After SLOW_REQ_LOG_MS the feed says the call is still waiting — slow FB ≠ hung panel.
+  async function timedFetch(url, fo, timeoutMs, label, as) {
+    const ctrl = new AbortController();
+    let timedOut = false;
+    const slowMs = Math.max(SLOW_REQ_LOG_MS, timeoutMs / 5);  // an upload is allowed to take minutes
+    const slow = setTimeout(() => addLog('info',
+      `⌛ ${label}: ответа нет ${Math.round(slowMs / 1000)} с — жду до ${Math.round(timeoutMs / 1000)} с.`), slowMs);
+    const kill = setTimeout(() => { timedOut = true; ctrl.abort(); }, timeoutMs);
+    try {
+      const res = await fetch(url, { ...fo, signal: ctrl.signal });
+      const body = as === 'json'
+        ? await res.json().catch(e => { if (timedOut) throw e; return {}; })
+        : await res.text();
+      return { res, body };
+    } catch (e) {
+      if (!timedOut) throw e;
+      const err = new Error(`${label}: нет ответа FB за ${Math.round(timeoutMs / 1000)} с`);
+      err.timedOut = true;
+      throw err;
+    } finally {
+      clearTimeout(slow);
+      clearTimeout(kill);
+    }
+  }
+
+  // v0.31.0: ids this session got back from creates — a timed-out create must not adopt them.
+  const _createdIds = new Set();
+  // The object a timed-out create may still have made on FB's side: exact name, created after
+  // the send (minus clock skew), under the right parent, not one we already hold.
+  async function findCreatedByName(accId, level, name, sentAt, parent) {
+    const since = Math.floor((sentAt - CREATED_SKEW_MS) / 1000);
+    const parentField = level === 'adset' ? 'campaign_id' : level === 'ad' ? 'adset_id' : '';
+    const res = await apiFetch(`/act_${accId}/${level === 'campaign' ? 'campaigns' : level + 's'}`, { params: {
+      fields: `id,name,created_time${parentField ? ',' + parentField : ''}`,
+      filtering: JSON.stringify([{ field: `${level}.created_time`, operator: 'GREATER_THAN', value: since }]),
+      limit: 200,
+    } });
+    return (res?.data || []).find(o => o.name === name
+      && !_createdIds.has(String(o.id))
+      && (!parentField || String(o[parentField]) === String(parent))) || null;
   }
 
   // ─── KEEP THE TAB AWAKE DURING A LAUNCH (v0.29.0) ───────────────────────
@@ -802,13 +859,38 @@
       fo.body = b;
     }
 
+    const label = `${method} ${path.replace(/^https?:\/\/[^/]+\/v[\d.]+/, '').replace(/^\/+/, '').split('?')[0]}`;
     let lastErr;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
         await throttleSlot(); // v0.26.0: pace every dispatch (incl. retries) — no session bursts
-        const res = await fetch(url.toString(), fo);
-        const json = await res.json().catch(() => ({}));
-        if (res.ok && !json?.error) return json;
+        const sentAt = Date.now();
+        let res, json;
+        try {
+          ({ res, body: json } = await timedFetch(url.toString(), fo, opts.timeoutMs || REQ_TIMEOUT_MS, label, 'json'));
+        } catch (e) {
+          if (!e.timedOut) throw e;
+          // v0.31.0: a create that got no answer may still have been made on FB's side.
+          // Look for it before sending again — a blind retry is how duplicates are born.
+          if (opts.findCreated) {
+            await sleep(3000);
+            let found = null;
+            try { found = await opts.findCreated(sentAt); }
+            catch (fe) { addLog('warning', `⌛ ${label}: не смогла проверить, создалось ли (${fe.message}) — отправляю ещё раз.`); }
+            if (found?.id) {
+              _createdIds.add(String(found.id));
+              addLog('warning', `⌛ ${label}: ответа не было, но объект создан (id=${found.id}) — беру его, без дубля.`);
+              return found;
+            }
+          }
+          if (attempt >= MAX_RETRIES) throw e;
+          addLog('warning', `↺ ${label}: повтор ${attempt + 1}/${MAX_RETRIES}.`);
+          continue;
+        }
+        if (res.ok && !json?.error) {
+          if (method === 'POST' && json?.id) _createdIds.add(String(json.id));
+          return json;
+        }
         const fbErr = json?.error;
         const code = fbErr?.code;
         // 4: rate limit, 17: user request limit, 32: page rate, 80004: too many calls
@@ -1506,15 +1588,14 @@
     const url = `${HOST_GRAPH}/${path}`;
     let res, raw, json;
     try {
-      res = await fetch(url, {
+      ({ res, body: raw } = await timedFetch(url, {
         method: 'POST',
         body: formData,
         credentials: 'include',
         mode: 'cors',
         referrer: 'https://business.facebook.com/',
         referrerPolicy: 'origin-when-cross-origin',
-      });
-      raw = await res.text();
+      }, UPLOAD_TIMEOUT_MS, `upload ${path}`, 'text'));
     } catch (netErr) {
       throw new CUError('Network failure: ' + netErr.message, { stage: 'post', url: path, netError: netErr.message });
     }
@@ -1580,7 +1661,12 @@
   // v0.6: each upload entry holds per-account results so the launch loop can
   // pick the right hash / videoId for whichever account it's working on.
   // u.perAccount[accId] = { status, hash?, videoId?, error?, errorDetails?, processingStatus? }
-  async function runUploads(files) {
+  // v0.31.0: uploads hold the tab awake too — v0.29 covered only the launch, and a frozen
+  // upload (video processing poll) stood still the same way.
+  function runUploads(files) {
+    return withTabAwake(() => runUploadsBody(files));
+  }
+  async function runUploadsBody(files) {
     const accIds = state.targetAccIds.slice();
     if (!accIds.length) { setStatus('error', 'Select at least one target account first.'); return; }
     if (!files.length) return;
@@ -3170,7 +3256,8 @@
         addLog('info', `[${accLabel}] 🟦 campaign payload: ${JSON.stringify(campBody)}`);
         camp = { id: 'DRY_CAMPAIGN' };
       } else {
-        camp = await apiFetch(`/act_${accId}/campaigns`, { method: 'POST', body: campBody });
+        camp = await apiFetch(`/act_${accId}/campaigns`, { method: 'POST', body: campBody,
+          findCreated: sentAt => findCreatedByName(accId, 'campaign', campName, sentAt) });
       }
       campaignId = camp.id;
       state.progress.done++;
@@ -3351,7 +3438,8 @@
           addLog('info', `[${accLabel}] 🟦 adset payload: ${JSON.stringify(adsetBody)}`);
           adsetId = `DRY_ADSET_${adsetIdx}`;
         } else {
-          const adset = await apiFetch(`/act_${accId}/adsets`, { method: 'POST', body: adsetBody });
+          const adset = await apiFetch(`/act_${accId}/adsets`, { method: 'POST', body: adsetBody,
+            findCreated: sentAt => findCreatedByName(accId, 'adset', adsetBody.name, sentAt, campaignId) });
           adsetId = adset.id;
         }
         state.progress.done++;
@@ -3569,7 +3657,8 @@
           if (state.dryRun) {
             addLog('info', `[${accLabel}] 🟦 ad payload: ${JSON.stringify(adBodyPost)}`);
           } else {
-            await apiFetch(`/act_${accId}/ads`, { method: 'POST', body: adBodyPost });
+            await apiFetch(`/act_${accId}/ads`, { method: 'POST', body: adBodyPost,
+              findCreated: sentAt => findCreatedByName(accId, 'ad', adNameFinal, sentAt, adsetId) });
           }
           totalAdOk++;
           state.progress.done++;
@@ -3969,7 +4058,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.30.0</span></span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.31.0</span></span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
