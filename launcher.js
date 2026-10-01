@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.31.0 — Bookmarklet
+ * MetaLaunch PRO v0.31.1 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -183,6 +183,11 @@
  *              accounts — promoted_object and {pixel_id} alike.
  *          (5) collapsible "macros reference" under step 8 — all launcher tokens + FB macros.
  *
+ * v0.31.1: загрузка креатива переживает смену IP мобильного прокси. Причина зависаний 01.10 —
+ *          прокси профиля (mproxy, SOCKS5 через мост AdsPower) меняет IP и рвёт соединения, а
+ *          браузер этого не видит: запрос, бывший в пути, ждёт вечно, новые идут нормально.
+ *          Дедлайн загрузки теперь по размеру файла (60 с + 50 КБ/с, потолок 10 мин), затем
+ *          до 2 повторов на свежем соединении. Дубль видео в библиотеке безвреден.
  * v0.31.0: запрос к FB, который не отвечает, больше не вешает залив навсегда.
  *          01.10 залив встал на «creating campaign» третьего каба и стоял 25 мин — и после
  *          возврата в окно тоже: вкладку не морозило (журнал без «⏸»), висел сам fetch, а у
@@ -445,7 +450,9 @@
   const BACKOFF_BASE_MS = 5000;
   // v0.31.0: a call FB never answers used to hang the launch forever (no timeout, Stop waits on it).
   const REQ_TIMEOUT_MS = 60000;      // one Graph call; FB answers writes in 1-10 s
-  const UPLOAD_TIMEOUT_MS = 600000;  // one image/video upload (big video over a slow proxy)
+  const UPLOAD_TIMEOUT_MS = 600000;  // ceiling for one image/video upload
+  const UPLOAD_BASE_MS = 60000;      // v0.31.1: upload deadline = 60 s + size at 50 KB/s (4 MB → ~2.5 min)
+  const UPLOAD_MIN_BPS = 50 * 1024;
   const SLOW_REQ_LOG_MS = 20000;     // say in the feed that a call is still waiting
   const CREATED_SKEW_MS = 120000;    // created_time (FB clock) vs our send time (local clock)
 
@@ -1583,21 +1590,33 @@
     }
   }
 
-  async function postForm(path, formData) {
+  // v0.31.1: an upload caught on a dead connection (mobile proxy changed IP mid-request) never
+  // answers. Deadline by file size instead of a flat 10 min, then resend on a fresh connection:
+  // a duplicate video in the library is harmless, an image comes back with the same hash.
+  const UPLOAD_ATTEMPTS = 3;
+  async function postForm(path, formData, sizeBytes = 0) {
     formData.append('access_token', TOKEN);
     const url = `${HOST_GRAPH}/${path}`;
+    const timeoutMs = Math.min(UPLOAD_TIMEOUT_MS, UPLOAD_BASE_MS + Math.round(sizeBytes / UPLOAD_MIN_BPS) * 1000);
     let res, raw, json;
-    try {
-      ({ res, body: raw } = await timedFetch(url, {
-        method: 'POST',
-        body: formData,
-        credentials: 'include',
-        mode: 'cors',
-        referrer: 'https://business.facebook.com/',
-        referrerPolicy: 'origin-when-cross-origin',
-      }, UPLOAD_TIMEOUT_MS, `upload ${path}`, 'text'));
-    } catch (netErr) {
-      throw new CUError('Network failure: ' + netErr.message, { stage: 'post', url: path, netError: netErr.message });
+    for (let attempt = 1; ; attempt++) {
+      try {
+        ({ res, body: raw } = await timedFetch(url, {
+          method: 'POST',
+          body: formData,
+          credentials: 'include',
+          mode: 'cors',
+          referrer: 'https://business.facebook.com/',
+          referrerPolicy: 'origin-when-cross-origin',
+        }, timeoutMs, `upload ${path}`, 'text'));
+        break;
+      } catch (netErr) {
+        if (netErr.timedOut && attempt < UPLOAD_ATTEMPTS) {
+          addLog('warning', `↺ upload ${path}: соединение умерло (смена IP прокси?) — отправляю заново, попытка ${attempt + 1}/${UPLOAD_ATTEMPTS}.`);
+          continue;
+        }
+        throw new CUError('Network failure: ' + netErr.message, { stage: 'post', url: path, netError: netErr.message });
+      }
     }
     try { json = JSON.parse(raw); } catch {
       throw new CUError(`HTTP ${res.status}: invalid JSON`, { stage: 'post', url: path, httpStatus: res.status, rawResponse: raw.slice(0, 2000) });
@@ -1616,7 +1635,7 @@
   async function uploadImage(accId, file) {
     const fd = new FormData();
     fd.append('filename', file, file.name);
-    const result = await postForm(`act_${accId}/adimages`, fd);
+    const result = await postForm(`act_${accId}/adimages`, fd, file.size);
     const key = Object.keys(result.images || {})[0];
     const hash = result.images?.[key]?.hash;
     if (!hash) throw new CUError('No hash in response', { stage: 'post', rawResponse: JSON.stringify(result).slice(0, 2000) });
@@ -1626,7 +1645,7 @@
   async function uploadVideo(accId, file) {
     const fd = new FormData();
     fd.append('source', file, file.name);
-    const result = await postForm(`act_${accId}/advideos`, fd);
+    const result = await postForm(`act_${accId}/advideos`, fd, file.size);
     if (!result?.id) throw new CUError('No video id in response', { stage: 'post', rawResponse: JSON.stringify(result).slice(0, 2000) });
     return String(result.id);
   }
@@ -4058,7 +4077,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.31.0</span></span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.31.1</span></span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">

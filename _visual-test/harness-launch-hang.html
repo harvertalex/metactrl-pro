@@ -9,6 +9,7 @@
 <script>
   // Стенд v0.31.0: подставной Graph API, на котором запрос создания может «повиснуть» —
   // fetch не отвечает никогда, пока его не оборвут (как 01.10 на «creating campaign»).
+  // __mock.hang.video = true — первая загрузка видео висит (IP прокси сменился посреди запроса).
   // __mock.hang[level] = 'created' — FB объект создал, ответ потерялся;
   //                      'lost'    — до FB не дошло, объекта нет.
   // launcher.js сюда вставляет test-launch-hang.ts — с укороченным таймаутом.
@@ -74,6 +75,12 @@
     if (/^\/act_\d+\/promote_pages$/.test(path)) return ok({ data: [{ id: PAGE, name: 'Drrdasddds' }] });
     if (path === '/' + PAGE) return ok({ id: PAGE, name: 'Drrdasddds' });
     if ((m = path.match(/^\/act_(\d+)\/adcreatives$/)) && method === 'POST') return ok({ id: 'cr_' + (++__mock.n) });
+    if ((m = path.match(/^\/act_(\d+)\/advideos$/)) && method === 'POST') {
+      __mock.videoPosts = (__mock.videoPosts || 0) + 1;
+      if (__mock.hang.video) { __mock.hang.video = null; return hung(init); }
+      return ok({ id: 'vid_' + (++__mock.n) });
+    }
+    if (/^\/vid_\d+$/.test(path)) return ok({ id: path.slice(1), status: { video_status: 'ready' } });
     if ((m = path.match(/^\/act_(\d+)\/(campaigns|adsets|ads)$/))) {
       var level = m[2] === 'campaigns' ? 'campaign' : m[2].slice(0, -1);
       return method === 'POST' ? create(level, m[1], body, init) : list(level, m[1], u);

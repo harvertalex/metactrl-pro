@@ -7,6 +7,7 @@
  *   1. Кампания: FB её создал, ответ потерялся → лаунчер находит её по имени, второй POST не шлёт.
  *   2. Объявление: до FB не дошло → после проверки «не создано» шлёт повтор, залив доходит.
  *   3. Адсет: создан, ответ потерялся → берётся найденный, объявления падают в него.
+ *   4. v0.31.1: загрузка видео застряла на мёртвом соединении → повтор, видео загружено, Web Lock держался.
  * По ходу: в ленте «⌛ ответа нет», Web Lock держится и отпускается.
  *
  *   bun code/metactrl-pro/_visual-test/test-launch-hang.ts
@@ -23,7 +24,8 @@ const PAGE_ID = "1039445349258069";
 
 // Таймауты из боевых 60 с / 20 с в 3 с / 1 с — иначе один прогон шёл бы минуты.
 let src = readFileSync(resolve(dir, "../launcher.js"), "utf8");
-for (const [from, to] of [["REQ_TIMEOUT_MS = 60000", "REQ_TIMEOUT_MS = 3000"], ["SLOW_REQ_LOG_MS = 20000", "SLOW_REQ_LOG_MS = 1000"]]) {
+for (const [from, to] of [["REQ_TIMEOUT_MS = 60000", "REQ_TIMEOUT_MS = 3000"], ["SLOW_REQ_LOG_MS = 20000", "SLOW_REQ_LOG_MS = 1000"],
+  ["UPLOAD_BASE_MS = 60000", "UPLOAD_BASE_MS = 2000"]]) {
   if (!src.includes(from)) throw new Error(`launcher.js: "${from}" not found — test is out of date`);
   src = src.replace(from, to);
 }
@@ -130,6 +132,22 @@ try {
   const lastAd = r3.objs.filter((o: any) => o.level === "ad").pop();
   check("3. timed-out adset adopted, not re-sent", r3.posts("adset") === 1, `adset POSTs: ${r3.posts("adset")}`);
   check("3. ad went into the adopted adset", lastAd?.adset_id === lastAdset?.id, `${lastAd?.adset_id} vs ${lastAdset?.id}`);
+
+  // ── 4. загрузка видео: первая попытка на мёртвом соединении → повтор ──
+  const vidPath = resolve(tmpdir(), "hang-test-video.mp4");
+  writeFileSync(vidPath, Buffer.alloc(2048, 1));
+  await page.evaluate(() => { (window as any).__mock.hang = { video: true }; (window as any).__mock.videoPosts = 0; });
+  await ((await page.$("#fbl-upload-files")) as any).uploadFile(vidPath);
+  let upLock = false;
+  await waitFor(page, async () => {
+    const held = await page.evaluate(async () => ((await navigator.locks.query()).held || []).map((l) => l.name));
+    if (held.some((n) => n?.startsWith("metalaunch-run-"))) upLock = true;
+    return /↑ video "hang-test-video" → 111 :: vid_/.test(await logText(page));
+  }, 60000, "video uploaded");
+  const up = await logText(page);
+  check("4. hung upload re-sent", /↺ upload act_111\/advideos: соединение умерло/.test(up));
+  check("4. video uploaded on the retry", (await mock(page)).videoPosts === 2, `video POSTs: ${(await mock(page)).videoPosts}`);
+  check("4. upload held the Web Lock", upLock);
 
   check("no page errors", errors.length === 0, errors.join(" | "));
 } catch (e: any) {
