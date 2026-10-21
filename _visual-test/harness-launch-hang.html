@@ -13,15 +13,25 @@
   // __mock.hang[level] = 'created' — FB объект создал, ответ потерялся;
   //                      'lost'    — до FB не дошло, объекта нет.
   // launcher.js сюда вставляет test-launch-hang.ts — с укороченным таймаутом.
+  // v0.32.0: ещё два способа потерять ответ — 'reset-created' (FB создал, соединение оборвалось:
+  // TypeError) и 'gw-created' (FB создал, шлюз ответил 502 HTML без ошибки FB). __mock.searchFail —
+  // /search регионов отвечает ошибкой FB. POST / с batch — Batch API (опрос статуса видео).
+  // Cab C (333) — в JPY: бюджет уходит без ×100.
   var __accessToken = 'VISUAL_TEST_TOKEN';
   window.alert = function () {};
   window.confirm = function () { return true; };
 
   var PAGE = '1039445349258069', PIXEL = '1451350725476785';
-  window.__mock = { n: 0, hang: {}, posts: { campaign: 0, adset: 0, ad: 0 }, objs: [], lookups: 0 };
+  window.__mock = { n: 0, hang: {}, posts: { campaign: 0, adset: 0, ad: 0 }, objs: [], lookups: 0,
+    bodies: [], events: [], searchFail: false, searchCalls: 0, batchCalls: 0, videoGets: 0 };
+  var US_REGIONS = [{ key: '3868', name: 'Missouri', country_code: 'US' }, { key: '3847', name: 'California', country_code: 'US' }];
 
   function ok(b) {
     return Promise.resolve(new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  }
+  function fbErr(code, message) {
+    return Promise.resolve(new Response(JSON.stringify({ error: { code: code, message: message, type: 'OAuthException' } }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }));
   }
   // Как настоящий fetch: висит, пока не придёт abort по signal.
   function hung(init) {
@@ -32,13 +42,17 @@
   }
   function create(level, acc, body, init) {
     __mock.posts[level]++;
+    __mock.bodies.push({ level: level, acc: acc, body: body });
     var o = { id: level + '_' + (++__mock.n), level: level, acc: acc, name: body.name,
       campaign_id: body.campaign_id || '', adset_id: body.adset_id || '',
       created: Math.floor(Date.now() / 1000) };
     var h = __mock.hang[level];
     if (h) {
       __mock.hang[level] = null;          // виснет только первый запрос
-      if (h === 'created') __mock.objs.push(o);
+      if (h === 'created' || h === 'reset-created' || h === 'gw-created') __mock.objs.push(o);
+      if (h === 'reset-created' || h === 'reset-lost') return Promise.reject(new TypeError('Failed to fetch'));
+      if (h === 'gw-created') return Promise.resolve(new Response('<html><body>502 Bad Gateway</body></html>',
+        { status: 502, headers: { 'Content-Type': 'text/html' } }));
       return hung(init);
     }
     __mock.objs.push(o);
@@ -69,18 +83,37 @@
     if (path === '/me/adaccounts') return ok({ data: [
       { id: 'act_111', account_id: '111', name: 'Cab A', account_status: 1, currency: 'USD' },
       { id: 'act_222', account_id: '222', name: 'Cab B', account_status: 1, currency: 'USD' },
-      { id: 'act_333', account_id: '333', name: 'Cab C', account_status: 1, currency: 'USD' },
+      { id: 'act_333', account_id: '333', name: 'Cab C', account_status: 1, currency: 'JPY' },
     ] });
+    if (path === '/search' && u.searchParams.get('type') === 'adgeolocation') {
+      __mock.searchCalls++;
+      if (__mock.searchFail) return fbErr(1, 'An unknown error has occurred.');
+      return ok({ data: u.searchParams.get('country_code') === 'US' ? US_REGIONS : [] });
+    }
+    if ((path === '/' || path === '') && method === 'POST' && body.batch) {
+      __mock.batchCalls++;
+      __mock.events.push('batch');
+      return ok(JSON.parse(body.batch).map(function (r) {
+        var id = r.relative_url.split('?')[0];
+        return /^vid_\d+$/.test(id)
+          ? { code: 200, body: JSON.stringify({ id: id, status: { video_status: 'ready' } }) }
+          : { code: 404, body: JSON.stringify({ error: { code: 100, message: 'Unsupported get request' } }) };
+      }));
+    }
     if (/^\/act_\d+\/adspixels$/.test(path)) return ok({ data: [{ id: PIXEL, name: 'px' }] });
     if (/^\/act_\d+\/promote_pages$/.test(path)) return ok({ data: [{ id: PAGE, name: 'Drrdasddds' }] });
     if (path === '/' + PAGE) return ok({ id: PAGE, name: 'Drrdasddds' });
     if ((m = path.match(/^\/act_(\d+)\/adcreatives$/)) && method === 'POST') return ok({ id: 'cr_' + (++__mock.n) });
     if ((m = path.match(/^\/act_(\d+)\/advideos$/)) && method === 'POST') {
       __mock.videoPosts = (__mock.videoPosts || 0) + 1;
+      __mock.events.push('upload:' + m[1]);
       if (__mock.hang.video) { __mock.hang.video = null; return hung(init); }
       return ok({ id: 'vid_' + (++__mock.n) });
     }
-    if (/^\/vid_\d+$/.test(path)) return ok({ id: path.slice(1), status: { video_status: 'ready' } });
+    if (/^\/vid_\d+$/.test(path)) {
+      if ((u.searchParams.get('fields') || '') === 'status') __mock.videoGets++;
+      return ok({ id: path.slice(1), status: { video_status: 'ready' } });
+    }
     if ((m = path.match(/^\/act_(\d+)\/(campaigns|adsets|ads)$/))) {
       var level = m[2] === 'campaigns' ? 'campaign' : m[2].slice(0, -1);
       return method === 'POST' ? create(level, m[1], body, init) : list(level, m[1], u);

@@ -8,6 +8,14 @@
  *   2. Объявление: до FB не дошло → после проверки «не создано» шлёт повтор, залив доходит.
  *   3. Адсет: создан, ответ потерялся → берётся найденный, объявления падают в него.
  *   4. v0.31.1: загрузка видео застряла на мёртвом соединении → повтор, видео загружено, Web Lock держался.
+ * v0.32.0:
+ *   5. Кампания создана, соединение оборвалось (TypeError) → найдена по имени, второго POST нет.
+ *   6. Объявление создано, шлюз ответил 502 HTML → найдено, второго POST нет.
+ *   7. ABO: кампания уходит с is_adset_budget_sharing_enabled=false.
+ *   8. Регионы: /search упал → штат из встроенной таблицы с верным ключом (Missouri 3868),
+ *      сбой в ленте и не закэширован; регион не нашёлся нигде → адсет НЕ создаётся.
+ *   9. Cab C в JPY: бюджет адсета без ×100.
+ *  10. Видео в два каба: обе загрузки раньше опроса, опрос — одним Batch, без GET на каждое видео.
  * По ходу: в ленте «⌛ ответа нет», Web Lock держится и отпускается.
  *
  *   bun code/metactrl-pro/_visual-test/test-launch-hang.ts
@@ -38,6 +46,14 @@ const row = ["Hang test", "OUTCOME_SALES", "AUCTION", "", "AS 1", "20", "DE", "1
   "IMPRESSIONS", "1451350725476785", "PURCHASE", "Ad 1", "Title", "Body", "https://example.com/", "LEARN_MORE",
   "abc123hash", PAGE_ID];
 writeFileSync(csvPath, cols.join(",") + "\n" + row.join(",") + "\n", "utf8");
+// v0.32.0: тот же план с регионами — штат США (запасная таблица) и регион, которого нет нигде.
+const regCols = [...cols, "Regions"];
+const csvRegUs = resolve(tmpdir(), "metalaunch-hang-regions-us.csv");
+const csvRegNone = resolve(tmpdir(), "metalaunch-hang-regions-none.csv");
+const withGeo = (countries: string, regions: string) =>
+  regCols.join(",") + "\n" + [...row.slice(0, 6), `"${countries}"`, ...row.slice(7), regions].join(",") + "\n";
+writeFileSync(csvRegUs, withGeo("US", "Missouri"), "utf8");
+writeFileSync(csvRegNone, withGeo("US,DE", "Bavaria"), "utf8");
 
 const results: { name: string; ok: boolean }[] = [];
 const check = (name: string, ok: boolean, detail = "") => {
@@ -89,7 +105,29 @@ async function openPanel(p: Page) {
   }
 }
 
-async function launch(p: Page, hang: Record<string, string>) {
+// Верхняя плашка статуса — div.status (#fbl-status — это выпадашка статуса создания, не она).
+const statusText = (p: Page) => p.evaluate(() =>
+  (document.querySelector("#__fb_launcher_panel__ div.status") as HTMLElement | null)?.innerText || "");
+
+async function selectAccounts(p: Page, ids: string[]) {
+  if (!(await p.$("#fbl-acc-list"))) await p.click("#fbl-acc-toggle");
+  await p.waitForSelector("#fbl-acc-list");
+  for (const id of ["111", "222", "333"]) {
+    await p.evaluate((id, want) => {
+      const cb = document.querySelector(`.fbl-acc-cb[data-acc="${id}"]`) as HTMLInputElement | null;
+      if (cb && cb.checked !== want) cb.click();
+    }, id, ids.includes(id));
+    await new Promise((r) => setTimeout(r, 300));
+  }
+}
+
+async function loadCsv(p: Page, path: string) {
+  await ((await p.$("#fbl-csv")) as any).uploadFile(path);
+  await waitFor(p, async () => (await logText(p)).includes(path.split(/[\\/]/).pop()!), 10000, "csv parsed");
+}
+
+/** done — конец залива: по умолчанию строка итога IG «📷» (её нет, если не создано ни одного объявления). */
+async function launch(p: Page, hang: Record<string, string>, done: RegExp = /📷/) {
   await p.evaluate((h) => { (window as any).__mock.hang = h; }, hang);
   const before = await mock(p);
   await p.click("#fbl-run");
@@ -97,14 +135,15 @@ async function launch(p: Page, hang: Record<string, string>) {
   await waitFor(p, async () => {
     const held = await p.evaluate(async () => ((await navigator.locks.query()).held || []).map((l) => l.name));
     if (held.some((n) => n?.startsWith("metalaunch-run-"))) lockSeen = true;
-    return /📷/.test(await logText(p));
+    return done.test((await logText(p)) + "\n" + (await statusText(p)));
   }, 120000, "launch finished");
   await new Promise((r) => setTimeout(r, 800));
   const after = await mock(p);
   const heldAfter = await p.evaluate(async () =>
     ((await navigator.locks.query()).held || []).map((l) => l.name).filter((n) => n?.startsWith("metalaunch-run-")));
   const posts = (k: string) => after.posts[k] - before.posts[k];
-  return { log: await logText(p), posts, objs: after.objs, lockSeen, lockReleased: heldAfter.length === 0 };
+  const bodies = after.bodies.slice(before.bodies.length);
+  return { log: await logText(p), posts, objs: after.objs, bodies, before, after, lockSeen, lockReleased: heldAfter.length === 0 };
 }
 
 try {
@@ -133,6 +172,49 @@ try {
   check("3. timed-out adset adopted, not re-sent", r3.posts("adset") === 1, `adset POSTs: ${r3.posts("adset")}`);
   check("3. ad went into the adopted adset", lastAd?.adset_id === lastAdset?.id, `${lastAd?.adset_id} vs ${lastAdset?.id}`);
 
+  // ── 5. v0.32.0: кампания создана, соединение оборвалось (TypeError) → найдена, без дубля ──
+  const r5 = await launch(page, { campaign: "reset-created" });
+  check("5. dropped-connection campaign adopted, not re-sent", r5.posts("campaign") === 1, `campaign POSTs: ${r5.posts("campaign")}`);
+  check("5. feed names the dropped connection", /соединение оборвалось.*объект создан \(id=campaign_/.test(r5.log));
+  check("5. launch reached the ad", r5.log.includes("✓ ad 1/1"));
+
+  // ── 6. объявление создано, шлюз ответил 502 HTML → найдено, без дубля ──
+  const r6 = await launch(page, { ad: "gw-created" });
+  check("6. 502-without-FB-error ad adopted, not re-sent", r6.posts("ad") === 1, `ad POSTs: ${r6.posts("ad")}`);
+  check("6. feed names the 502", /FB ответил HTTP 502 без ошибки, но объект создан \(id=ad_/.test(r6.log));
+
+  // ── 7. ABO-кампания несёт is_adset_budget_sharing_enabled=false ──
+  const camp6 = r6.bodies.find((b: any) => b.level === "campaign")?.body || {};
+  check("7. ABO campaign sends is_adset_budget_sharing_enabled=false", camp6.is_adset_budget_sharing_enabled === "false",
+    JSON.stringify({ sharing: camp6.is_adset_budget_sharing_enabled, daily_budget: camp6.daily_budget }));
+  const adset6 = r6.bodies.find((b: any) => b.level === "adset")?.body || {};
+  check("7. USD ad set budget ×100", adset6.daily_budget === "2000", `daily_budget=${adset6.daily_budget}`);
+
+  // ── 8. регионы: /search упал ──
+  await page.evaluate(() => { (window as any).__mock.searchFail = true; });
+  await loadCsv(page, csvRegUs);
+  const r8 = await launch(page, {});
+  const tg8 = JSON.parse(r8.bodies.find((b: any) => b.level === "adset")?.body?.targeting || "{}");
+  const keys8 = (tg8.geo_locations?.regions || []).map((r: any) => r.key);
+  check("8. search failure reported in feed", /Регионы US: FB не отдал список/.test(r8.log));
+  check("8. Missouri from the static table with the right key 3868", keys8.join() === "3868", `regions: ${keys8.join() || "none"}`);
+  const r8b = await (async () => { await loadCsv(page, csvRegNone); return launch(page, {}, /Done with errors/); })();
+  check("8. failed /search not cached — asked again", r8b.after.searchCalls - r8b.before.searchCalls >= 1,
+    `search calls in the 2nd launch: ${r8b.after.searchCalls - r8b.before.searchCalls}`);
+  check("8. no region resolved → ad set NOT created", r8b.posts("adset") === 0, `adset POSTs: ${r8b.posts("adset")}`);
+  check("8. feed says why", /ни один регион не найден \(Bavaria\)/.test(r8b.log));
+  check("8. cab not reported as a clean success", /Done with errors/.test(await statusText(page)), await statusText(page));
+  await page.evaluate(() => { (window as any).__mock.searchFail = false; });
+
+  // ── 9. Cab C в JPY: бюджет без ×100 ──
+  await loadCsv(page, csvPath);
+  await selectAccounts(page, ["333"]);
+  const r9 = await launch(page, {});
+  const adset9 = r9.bodies.find((b: any) => b.level === "adset")?.body || {};
+  check("9. JPY ad set budget sent as-is (no ×100)", adset9.daily_budget === "20", `daily_budget=${adset9.daily_budget}`);
+  check("9. feed labels the budget in JPY", /ABO JPY 20\/d total/.test(r9.log));
+  await selectAccounts(page, ["111"]);
+
   // ── 4. загрузка видео: первая попытка на мёртвом соединении → повтор ──
   const vidPath = resolve(tmpdir(), "hang-test-video.mp4");
   writeFileSync(vidPath, Buffer.alloc(2048, 1));
@@ -148,6 +230,26 @@ try {
   check("4. hung upload re-sent", /↺ upload act_111\/advideos: соединение умерло/.test(up));
   check("4. video uploaded on the retry", (await mock(page)).videoPosts === 2, `video POSTs: ${(await mock(page)).videoPosts}`);
   check("4. upload held the Web Lock", upLock);
+
+  // ── 10. v0.32.0: видео в два каба — сначала обе загрузки, потом один опрос пачкой ──
+  await selectAccounts(page, ["111", "222"]);
+  await new Promise((r) => setTimeout(r, 1500));
+  const vid2 = resolve(tmpdir(), "hang-test-video2.mp4");
+  writeFileSync(vid2, Buffer.alloc(2048, 2));
+  const m10 = await mock(page);
+  await ((await page.$("#fbl-upload-files")) as any).uploadFile(vid2);
+  await waitFor(page, async () => {
+    const t = await logText(page);
+    return /↑ video "hang-test-video2" → 111 :: vid_/.test(t) && /↑ video "hang-test-video2" → 222 :: vid_/.test(t);
+  }, 60000, "video uploaded to both cabs");
+  const a10 = await mock(page);
+  const ev10: string[] = a10.events.slice(m10.events.length);
+  const firstBatch = ev10.indexOf("batch");
+  check("10. both uploads happen before the first status poll",
+    firstBatch > ev10.indexOf("upload:111") && firstBatch > ev10.indexOf("upload:222") && ev10.indexOf("upload:222") >= 0,
+    ev10.join(" → "));
+  check("10. statuses read via Batch, no per-video GET", a10.batchCalls - m10.batchCalls >= 1 && a10.videoGets === m10.videoGets,
+    `batch calls: ${a10.batchCalls - m10.batchCalls}, per-video GETs: ${a10.videoGets - m10.videoGets}`);
 
   check("no page errors", errors.length === 0, errors.join(" | "));
 } catch (e: any) {

@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.31.1 — Bookmarklet
+ * MetaLaunch PRO v0.32.0 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -183,6 +183,27 @@
  *              accounts — promoted_object and {pixel_id} alike.
  *          (5) collapsible "macros reference" under step 8 — all launcher tokens + FB macros.
  *
+ * v0.32.0: ревью CORA 21.10 — деньги, гео, дубли, IG, версия Graph.
+ *          (1) ABO-кампания шлёт is_adset_budget_sharing_enabled=false — с v24 FB без него
+ *              кампанию без бюджета не создаёт ([100/4834011]); каждый адсет держит свой бюджет.
+ *          (2) Graph v23.0 → v26.0 (Marketing v23 истёк 09.06, v24 — 06.10). Под v26: убран
+ *              плейсмент Explore (FB отвергает), advantage_audience всегда явно 0/1.
+ *          (3) Ключи штатов США исправлены (были сдвинуты на 3-4: Missouri уходил Невадой).
+ *              Сбой /search не кэшируется и пишется в ленту; адсет с регионами, из которых не
+ *              нашёлся ни один, не создаётся (раньше уходил на всю страну).
+ *          (4) Антидубль: созданное ищется по имени после ЛЮБОГО потерянного ответа на создание —
+ *              обрыв соединения, 5xx без ошибки FB, таймаут (было: только таймаут).
+ *          (5) Сухой прогон больше не запоминает «PBIA нет» — боевой залив после него создаёт PBIA.
+ *          (6) LAUNCH во время поиска IG ждёт его, а не уходит без IG.
+ *          (7) {geo} = первая страна адсета: кластер → гео из UI → CSV (было: только CSV).
+ *          (8) Загрузка файлов идёт через общий throttle и повторяется на обрыве и rate limit.
+ *          (9) Меньше запросов: страницы BM и /me/accounts — раз на сессию, превью видео — раз на
+ *              видео, сверка IG — раз на (каб, страница, IG).
+ *          (10) Видео сначала заливаются во все кабы, потом готовность опрашивается пачкой (Batch API).
+ *          (11) Отказ FB по IG распознаётся по полям ошибки, не по переведённому тексту.
+ *          (12) Бюджет и ставка — в минорных единицах валюты каба (JPY/HUF/KRW… без копеек);
+ *              подписи в панели — валюта каба. 613 — в списке повторов.
+ *
  * v0.31.1: загрузка креатива переживает смену IP мобильного прокси. Причина зависаний 01.10 —
  *          прокси профиля (mproxy, SOCKS5 через мост AdsPower) меняет IP и рвёт соединения, а
  *          браузер этого не видит: запрос, бывший в пути, ждёт вечно, новые идут нормально.
@@ -348,8 +369,24 @@
     reels:    { label: 'Reels',           facebook: ['facebook_reels'],  instagram: ['reels'] },
     instream: { label: 'In-stream video', facebook: ['instream_video'],  instagram: [] },
     search:   { label: 'Search',          facebook: ['search'],          instagram: [] },
-    explore:  { label: 'Explore',         facebook: [],                  instagram: ['explore'] },
+    // v0.32.0: 'explore' (Instagram Explore Feed) removed — FB rejects it from v26.0.
   };
+  // v0.32.0: positions FB now REJECTS on adset create — v24: Facebook video_feeds, v26: Instagram
+  // Explore Feed. A CSV or an old preset that still carries them would fail every ad set; drop
+  // them with one warning instead (explore_home is a different placement and still valid).
+  const REMOVED_POSITIONS = { facebook: ['video_feeds'], instagram: ['explore'] };
+  const _removedPosWarned = new Set();
+  function dropRemovedPositions(platform, list) {
+    const gone = REMOVED_POSITIONS[platform] || [];
+    return list.filter(p => {
+      if (!gone.includes(p)) return true;
+      if (!_removedPosWarned.has(platform + p)) {
+        _removedPosWarned.add(platform + p);
+        addLog('warning', `⚠ ${platform}_positions "${p}" FB больше не принимает (${GRAPH_VER}) — убрала из таргетинга.`);
+      }
+      return false;
+    });
+  }
   const PLACEMENT_PRESETS = {
     all:        { platforms: ['facebook', 'instagram', 'audience_network', 'messenger'], groups: [] },
     fb_ig:      { platforms: ['facebook', 'instagram'], groups: [] },
@@ -438,7 +475,16 @@
   };
 
   // ─── CONFIG ─────────────────────────────────────────────────────────────
-  const GRAPH_VER = 'v23.0';
+  // v0.32.0: v23.0 → v26.0. Marketing API v23 expired 09.06.2026, v24 06.10.2026 — calls lived on
+  // FB's auto-upgrade, which per the docs is NOT applied to endpoints changed in the next version
+  // (they fail). Changes of v24-v26 that touch this file, and what was done:
+  //   v24 POST campaigns: no campaign budget → is_adset_budget_sharing_enabled required → sent on ABO.
+  //   v24 Facebook video_feeds placement → error            → dropped from CSV positions with a warning.
+  //   v26 Instagram Explore placement → error               → chip removed, dropped from CSV/presets.
+  //   v26 (+all versions 27.10.2026) HEF ad sets need advantage_audience explicitly → always 0/1.
+  //   v26 (+all versions 27.10.2026) root GET /?ids= → error → video status poll uses the Batch API.
+  // Next bump: read the changelog for every endpoint this file calls (grep apiFetch / postForm).
+  const GRAPH_VER = 'v26.0';
   const HOST_GRAPH = `https://graph.facebook.com/${GRAPH_VER}`;
   // v0.26.0: human-cadence write pacing (was 400/800/1500 — too fast, read as automation).
   // The global throttle gate already adds ~0.7-1.3s per underlying call; these are the
@@ -455,6 +501,21 @@
   const UPLOAD_MIN_BPS = 50 * 1024;
   const SLOW_REQ_LOG_MS = 20000;     // say in the feed that a call is still waiting
   const CREATED_SKEW_MS = 120000;    // created_time (FB clock) vs our send time (local clock)
+  // 4: app rate limit, 17: user request limit, 32: page rate, 613: custom rate limit, 80004: ads mgmt BUC
+  const RATE_LIMIT_CODES = [4, 17, 32, 613, 80004];
+
+  // v0.32.0: FB budgets and bids are in the account currency's MINOR units — ×100 for currencies
+  // with cents, ×1 for those without (a 20 000 HUF budget went out as 2 000 000). Same table as
+  // MetaCtrl (bookmarklet.js CURRENCY_OFFSETS); unknown currency → 100.
+  const CURRENCY_OFFSETS = {
+    'DZD':100,'ARS':100,'AUD':100,'BHD':100,'BDT':100,'BOB':100,'BGN':100,'BRL':100,'GBP':100,
+    'CAD':100,'CLP':1,'CNY':100,'COP':1,'CRC':1,'HRK':100,'CZK':100,'DKK':100,'EGP':100,'EUR':100,
+    'GTQ':100,'HNL':100,'HKD':100,'HUF':1,'ISK':1,'INR':100,'IDR':1,'ILS':100,'JPY':1,'JOD':100,
+    'KES':100,'KRW':1,'LVL':100,'LTL':100,'MOP':100,'MYR':100,'MXN':100,'NZD':100,'NIO':100,'NGN':100,
+    'NOK':100,'PKR':100,'PYG':1,'PEN':100,'PHP':100,'PLN':100,'QAR':100,'RON':100,'RUB':100,'SAR':100,
+    'RSD':100,'SGD':100,'SKK':100,'ZAR':100,'SEK':100,'CHF':100,'TWD':1,'THB':100,'TRY':100,'AED':100,
+    'UAH':100,'USD':100,'UYU':100,'VEF':100,'VND':1,'FBZ':100,'VES':100
+  };
 
   // ─── STATE ──────────────────────────────────────────────────────────────
   let TOKEN = '';
@@ -711,6 +772,10 @@
     }
     return +s;
   }
+  // v0.32.0: money in the cab's currency. accCurrency '' = cab unknown to the token list.
+  function accCurrency(accId) { return ACCOUNTS.find(a => a.id === accId)?.currency || ''; }
+  function toMinor(amount, accId) { return String(Math.round(amount * (CURRENCY_OFFSETS[accCurrency(accId)] ?? 100))); }
+  function curSign(accId) { const c = accCurrency(accId); return !c || c === 'USD' ? '$' : `${c} `; }
   const SC = { info:'var(--accent)', success:'var(--good)', error:'var(--crit)', warning:'var(--warn)' };
 
   function setStatus(type, text) { state.status = { type, text }; render(); }
@@ -867,41 +932,35 @@
     }
 
     const label = `${method} ${path.replace(/^https?:\/\/[^/]+\/v[\d.]+/, '').replace(/^\/+/, '').split('?')[0]}`;
+    // v0.31.0 / v0.32.0: the answer to a create can be lost three ways — no answer (timeout), a
+    // dropped connection (TypeError: the mobile proxy changed IP), a 5xx without an FB error body.
+    // In each FB may already have made the object, so look for it by name before sending again.
+    // v0.31.0 did this on the timeout only; the other two re-sent blind → duplicate ad / empty copy.
+    const adoptCreated = async (sentAt, why) => {
+      if (!opts.findCreated) return null;
+      await sleep(3000);
+      let found = null;
+      try { found = await opts.findCreated(sentAt); }
+      catch (fe) { addLog('warning', `⌛ ${label}: не смогла проверить, создалось ли (${fe.message}) — отправляю ещё раз.`); }
+      if (!found?.id) return null;
+      _createdIds.add(String(found.id));
+      addLog('warning', `⌛ ${label}: ${why}, но объект создан (id=${found.id}) — беру его, без дубля.`);
+      return found;
+    };
     let lastErr;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      let sentAt = Date.now();
       try {
         await throttleSlot(); // v0.26.0: pace every dispatch (incl. retries) — no session bursts
-        const sentAt = Date.now();
-        let res, json;
-        try {
-          ({ res, body: json } = await timedFetch(url.toString(), fo, opts.timeoutMs || REQ_TIMEOUT_MS, label, 'json'));
-        } catch (e) {
-          if (!e.timedOut) throw e;
-          // v0.31.0: a create that got no answer may still have been made on FB's side.
-          // Look for it before sending again — a blind retry is how duplicates are born.
-          if (opts.findCreated) {
-            await sleep(3000);
-            let found = null;
-            try { found = await opts.findCreated(sentAt); }
-            catch (fe) { addLog('warning', `⌛ ${label}: не смогла проверить, создалось ли (${fe.message}) — отправляю ещё раз.`); }
-            if (found?.id) {
-              _createdIds.add(String(found.id));
-              addLog('warning', `⌛ ${label}: ответа не было, но объект создан (id=${found.id}) — беру его, без дубля.`);
-              return found;
-            }
-          }
-          if (attempt >= MAX_RETRIES) throw e;
-          addLog('warning', `↺ ${label}: повтор ${attempt + 1}/${MAX_RETRIES}.`);
-          continue;
-        }
+        sentAt = Date.now();
+        const { res, body: json } = await timedFetch(url.toString(), fo, opts.timeoutMs || REQ_TIMEOUT_MS, label, 'json');
         if (res.ok && !json?.error) {
           if (method === 'POST' && json?.id) _createdIds.add(String(json.id));
           return json;
         }
         const fbErr = json?.error;
         const code = fbErr?.code;
-        // 4: rate limit, 17: user request limit, 32: page rate, 80004: too many calls
-        if ([4, 17, 32, 80004].includes(code) && attempt < MAX_RETRIES) {
+        if (RATE_LIMIT_CODES.includes(code) && attempt < MAX_RETRIES) {
           const wait = BACKOFF_BASE_MS * Math.pow(2, attempt - 1);
           await sleep(wait);
           continue;
@@ -915,9 +974,15 @@
         throw err;
       } catch (e) {
         lastErr = e;
-        // Don't retry if it's a structured FB error (not transient network issue)
-        if (e.fbError || attempt >= MAX_RETRIES) break;
-        await sleep(1000 * attempt);
+        // A structured FB error IS FB's answer — nothing was lost, a retry would get the same.
+        if (e.fbError) break;
+        const why = e.timedOut ? 'ответа не было'
+          : e.httpStatus ? `FB ответил HTTP ${e.httpStatus} без ошибки` : `соединение оборвалось (${e.message})`;
+        const found = await adoptCreated(sentAt, why);
+        if (found) return found;
+        if (attempt >= MAX_RETRIES) break;
+        addLog('warning', `↺ ${label}: повтор ${attempt + 1}/${MAX_RETRIES}.`);
+        if (!e.timedOut) await sleep(1000 * attempt);
       }
     }
     throw lastErr || new Error('API call failed');
@@ -1322,6 +1387,12 @@
     state.startDate = s.startDate || '';
     state.placementPlatforms = Array.isArray(s.placementPlatforms) ? s.placementPlatforms : [];
     state.placementPositionGroups = Array.isArray(s.placementPositionGroups) ? s.placementPositionGroups : [];
+    // v0.32.0: groups that no longer exist (Explore — FB rejects it from v26) are dropped, loudly.
+    const goneGroups = state.placementPositionGroups.filter(g => !PLACEMENT_POSITION_GROUPS[g]);
+    if (goneGroups.length) {
+      state.placementPositionGroups = state.placementPositionGroups.filter(g => PLACEMENT_POSITION_GROUPS[g]);
+      addLog('warning', `⚠ Preset "${preset.name}": плейсмент ${goneGroups.join(', ')} FB больше не принимает — убрала из пресета${state.placementPositionGroups.length ? '' : ' (позиции теперь все)'}.`);
+    }
     state.devicePlatformsOverride = s.devicePlatformsOverride || '';
     state.budgetModeOverride = s.budgetModeOverride || '';
     state.cboBudgetOverride = s.cboBudgetOverride || '';
@@ -1593,13 +1664,19 @@
   // v0.31.1: an upload caught on a dead connection (mobile proxy changed IP mid-request) never
   // answers. Deadline by file size instead of a flat 10 min, then resend on a fresh connection:
   // a duplicate video in the library is harmless, an image comes back with the same hash.
+  // v0.32.0: an upload goes through the same throttle gate as every other Graph call (v0.26.0
+  // promised that, uploads were left out), and is resent on a dropped connection (TypeError,
+  // not only the hang) and on FB rate limits with backoff — before, either failed the file for
+  // that cab and its ads were skipped. A 5xx without JSON is resent too.
   const UPLOAD_ATTEMPTS = 3;
   async function postForm(path, formData, sizeBytes = 0) {
     formData.append('access_token', TOKEN);
     const url = `${HOST_GRAPH}/${path}`;
     const timeoutMs = Math.min(UPLOAD_TIMEOUT_MS, UPLOAD_BASE_MS + Math.round(sizeBytes / UPLOAD_MIN_BPS) * 1000);
-    let res, raw, json;
-    for (let attempt = 1; ; attempt++) {
+    let netTries = 0, rateTries = 0;
+    for (;;) {
+      await throttleSlot();
+      let res, raw, json;
       try {
         ({ res, body: raw } = await timedFetch(url, {
           method: 'POST',
@@ -1609,27 +1686,38 @@
           referrer: 'https://business.facebook.com/',
           referrerPolicy: 'origin-when-cross-origin',
         }, timeoutMs, `upload ${path}`, 'text'));
-        break;
       } catch (netErr) {
-        if (netErr.timedOut && attempt < UPLOAD_ATTEMPTS) {
-          addLog('warning', `↺ upload ${path}: соединение умерло (смена IP прокси?) — отправляю заново, попытка ${attempt + 1}/${UPLOAD_ATTEMPTS}.`);
+        if (++netTries < UPLOAD_ATTEMPTS) {
+          addLog('warning', `↺ upload ${path}: ${netErr.timedOut ? 'соединение умерло (смена IP прокси?)' : `соединение оборвалось (${netErr.message})`} — отправляю заново, попытка ${netTries + 1}/${UPLOAD_ATTEMPTS}.`);
+          if (!netErr.timedOut) await sleep(1000 * netTries);
           continue;
         }
         throw new CUError('Network failure: ' + netErr.message, { stage: 'post', url: path, netError: netErr.message });
       }
+      try { json = JSON.parse(raw); } catch {
+        if (res.status >= 500 && ++netTries < UPLOAD_ATTEMPTS) {
+          addLog('warning', `↺ upload ${path}: FB ответил HTTP ${res.status} без JSON — отправляю заново, попытка ${netTries + 1}/${UPLOAD_ATTEMPTS}.`);
+          await sleep(1000 * netTries);
+          continue;
+        }
+        throw new CUError(`HTTP ${res.status}: invalid JSON`, { stage: 'post', url: path, httpStatus: res.status, rawResponse: raw.slice(0, 2000) });
+      }
+      if (json?.error) {
+        const e = json.error;
+        if (RATE_LIMIT_CODES.includes(e.code) && ++rateTries < MAX_RETRIES) {
+          const wait = BACKOFF_BASE_MS * Math.pow(2, rateTries - 1);
+          addLog('warning', `↺ upload ${path}: лимит FB [${e.code}] — жду ${Math.round(wait / 1000)} с и отправляю заново (${rateTries + 1}/${MAX_RETRIES}).`);
+          await sleep(wait);
+          continue;
+        }
+        throw new CUError(`[${e.code}${e.error_subcode ? '/' + e.error_subcode : ''}] ${e.message}`, {
+          stage: 'post', url: path, httpStatus: res.status,
+          fbError: { code: e.code, subcode: e.error_subcode, type: e.type, message: e.message, fbtrace_id: e.fbtrace_id, user_title: e.error_user_title, user_msg: e.error_user_msg },
+          rawResponse: raw.slice(0, 2000),
+        });
+      }
+      return json;
     }
-    try { json = JSON.parse(raw); } catch {
-      throw new CUError(`HTTP ${res.status}: invalid JSON`, { stage: 'post', url: path, httpStatus: res.status, rawResponse: raw.slice(0, 2000) });
-    }
-    if (json?.error) {
-      const e = json.error;
-      throw new CUError(`[${e.code}${e.error_subcode ? '/' + e.error_subcode : ''}] ${e.message}`, {
-        stage: 'post', url: path, httpStatus: res.status,
-        fbError: { code: e.code, subcode: e.error_subcode, type: e.type, message: e.message, fbtrace_id: e.fbtrace_id, user_title: e.error_user_title, user_msg: e.error_user_msg },
-        rawResponse: raw.slice(0, 2000),
-      });
-    }
-    return json;
   }
 
   async function uploadImage(accId, file) {
@@ -1650,31 +1738,80 @@
     return String(result.id);
   }
 
-  // Poll /videoId until video_status === 'ready'. FB needs ~10-60s to process.
-  async function waitForVideoReady(videoId, onTick) {
-    const MAX_ATTEMPTS = 80;   // ~6.5 min @ 5s
-    const INTERVAL_MS = 5000;
-    for (let i = 0; i < MAX_ATTEMPTS; i++) {
-      let data;
+  // v0.32.0: statuses of many videos in one call — Batch API, ≤50 per call. (Root GET /?ids= is
+  // an error on v26 and on every version from 27.10.2026.) Batch refused by FB → one GET per
+  // video, as before v0.32. Returns { videoId: { vs, raw } }; a video FB didn't answer for is absent.
+  const VIDEO_POLL_MS = 5000;
+  const VIDEO_POLL_TICKS = 80;   // ~6.5 min @ 5 s, as before
+  let _noBatch = false;
+  async function readVideoStatuses(ids) {
+    const out = {};
+    const one = async id => {
       try {
-        data = await apiFetch(videoId, { params: { fields: 'status' } });
-      } catch (e) {
-        // Transient API error during polling — retry next tick
-        if (onTick) onTick('polling-error', i);
-        await sleep(INTERVAL_MS);
-        continue;
+        const d = await apiFetch(id, { params: { fields: 'status' } });
+        out[id] = { vs: d?.status?.video_status || 'unknown', raw: d };
+      } catch { /* transient — next tick */ }
+    };
+    for (let i = 0; i < ids.length; i += 50) {
+      const chunk = ids.slice(i, i + 50);
+      if (!_noBatch) {
+        let res = null;
+        try {
+          res = await apiFetch('/', { method: 'POST', body: {
+            batch: JSON.stringify(chunk.map(id => ({ method: 'GET', relative_url: `${id}?fields=status` }))),
+            include_headers: 'false',
+          } });
+        } catch (e) {
+          if (!e.fbError) continue;   // network trouble — the whole chunk retries next tick
+          _noBatch = true;
+          addLog('info', `Batch API не принят (${e.message}) — статус видео опрашиваю по одному.`);
+        }
+        if (Array.isArray(res)) {
+          res.forEach((r, j) => {
+            if (r?.code !== 200) return;
+            let b = null;
+            try { b = JSON.parse(r.body || 'null'); } catch {}
+            if (b) out[chunk[j]] = { vs: b.status?.video_status || 'unknown', raw: b };
+          });
+          continue;
+        }
+        if (!_noBatch) { _noBatch = true; addLog('info', 'Batch API ответил не списком — статус видео опрашиваю по одному.'); }
       }
-      const vs = data?.status?.video_status || 'unknown';
-      if (onTick) onTick(vs, i);
-      if (vs === 'ready') return;
-      if (vs === 'error') {
-        throw new CUError('FB rejected video (processing error)', {
-          stage: 'process', videoId, rawResponse: JSON.stringify(data).slice(0, 2000),
-        });
-      }
-      await sleep(INTERVAL_MS);
+      for (const id of chunk) await one(id);
     }
-    throw new CUError('Video processing timeout (>6 min)', { stage: 'process', videoId });
+    return out;
+  }
+
+  // v0.32.0: wait for ALL uploaded videos together (they used to be waited one by one, between
+  // uploads: N cabs × M videos × 10-60 s in a row). items: [{ u, pa, accId, baseName, fileName }].
+  // Same outcomes as before: ready → done; FB 'error' or no 'ready' in ~6.5 min → that cab's
+  // upload is an error and the launch skips its ads.
+  async function waitForVideosReady(items, onFail, multi) {
+    let left = items.slice();
+    for (let tick = 0; left.length && tick < VIDEO_POLL_TICKS; tick++) {
+      if (tick) await sleep(VIDEO_POLL_MS);
+      const st = await readVideoStatuses([...new Set(left.map(it => it.pa.videoId))]);
+      left = left.filter(it => {
+        const s = st[it.pa.videoId];
+        const vs = s ? s.vs : 'polling-error';
+        it.pa.processingStatus = vs;
+        it.u.processingStatus = multi ? `${vs} (${it.accId})` : vs;
+        if (vs === 'ready') {
+          it.pa.status = 'done';
+          addLog('success', `↑ video "${it.baseName}" → ${it.accId} :: ${it.pa.videoId}`);
+          return false;
+        }
+        if (vs === 'error') {
+          onFail(it, new CUError('FB rejected video (processing error)', {
+            stage: 'process', videoId: it.pa.videoId, rawResponse: JSON.stringify(s.raw).slice(0, 2000),
+          }));
+          return false;
+        }
+        return true;
+      });
+      render();
+    }
+    left.forEach(it => onFail(it, new CUError('Video processing timeout (>6 min)', { stage: 'process', videoId: it.pa.videoId })));
   }
 
   // v0.6: each upload entry holds per-account results so the launch loop can
@@ -1708,14 +1845,23 @@
     // For single-account launches this is just that one. For multi-account this is
     // the first one — the launch loop uses u.perAccount[accId] per iteration anyway.
     const primaryAcc = accIds[0];
-    const primaryResults = [];
+    const failUpload = (u, pa, accId, fileName, e) => {
+      pa.status = 'error';
+      pa.error = e.message;
+      pa.errorDetails = (e instanceof CUError) ? e.details : { message: e.message };
+      if (accId === primaryAcc) {
+        u.error = e.message;
+        u.errorDetails = pa.errorDetails;
+      }
+      addLog('error', `↑ FAIL "${fileName}" → ${accId}: ${e.message}`);
+    };
 
+    // v0.32.0 phase 1: every file into every cab. Images finish here; videos are only uploaded
+    // and wait for processing all together in phase 2 (was: each video waited before the next upload).
+    const processing = [];
     for (let i = 0; i < files.length; i++) {
       const u = state.uploads[i];
       const baseName = files[i].name.replace(/\.[^.]+$/, '');
-      let anyOk = false;
-      let anyErr = false;
-
       for (const accId of accIds) {
         const pa = u.perAccount[accId];
         pa.status = 'uploading';
@@ -1727,47 +1873,48 @@
             pa.videoId = vidId;
             pa.status = 'processing';
             pa.processingStatus = 'processing';
-            u.processingStatus = `processing (${accId})`;
-            render();
-            await waitForVideoReady(vidId, (vs) => {
-              pa.processingStatus = vs;
-              u.processingStatus = accIds.length > 1 ? `${vs} (${accId})` : vs;
-              render();
-            });
-            pa.status = 'done';
-            addLog('success', `↑ video "${baseName}" → ${accId} :: ${vidId}`);
-            if (accId === primaryAcc) {
-              u.videoId = vidId;  // legacy mirror
-              primaryResults.push({ name: baseName, videoId: vidId });
-            }
+            u.processingStatus = accIds.length > 1 ? `processing (${accId})` : 'processing';
+            processing.push({ u, pa, accId, baseName, fileName: files[i].name });
           } else {
             const hash = await uploadImage(accId, files[i]);
             pa.hash = hash;
             pa.status = 'done';
             addLog('success', `↑ image "${baseName}" → ${accId} :: ${hash.slice(0, 16)}…`);
-            if (accId === primaryAcc) {
-              u.imageHash = hash;  // legacy mirror
-              primaryResults.push({ name: baseName, imageHash: hash });
-            }
           }
-          anyOk = true;
         } catch (e) {
-          pa.status = 'error';
-          pa.error = e.message;
-          pa.errorDetails = (e instanceof CUError) ? e.details : { message: e.message };
-          if (accId === primaryAcc) {
-            u.error = e.message;
-            u.errorDetails = pa.errorDetails;
-          }
-          addLog('error', `↑ FAIL "${files[i].name}" → ${accId}: ${e.message}`);
-          anyErr = true;
+          failUpload(u, pa, accId, files[i].name, e);
         }
         await sleep(200);
       }
-      // Aggregate row status: prefer most informative state.
-      u.status = anyErr && !anyOk ? 'error' : anyErr ? 'partial' : 'done';
+      if (processing.some(it => it.u === u)) u.status = 'processing';
       render();
     }
+
+    // Phase 2: one poll for all uploaded videos (Batch API, ≤50 per call).
+    if (processing.length) {
+      addLog('info', `⏳ ${processing.length} video upload(s) processing on FB — polling them together…`);
+      await waitForVideosReady(processing, (it, e) => failUpload(it.u, it.pa, it.accId, it.fileName, e), accIds.length > 1);
+    }
+
+    // Row status and the primary cab's results, in file order (as before).
+    const primaryResults = [];
+    for (const u of state.uploads) {
+      const all = Object.values(u.perAccount);
+      const anyOk = all.some(p => p.status === 'done');
+      const anyErr = all.some(p => p.status === 'error');
+      u.status = anyErr && !anyOk ? 'error' : anyErr ? 'partial' : 'done';
+      const pa = u.perAccount[primaryAcc];
+      if (pa?.status !== 'done') continue;
+      const baseName = u.name.replace(/\.[^.]+$/, '');
+      if (u.type === 'video') {
+        u.videoId = pa.videoId;  // legacy mirror
+        primaryResults.push({ name: baseName, videoId: pa.videoId });
+      } else {
+        u.imageHash = pa.hash;   // legacy mirror
+        primaryResults.push({ name: baseName, imageHash: pa.hash });
+      }
+    }
+    render();
 
     // Auto-pair videos + images with same base name (uses primary account's results — the
     // launch loop maps thumbnail by base name on each account from perAccount).
@@ -1810,6 +1957,15 @@
   // `promotable` (present in THIS account's promote_pages edge = safe to launch).
   // Non-promotable pages are still shown (broader pool) but flagged in the UI,
   // since launching with them from this account may be rejected by FB (subcode 1815813).
+  // v0.32.0: page inventories shared by cabs — a BM's owned/client pages and /me/accounts — are
+  // read once per panel session (was: again for every selected cab, ~5 calls each). The promise
+  // is kept, so cabs toggled together share one request; a failure is not kept.
+  const _sessionMemo = {};
+  function memoSession(key, fn) {
+    if (!_sessionMemo[key]) _sessionMemo[key] = fn().catch(e => { delete _sessionMemo[key]; throw e; });
+    return _sessionMemo[key];
+  }
+
   async function loadPagesForAccount(accId) {
     if (!accId) return;
     if (state.pagesByAccount[accId]) {
@@ -1839,7 +1995,7 @@
       if (bizId) {
         for (const edge of ['owned_pages', 'client_pages']) {
           try {
-            const items = await apiAll(`/${bizId}/${edge}`, { fields: 'id,name', limit: 100 });
+            const items = await memoSession(`${bizId}/${edge}`, () => apiAll(`/${bizId}/${edge}`, { fields: 'id,name', limit: 100 }));
             items.forEach(p => { const id = String(p.id); if (!found.has(id)) found.set(id, p.name || 'Untitled'); });
             if (items.length) addLog('info', `Pages (${edge}): ${items.length} for BM ${bizId}`);
           } catch (e) { addLog('warning', `${edge} failed (BM ${bizId}): ${e.message}`); }
@@ -1851,7 +2007,7 @@
 
     // 3) /me/accounts — personal pool (pages where the session user holds a role).
     try {
-      const items = await apiAll('/me/accounts', { fields: 'id,name', limit: 100 });
+      const items = await memoSession('me/accounts', () => apiAll('/me/accounts', { fields: 'id,name', limit: 100 }));
       items.forEach(p => { const id = String(p.id); if (!found.has(id)) found.set(id, p.name || 'Untitled'); });
       if (items.length) addLog('info', `Pages (/me/accounts): ${items.length}`);
     } catch (e) {
@@ -1943,16 +2099,29 @@
     return tok;
   }
 
-  async function loadIgForAccount(accId, pageId) {
+  // v0.32.0: the lookup in flight per (cab, page). A second caller — LAUNCH pressed while the
+  // page-pick lookup still runs (~10 calls on a rented cab) — used to get '' and the cab went out
+  // without IG; it now waits for the same promise.
+  const _igInflight = {};
+  function loadIgForAccount(accId, pageId) {
     const key = `${accId || ''}__${pageId || ''}`;
     if (key in state.pageIgMap) {
       // v0.11.0: short-circuit ONLY on a positive hit or a definitive "no IG" (terminal).
       // Errored/transient entries fall through and re-resolve — kills the in-session cache
       // poisoning where one transient failure locked every later ad to an empty IG.
       const e = state.pageIgMap[key];
-      if (e && (e.igId || e.terminal)) return e.igId || '';
+      if (e && (e.igId || e.terminal)) return Promise.resolve(e.igId || '');
     }
-    if (state.pageIgLoading[key]) return '';
+    if (_igInflight[key]) {
+      if (state.running) addLog('info', `⏳ IG для страницы ${pageId} ещё ищется (выбор страницы) — жду этот поиск, не ухожу без IG.`);
+      return _igInflight[key];
+    }
+    const p = runIgLadder(accId, pageId, key).finally(() => { delete _igInflight[key]; });
+    _igInflight[key] = p;
+    return p;
+  }
+
+  async function runIgLadder(accId, pageId, key) {
     state.pageIgLoading[key] = true;
     let pageName = '';
     let anyError = false;
@@ -2056,7 +2225,9 @@
       // it does NOT attach an IG identity (proven live: flag-only creative reads back page-only), so
       // WARN LOUDLY — the AM IG field will be empty. Cache terminal ONLY if nothing errored (so
       // transient fails retry next time).
-      state.pageIgMap[key] = { igId: '', igName: '', pageName, source: anyError ? 'error' : 'none', terminal: !anyError };
+      // v0.32.0: never terminal in a dry run — it skipped the PBIA create, so «no IG» is not final
+      // (a real launch after a dry run in the same panel used to inherit it and go out FB-only).
+      state.pageIgMap[key] = { igId: '', igName: '', pageName, source: anyError ? 'error' : 'none', terminal: !anyError && !state.dryRun };
       addLog('warning', `⚠ Page "${pageName || pageId}" has no attachable Instagram identity (no connected IG, no account actor, PBIA ${pTok ? 'denied' : 'unreachable — no role on the page'}, nothing in account history). Ads run Facebook-only — the AM IG field stays EMPTY (use_page_actor_override does NOT fill it). Fix: ${pTok ? '' : 'give this FB profile ADVERTISER+ on the page (Page settings → Page access) — the PBIA is then created automatically, OR '}link an IG in Page Settings (business.facebook.com/settings/instagram-accounts), OR paste a promotable IG ID in step 3, OR run one ad on this page from AM once so its PBIA lands in history.`);
       return '';
     } finally {
@@ -2103,7 +2274,9 @@
       }
       if (!pbia?.id && state.dryRun) {
         // v0.15.0: dry run must not create anything. Log intent, return null (preview shows page-only).
+        // v0.32.0: and must not cache that null — the next real launch has to create the PBIA.
         addLog('info', `🟦 DRY: would create a Page-Backed IG for page ${pageId} (skipped in dry run)`);
+        return null;
       } else if (!pbia?.id) {
         try {
           const c = await apiFetch(`/${pageId}/page_backed_instagram_accounts`, { method: 'POST', token: pTok });
@@ -2188,15 +2361,22 @@
   // an existing creative, so the user must fix access/identity and relaunch.
   // v0.29.0: returns true (kept) / false (dropped) / null (not checked) for the IG summary,
   // and a kept IG that belongs to the page it was resolved for goes into the page IG memory.
+  // v0.32.0: FB's verdict on an IG is the same for every creative of one (cab, page, IG), so it
+  // is read back once per combo (was: one extra GET per ad). An unchecked read (error) is not kept.
+  const _igVerdicts = {};
   async function verifyCreativeIg(creativeId, expectedIg, accLabel, adName, accId = '', igPageId = '', adPageId = '') {
     if (state.dryRun || !creativeId || !expectedIg || String(creativeId).startsWith('DRY')) return null;
+    const vKey = `${accId}__${adPageId}__${expectedIg}`;
+    if (vKey in _igVerdicts) return _igVerdicts[vKey];
     try {
       const c = await apiFetch(`/${creativeId}`, { params: { fields: 'object_story_spec{instagram_user_id}' } });
       const got = c?.object_story_spec?.instagram_user_id ? String(c.object_story_spec.instagram_user_id) : '';
       if (got !== String(expectedIg)) {
-        addLog('warning', `[${accLabel}] ⚠ FB dropped IG ${expectedIg} on "${adName}" → IG field will be EMPTY (page-only). The IG isn't promotable by this account/token (BM claim / asset assignment / page role). Link a real IG or accept page-only.`);
+        addLog('warning', `[${accLabel}] ⚠ FB dropped IG ${expectedIg} on "${adName}" → IG field will be EMPTY (page-only). The IG isn't promotable by this account/token (BM claim / asset assignment / page role). Link a real IG or accept page-only. Same IG on this page in this cab — not re-checked, counted as dropped.`);
+        _igVerdicts[vKey] = false;
         return false;
       }
+      _igVerdicts[vKey] = true;
       // Remember only when the ad's page IS the page the IG was resolved for (CSV rows can
       // mix pages) and the IG is the page's own, not the cab's account actor.
       if (igPageId && String(adPageId) === String(igPageId) && igIsPageBound(accId, igPageId, expectedIg)) {
@@ -2848,21 +3028,27 @@
   }
 
   // ─── US STATES (for SafeX HI region targeting) ──────────────────────────
+  // v0.32.0: FB region keys — alphabetical WITH DC: Alabama 3843 … DC 3851 … Wyoming 3893
+  // (FB targeting-search docs: Alabama 3843, California 3847; same as the live fb-ops tables).
+  // The old table started Alabama at 3847 without DC — every state was 3-4 keys off (Missouri →
+  // Nevada, California → DC, Wisconsin/Wyoming → not US at all). Used only when /search fails.
   const US_STATE_KEYS = {
-    'alabama':3847,'alaska':3848,'arizona':3849,'arkansas':3850,'california':3851,
-    'colorado':3852,'connecticut':3853,'delaware':3854,'florida':3855,'georgia':3856,
-    'hawaii':3857,'idaho':3858,'illinois':3859,'indiana':3860,'iowa':3861,
-    'kansas':3862,'kentucky':3863,'louisiana':3864,'maine':3865,'maryland':3866,
-    'massachusetts':3867,'michigan':3868,'minnesota':3869,'mississippi':3870,'missouri':3871,
-    'montana':3872,'nebraska':3873,'nevada':3874,'new hampshire':3875,'new jersey':3876,
-    'new mexico':3877,'new york':3878,'north carolina':3879,'north dakota':3880,'ohio':3881,
-    'oklahoma':3882,'oregon':3883,'pennsylvania':3884,'rhode island':3885,'south carolina':3886,
-    'south dakota':3887,'tennessee':3888,'texas':3889,'utah':3890,'vermont':3891,
-    'virginia':3892,'washington':3893,'west virginia':3894,'wisconsin':3895,'wyoming':3896,
-    'district of columbia':3853,'washington dc':3893,
+    'alabama':3843,'alaska':3844,'arizona':3845,'arkansas':3846,'california':3847,
+    'colorado':3848,'connecticut':3849,'delaware':3850,'district of columbia':3851,'florida':3852,
+    'georgia':3853,'hawaii':3854,'idaho':3855,'illinois':3856,'indiana':3857,
+    'iowa':3858,'kansas':3859,'kentucky':3860,'louisiana':3861,'maine':3862,
+    'maryland':3863,'massachusetts':3864,'michigan':3865,'minnesota':3866,'mississippi':3867,
+    'missouri':3868,'montana':3869,'nebraska':3870,'nevada':3871,'new hampshire':3872,
+    'new jersey':3873,'new mexico':3874,'new york':3875,'north carolina':3876,'north dakota':3877,
+    'ohio':3878,'oklahoma':3879,'oregon':3880,'pennsylvania':3881,'rhode island':3882,
+    'south carolina':3883,'south dakota':3884,'tennessee':3885,'texas':3886,'utah':3887,
+    'vermont':3888,'virginia':3889,'washington':3890,'west virginia':3891,'wisconsin':3892,
+    'wyoming':3893,'washington dc':3851,'washington, district of columbia':3851,
   };
 
   // v0.10.0: per-country region map cache. fetchFbRegionMap('GB') etc.
+  // v0.32.0: a failed lookup is NOT cached (it used to pin {} for the whole session, so every later
+  // adset fell to the static table without a word) and is reported in the launch feed.
   const _fbRegionMapCache = {};
   async function fetchFbRegionMap(cc) {
     if (_fbRegionMapCache[cc]) return _fbRegionMapCache[cc];
@@ -2874,9 +3060,9 @@
       (res?.data || []).forEach(r => { map[r.name.toLowerCase()] = r.key; });
       _fbRegionMapCache[cc] = map;
       return map;
-    } catch {
-      _fbRegionMapCache[cc] = {};
-      return {};
+    } catch (e) {
+      addLog('warning', `⚠ Регионы ${cc}: FB не отдал список (${e.message})${cc === 'US' ? ' — штаты беру из встроенной таблицы ключей' : ''}.`);
+      return null;
     }
   }
 
@@ -2888,14 +3074,18 @@
     if (!names.length) return [];
     const ctys = (countries && countries.length) ? countries : ['US'];
     const out = [];
+    const maps = {};   // v0.32.0: one lookup per country per adset — a failed one is not re-asked per name
     for (const name of names) {
       const lc = name.toLowerCase();
       let matched = null;
       for (const cc of ctys) {
-        const map = await fetchFbRegionMap(cc);
-        if (map[lc]) { matched = { key: String(map[lc]), name, country: cc }; break; }
+        if (!(cc in maps)) maps[cc] = await fetchFbRegionMap(cc);
+        const map = maps[cc];
+        if (map && map[lc]) { matched = { key: String(map[lc]), name, country: cc }; break; }
       }
-      if (!matched && US_STATE_KEYS[lc]) matched = { key: String(US_STATE_KEYS[lc]), name, country: 'US' };
+      // The static table is the US table — only when the ad set targets the US (v0.32.0: it used
+      // to put a US state into, say, a CA-only ad set).
+      if (!matched && ctys.includes('US') && US_STATE_KEYS[lc]) matched = { key: String(US_STATE_KEYS[lc]), name, country: 'US' };
       if (matched) out.push(matched);
       else addLog('warning', `Region not found in ${ctys.join('/')}: "${name}" — skipped`);
     }
@@ -2990,6 +3180,8 @@
     }
     _tokenWarned.clear();  // v0.26.1: unknown-token warnings dedup per launch
     _sub2Warned.clear();
+    _removedPosWarned.clear();  // v0.32.0
+    for (const k in _igVerdicts) delete _igVerdicts[k];  // v0.32.0: IG read-back verdicts are per launch
     state.igReport = [];   // v0.29.0: IG summary is per run
     render();
 
@@ -2999,6 +3191,9 @@
       // promoted_object AND the {pixel_id} token on EVERY account. If the cabs use
       // different pixels, this is wrong for accounts 2..N — launch them separately.
       addLog('warning', `⚠ Single pixel ${effectivePixel} will be used on ALL ${accIds.length} accounts (promoted_object + {pixel_id} token). Different pixels per cab → launch per-cab.`);
+      // v0.32.0: the same budget NUMBER goes into every cab, each in its own currency.
+      const curs = [...new Set(accIds.map(a => accCurrency(a) || '?'))];
+      if (curs.length > 1) addLog('warning', `⚠ Кабы в разных валютах (${curs.join(' / ')}): бюджет и ставка — одно и то же число в валюте каждого каба. Нужны равные деньги — заливай по валютам отдельно.`);
     }
 
     // v0.29.1: sub2 по каждому кабу — ДО первого вызова FB, чтобы ⚠ был виден сразу, а не
@@ -3174,13 +3369,31 @@
   // v0.6: extracted per-account pipeline. Same logic that runLaunch had before,
   // now keyed off the accId param instead of state.targetAccId. Returns true on
   // full success, false on any ad-level error inside this account.
+  const _thumbByVideo = {};  // v0.32.0: videoId → FB auto-thumbnail URL, per panel session
+
+  // v0.32.0: did FB refuse the creative because of its Instagram identity? Machine fields only:
+  // subcode 1815199 «Ad account has no access to this Instagram account» (Marketing API error
+  // reference), error_data.blame_field_specs, and error.message (the developer text, English).
+  // Not error_user_msg — FB translates it into the session's language.
+  const IG_REJECT_SUBCODES = [1815199];
+  function isIgIdentityError(e) {
+    const fb = e?.fbError;
+    if (!fb) return /instagram_(user|actor)_id/.test(String(e?.message || ''));
+    if (IG_REJECT_SUBCODES.includes(Number(fb.error_subcode))) return true;
+    let data = fb.error_data;
+    if (typeof data === 'string') { try { data = JSON.parse(data); } catch { data = null; } }
+    const blamed = JSON.stringify(data?.blame_field_specs || []);
+    return /instagram_(user|actor)_id/.test(`${fb.message || ''} ${blamed}`);
+  }
+
   async function runLaunchForAccount(accId, plan, dateStr) {
     const acc = ACCOUNTS.find(a => a.id === accId);
     const accLabel = acc?.name || accId;
     const firstRow = state.rows[0] || {};  // v0.10.0: {} for CSV-less launches
 
     const sacLabel = plan.sacList.length ? ` SAC:${plan.sacList[0]}` : '';
-    const budgetLabel = plan.isCBO ? `CBO $${plan.cboBudget}/d` : `ABO $${plan.aboTotal}/d total`;
+    const cs = curSign(accId);  // v0.32.0: the cab's currency, not always "$"
+    const budgetLabel = plan.isCBO ? `CBO ${cs}${plan.cboBudget}/d` : `ABO ${cs}${plan.aboTotal}/d total`;
     addLog('info', `[${accLabel}] Launching ${plan.adsetCount} adsets × ${plan.adCount} ads (${budgetLabel})${sacLabel}`);
     render();
 
@@ -3259,14 +3472,20 @@
       // v0.5.1: bid_strategy only on CBO campaign-level. For ABO it lives on adset-level —
       // sending it on a budget-less campaign trips FB error [100/1885737] "campaign budget not set".
       if (plan.isCBO) {
+        // v0.32.0: minor units of the cab's currency (×1 for JPY/HUF/KRW…, ×100 otherwise)
         if (isLifetimeBudget()) {
-          campBody.lifetime_budget = String(Math.round(plan.cboBudget * 100));
+          campBody.lifetime_budget = toMinor(plan.cboBudget, accId);
           const et = budgetEndTimeUnix();
           if (et) campBody.end_time = String(et);  // lifetime needs a schedule end
         } else {
-          campBody.daily_budget = String(Math.round(plan.cboBudget * 100));
+          campBody.daily_budget = toMinor(plan.cboBudget, accId);
         }
         campBody.bid_strategy = effectiveBidStrategy(firstRow);
+      } else {
+        // v0.32.0: from v24 FB creates a campaign WITHOUT a budget only with this flag set
+        // explicitly ([100/4834011]). false = every ad set spends its own budget (ABO as meant;
+        // true would let FB move up to 20% between ad sets). Same as fb-ops launcher.ts.
+        campBody.is_adset_budget_sharing_enabled = 'false';
       }
 
       addLog('info', `[${accLabel}] ${state.dryRun ? '🟦 DRY ' : ''}creating campaign "${campName}"...`);
@@ -3336,7 +3555,16 @@
       const countriesRaw = (aFirst._geoCountries || state.geoCountriesOverride || String(aFirst['Countries'] || ''))
         .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
       const countries = countriesRaw.length ? countriesRaw : ['US'];
-      const fbRegions = await resolveRegions(aFirst._geoStates || state.geoStatesOverride || aFirst['Regions'], countries);
+      const regionsRaw = aFirst._geoStates || state.geoStatesOverride || aFirst['Regions'];
+      const fbRegions = await resolveRegions(regionsRaw, countries);
+      // v0.32.0: regions asked for, none resolved → do NOT create the ad set. It used to fall back
+      // to the whole country (a 2-state SafeX cluster went out to all of the US).
+      if (String(regionsRaw || '').split(',').some(s => s.trim()) && !fbRegions.length && !plan.sacList.length) {
+        addLog('error', `[${accLabel}] ✗ adset ${adsetIdx} "${applyMarkers(adsetName)}": ни один регион не найден (${regionsRaw}) — адсет не создаю, иначе он ушёл бы на всю страну (${countries.join(', ')}).`);
+        totalAdErr += adsToCreate.length;
+        state.progress.done += 1 + adsToCreate.length;
+        continue;
+      }
       const ageMin = state.ageMinOverride ? (+state.ageMinOverride || 18) : (+aFirst['Age Min'] || 18);
       const ageMax = state.ageMaxOverride ? (+state.ageMaxOverride || 65) : (+aFirst['Age Max'] || 65);
       const gender = (state.genderOverride || String(aFirst['Gender'] || '')).toLowerCase();
@@ -3347,12 +3575,13 @@
       const publisherPlatforms = placeUI
         ? (placeUI.publisher_platforms || [])
         : String(aFirst['Publisher Platforms'] || '').split(',').map(s => s.trim()).filter(Boolean);
-      const fbPositions = placeUI
+      // v0.32.0: positions FB rejects now (v24 video_feeds, v26 explore) are dropped with a warning.
+      const fbPositions = dropRemovedPositions('facebook', placeUI
         ? (placeUI.facebook_positions || [])
-        : String(aFirst['Facebook Positions'] || '').split(',').map(s => s.trim()).filter(Boolean);
-      const igPositions = placeUI
+        : String(aFirst['Facebook Positions'] || '').split(',').map(s => s.trim()).filter(Boolean));
+      const igPositions = dropRemovedPositions('instagram', placeUI
         ? (placeUI.instagram_positions || [])
-        : String(aFirst['Instagram Positions'] || '').split(',').map(s => s.trim()).filter(Boolean);
+        : String(aFirst['Instagram Positions'] || '').split(',').map(s => s.trim()).filter(Boolean));
       // v0.20.0: UI device override wins; 'all' = explicit mobile+desktop; '' = CSV column / FB auto
       // v0.21.0: 'android'/'ios' = mobile + user_os filter (FB targeting.user_os: 'Android'/'iOS')
       const devOv = state.devicePlatformsOverride;
@@ -3384,12 +3613,16 @@
       if (fbRegions.length && !plan.sacList.length) geoLocations.regions = fbRegions;
       else geoLocations.countries = countries;
 
+      // v0.32.0: always an explicit 0/1 — from 27.10.2026 FB rejects HEF ad sets (Financial etc.)
+      // without it on every version; a CSV "On"/"Off" used to become NaN → null.
+      const aaRaw = state.advantageAudienceOverride !== '' ? state.advantageAudienceOverride : aFirst['Advantage Audience'];
+      const advantageAudience = /^(1|on|yes|true)$/i.test(String(aaRaw ?? '').trim()) ? 1 : 0;
       const targeting = {
         geo_locations: geoLocations,
         age_min: ageMin,
         age_max: ageMax,
         genders,
-        targeting_automation: { advantage_audience: state.advantageAudienceOverride !== '' ? +state.advantageAudienceOverride : +(aFirst['Advantage Audience'] || 0) },
+        targeting_automation: { advantage_audience: advantageAudience },
       };
       if (publisherPlatforms.length) targeting.publisher_platforms = publisherPlatforms;
       if (devicePlatforms.length) targeting.device_platforms = devicePlatforms;
@@ -3403,7 +3636,7 @@
       const bidAmountNum = parseNum(bidAmountRaw);
       const bidNeedsCap = bidStrategy === 'COST_CAP' || bidStrategy === 'LOWEST_COST_WITH_BID_CAP';
       const bidAmountCents = bidNeedsCap && bidAmountNum > 0
-        ? String(Math.round(bidAmountNum * 100)) : null;
+        ? toMinor(bidAmountNum, accId) : null;   // v0.32.0: minor units of the cab's currency
 
       // v0.7.0: markers on FB adset name only; adsetName stays clean for token context (URL Tags)
       const adsetNameFinal = applyMarkers(adsetName);
@@ -3432,11 +3665,11 @@
         const abNum = (state.adsetBudgetOverride && ovNum > 0) ? ovNum : csvNum;
         if (abNum > 0) {
           if (isLifetimeBudget()) {
-            adsetBody.lifetime_budget = String(Math.round(abNum * 100));  // v0.8.0
+            adsetBody.lifetime_budget = toMinor(abNum, accId);  // v0.8.0 · v0.32.0: cab currency
             const et = budgetEndTimeUnix();
             if (et) adsetBody.end_time = String(et);
           } else {
-            adsetBody.daily_budget = String(Math.round(abNum * 100));
+            adsetBody.daily_budget = toMinor(abNum, accId);
           }
         }
         // v0.5.1: bid_strategy belongs on the adset for ABO. CBO inherits it from campaign.
@@ -3466,6 +3699,7 @@
       } catch (e) {
         addLog('error', `[${accLabel}] ✗ adset ${adsetIdx} "${adsetNameFinal}": ${e.message}`);
         state.progress.done += 1 + adsToCreate.length; // skip this adset's ads in progress
+        totalAdErr += adsToCreate.length;  // v0.32.0: its ads never land — the cab is NOT a full success
         continue;
       }
 
@@ -3483,7 +3717,10 @@
           // Build token context for Link/URL Tags substitution
           // Reuse `pixelId` (line 1738) so {pixel_id} in URL always matches the pixel
           // we put in promoted_object. UI override (state.pixelOverride) wins over CSV.
-          const firstGeo = (String(aFirst['Countries'] || '').split(',').map(s => s.trim()).filter(Boolean)[0]) || '';
+          // v0.32.0: {geo} = first country THIS ad set targets — cluster → UI geo → CSV, the same
+          // `countries` as the targeting (was: CSV "Countries" only → empty on CSV-less launches,
+          // the CSV country instead of the cluster's on a split).
+          const firstGeo = countries[0] || '';
           const tokenCtx = {
             pixel_id: pixelId,
             account_id: accId,
@@ -3564,12 +3801,16 @@
               objectStorySpec.video_data.image_hash = itemThumb;
             } else {
               // Fallback: fetch auto-thumbnail from FB
-              let thumbUrl = '';
-              try {
-                const vInfo = await apiFetch(`/${videoId}`, { params: { fields: 'picture,thumbnails{uri,is_preferred}' } });
-                const prefThumb = vInfo?.thumbnails?.data?.find(t => t.is_preferred)?.uri;
-                thumbUrl = prefThumb || vInfo?.thumbnails?.data?.[0]?.uri || vInfo?.picture || '';
-              } catch {}
+              // v0.32.0: once per video (was: again for every ad set the video goes into)
+              let thumbUrl = _thumbByVideo[videoId] || '';
+              if (!thumbUrl) {
+                try {
+                  const vInfo = await apiFetch(`/${videoId}`, { params: { fields: 'picture,thumbnails{uri,is_preferred}' } });
+                  const prefThumb = vInfo?.thumbnails?.data?.find(t => t.is_preferred)?.uri;
+                  thumbUrl = prefThumb || vInfo?.thumbnails?.data?.[0]?.uri || vInfo?.picture || '';
+                } catch {}
+                if (thumbUrl) _thumbByVideo[videoId] = thumbUrl;
+              }
               if (thumbUrl) objectStorySpec.video_data.image_url = thumbUrl;
             }
           } else if (imageHash) {
@@ -3607,10 +3848,11 @@
           try {
             creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: creativeBody });
           } catch (e) {
-            const msg = String(e.message || '');
             // v0.6.12: when user explicitly chose Use Page as Actor, never attempt
             // the IG fallback dance — that's the whole point of the checkbox.
-            if (msg.includes('instagram_user_id') && objectStorySpec.instagram_user_id && !state.usePageAsActor) {
+            // v0.32.0: IG rejection read from the error's fields, not from e.message (that is
+            // error_user_msg first, which FB translates — on a ru/uk session it never matched).
+            if (isIgIdentityError(e) && objectStorySpec.instagram_user_id && !state.usePageAsActor) {
               const rejectedIg = objectStorySpec.instagram_user_id;
               addLog('warning', `[${accLabel}] FB rejected IG ${rejectedIg} — falling back to Page-Backed IG (always promotable for this page)...`);
               // Bust any stale cache entry from initial resolveAccountIg so the
@@ -4015,9 +4257,12 @@
     const isLifetimeUI = state.budgetTypeOverride === 'lifetime';
     const budgetWord = isLifetimeUI ? 'lifetime' : 'daily';
     const budgetAmtVal = bMode === 'cbo' ? state.cboBudgetOverride : bMode === 'abo' ? state.adsetBudgetOverride : '';
-    const budgetAmtLabel = bMode === 'cbo' ? `Campaign ${budgetWord} budget ($)`
-      : bMode === 'abo' ? `Ad set ${budgetWord} budget ($ × ${plan ? plan.adsetCount : 'N'} adsets)`
-      : 'Budget ($) — pick a mode first';
+    // v0.32.0: the primary cab's currency where known ("$" for USD / unknown)
+    const curUI = (accCurrency(primaryAcc) && accCurrency(primaryAcc) !== 'USD') ? accCurrency(primaryAcc) : '$';
+    const curPfx = curUI === '$' ? '$' : `${curUI} `;
+    const budgetAmtLabel = bMode === 'cbo' ? `Campaign ${budgetWord} budget (${curUI})`
+      : bMode === 'abo' ? `Ad set ${budgetWord} budget (${curUI} × ${plan ? plan.adsetCount : 'N'} adsets)`
+      : `Budget (${curUI}) — pick a mode first`;
     // Bid amount only meaningful for cap strategies; disable when explicitly "no cap".
     const bidNeedsCapUI = state.bidStrategyOverride !== 'LOWEST_COST_WITHOUT_CAP';
     const phr = PHRASE_LIB[state.phraseVertical] || PHRASE_LIB.insurance;
@@ -4028,7 +4273,7 @@
 
     const previewHtml = plan ? `
       <div class="preview">
-        <div><b>${plan.adsetCount}</b> adset${plan.adsetCount > 1 ? 's' : ''} ${plan.adsMode ? `× <b>${plan.adsModeItems.length}</b> creatives = <b>${plan.adCount}</b> ads` : `· <b>${plan.adCount}</b> ad${plan.adCount > 1 ? 's' : ''}`} · <b>${plan.isCBO ? 'CBO' : 'ABO'}</b> ${plan.isCBO ? `$${plan.cboBudget}/d` : `$${plan.aboTotal}/d total`}</div>
+        <div><b>${plan.adsetCount}</b> adset${plan.adsetCount > 1 ? 's' : ''} ${plan.adsMode ? `× <b>${plan.adsModeItems.length}</b> creatives = <b>${plan.adCount}</b> ads` : `· <b>${plan.adCount}</b> ad${plan.adCount > 1 ? 's' : ''}`} · <b>${plan.isCBO ? 'CBO' : 'ABO'}</b> ${plan.isCBO ? `${curPfx}${plan.cboBudget}/d` : `${curPfx}${plan.aboTotal}/d total`}</div>
         <div>Objective: <b>${esc(plan.objective || '?')}</b> · Event: <b>${esc(effEvent)}</b></div>
         <div>Pixel: <b style="color:${pixelValid && pixelInAccount ? 'var(--good)' : 'var(--crit)'}">${esc(effPixel || 'MISSING')}</b> ${state.pixelOverride ? '<span style="color:var(--text-faint)">(override)</span>' : '<span style="color:var(--text-faint)">(from CSV)</span>'} ${!pixelValid && effPixel ? '<span style="color:var(--crit)">⚠ invalid format</span>' : ''} ${pixelValid && state.pixelsList.length && !pixelInAccount ? '<span style="color:var(--crit)">⚠ not in this account</span>' : ''}</div>
         ${plan.adsMode ? `<div style="color:var(--good)">⚡ ads-mode: each adset gets ${plan.adsModeItems.length} new ads from creatives JSON (CSV Ad Name/Image Hash/Video ID ignored)</div>` : ''}
@@ -4077,7 +4322,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.31.1</span></span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.32.0</span></span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -4210,7 +4455,7 @@
             </select>
           </div>
           <div class="field">
-            <label>Bid / cost cap ($) <span style="color:var(--text-faint)">${bidNeedsCapUI ? '' : '(no cap → unused)'}</span></label>
+            <label>Bid / cost cap (${curUI}) <span style="color:var(--text-faint)">${bidNeedsCapUI ? '' : '(no cap → unused)'}</span></label>
             <input type="text" id="fbl-bid-amount" value="${esc(state.bidAmountOverride)}" placeholder="${bidNeedsCapUI ? 'e.g. 12.50' : 'n/a for highest-volume'}"${bidNeedsCapUI ? '' : ' disabled style="opacity:.4"'}>
           </div>
         </div>

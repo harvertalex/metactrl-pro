@@ -33,6 +33,8 @@
    ========================================================= */
 
 /* -------------------- CONFIG -------------------- */
+// v25.15 — Graph v23.0 -> v25.0. Marketing API v23 expired 09.06.2026, v24 06.10.2026: FB already ran our v23
+//          calls under the oldest live version, so this pins the behaviour we actually get (probe 21.10: v23-v26 answer).
 // v25.14 — 🎯 Targeting tab: account-level controls (act_X/account_controls) — min age, geo, excluded geo,
 //          excluded placements on many accounts at once via Batch API, re-read + verify after write.
 //          Panel opens on 🔎 Accounts instead of Autorules.
@@ -75,8 +77,8 @@
 //         moved into the rail (was hidden in the tab body), rail header buttons de-cramped.
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
-  VERSION: 'v23.0',   // single source for ALL Graph calls — see v25.13 note above
-  APP_VERSION: 'v25.14',
+  VERSION: 'v25.0',   // single source for ALL Graph calls — see v25.13 note above
+  APP_VERSION: 'v25.15',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts

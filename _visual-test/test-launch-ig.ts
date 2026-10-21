@@ -9,6 +9,8 @@
  *   4. Перезагрузка, память стёрта, Cab B → IG нет нигде → итог «IG не найден»,
  *      кампания всё равно залита; 📋 отдаёт журнал прошлого залива; итог — «нет роли на странице».
  *   5. v0.30.0: роль на странице есть → токен страницы → PBIA создан → IG прикреплён.
+ *      v0.32.0: перед боевым заливом — сухой прогон; он PBIA не создаёт и не мешает создать его потом.
+ *   6. v0.32.0: LAUNCH сразу после ввода страницы, поиск IG ещё идёт → залив ждёт его, IG прикреплён.
  * По ходу: во время залива держится Web Lock; заморозка вкладки пишется в ленту.
  *
  *   bun code/metactrl-pro/_visual-test/test-launch-ig.ts
@@ -50,7 +52,9 @@ const errors: string[] = [];
 page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
 
 const logText = (p: Page) => p.evaluate(() => document.getElementById("fbl-log")?.innerText || "");
-const statusText = (p: Page) => p.evaluate(() => document.getElementById("fbl-status")?.innerText || "");
+// Верхняя плашка статуса — div.status (#fbl-status — это выпадашка статуса создания, не она).
+const statusText = (p: Page) => p.evaluate(() =>
+  (document.querySelector("#__fb_launcher_panel__ div.status") as HTMLElement | null)?.innerText || "");
 
 async function waitFor(p: Page, fn: () => Promise<boolean>, ms: number, what: string) {
   const until = Date.now() + ms;
@@ -92,8 +96,12 @@ async function selectOnly(p: Page, accId: string) {
   if (picked.join() !== accId) throw new Error(`account picker: wanted ${accId}, got ${picked.join()}`);
 }
 
-/** Жмёт «Запуск», во время залива смотрит Web Lock и (по флагу) имитирует заморозку. */
-async function launch(p: Page, opts: { freeze?: boolean } = {}) {
+/** Жмёт «Запуск», во время залива смотрит Web Lock и (по флагу) имитирует заморозку.
+ *  v0.32.0: preLog — лента ДО нажатия. Залив очищает ленту на старте, а фоновый поиск IG после
+ *  загрузки CSV иногда успевает раньше (строка «page token ✓» оказывалась до очистки — проверка 5
+ *  мигала). Проверки «за сессию» смотрят preLog + log. done — конец залива (по умолчанию «📷»). */
+async function launch(p: Page, opts: { freeze?: boolean; done?: RegExp } = {}) {
+  const preLog = await logText(p);
   await p.click("#fbl-run");
   let lockSeen = false;
   let froze = false;
@@ -109,12 +117,20 @@ async function launch(p: Page, opts: { freeze?: boolean } = {}) {
         document.dispatchEvent(new Event("resume"));
       });
     }
-    return /📷/.test(await logText(p));
+    return (opts.done || /📷/).test((await logText(p)) + "\n" + (await statusText(p)));
   }, 180000, "launch finished with IG summary");
   await new Promise((r) => setTimeout(r, 800));
   const heldAfter = await p.evaluate(async () =>
     ((await navigator.locks.query()).held || []).map((l) => l.name).filter((n) => n?.startsWith("metalaunch-run-")));
-  return { log: await logText(p), lockSeen, lockReleased: heldAfter.length === 0 };
+  return { log: await logText(p), preLog, lockSeen, lockReleased: heldAfter.length === 0 };
+}
+
+async function setDryRun(p: Page, on: boolean) {
+  await p.evaluate((on) => {
+    const cb = document.getElementById("fbl-dry-run") as HTMLInputElement | null;
+    if (cb && cb.checked !== on) cb.click();
+  }, on);
+  await new Promise((r) => setTimeout(r, 300));
 }
 
 try {
@@ -180,15 +196,43 @@ try {
   await openPanel(page);
   await page.evaluate(() => { (window as any).__mock.pageRole = true; });
   await selectOnly(page, "222");
+  // v0.32.0: сначала сухой прогон — он не должен оставить «PBIA нет» боевому заливу.
+  await setDryRun(page, true);
+  // Конец сухого прогона — итог в плашке (строка «DRY ad 1/1» раньше: после неё ещё пауза,
+  // и следующий клик попадал в идущий прогон как STOP).
+  const r5dry = await launch(page, { done: /ads created \(/ });
+  const callsDry = await page.evaluate(() => (window as any).__mock.pbiaCalls.slice());
+  check("5. dry run created no PBIA", !callsDry.some((c: any) => c.method === "POST"), JSON.stringify(callsDry));
+  await setDryRun(page, false);
   const r5 = await launch(page);
   const PBIA_NEW = "17841499999999999";
   const calls5 = await page.evaluate(() => (window as any).__mock.pbiaCalls);
-  check("5. page token obtained", r5.log.includes("page token ✓"));
+  check("5. page token obtained", (r5dry.preLog + r5dry.log + r5.preLog + r5.log).includes("page token ✓"));
+  check("5. real launch after the dry run created the PBIA", r5.log.includes("PBIA POST created"),
+    r5.log.includes("PBIA POST created") ? "" : r5.log.split("\n").filter((l) => /PBIA|IG|DRY|token/.test(l)).slice(0, 12).join(" | "));
   check("5. PBIA GET+POST went with the page token", calls5.length >= 2 && calls5.every((c: any) => c.pageToken),
     JSON.stringify(calls5));
   check("5. Cab B: creative sent with the new PBIA", await page.evaluate((ig) =>
     (window as any).__mock.sentIg.some((s: any) => s.acc === "222" && s.ig === ig), PBIA_NEW));
   check("5. Cab B: summary says IG attached", /📷 Instagram прикреплён: Cab B → 17841499999999999/.test(r5.log));
+
+  // ── 6. v0.32.0: LAUNCH, пока поиск IG после выбора страницы ещё идёт → ждёт его, IG прикреплён ──
+  await page.evaluate(() => localStorage.removeItem("fbl_ig_by_page_v1"));
+  await openPanel(page);
+  await selectOnly(page, "111");
+  await new Promise((r) => setTimeout(r, 2500));   // pixel/page lookups of the toggle settle
+  const sent6 = await page.evaluate(() => (window as any).__mock.sentIg.length);
+  await page.evaluate((pid) => {
+    const el = document.getElementById("fbl-page-id") as HTMLInputElement;
+    el.value = pid;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }, PAGE_ID);
+  const r6 = await launch(page);
+  const sentNow = await page.evaluate((n) => (window as any).__mock.sentIg.slice(n), sent6);
+  check("6. launch joined the lookup in flight", r6.log.includes("ещё ищется (выбор страницы) — жду"));
+  check("6. Cab A: creative waited for the lookup and went with IG", sentNow.some((s: any) => s.acc === "111" && s.ig === IG),
+    JSON.stringify(sentNow));
+  check("6. Cab A: summary says IG attached", /📷 Instagram прикреплён: Cab A/.test(r6.log));
 } catch (e: any) {
   check("run", false, e.message);
 }
