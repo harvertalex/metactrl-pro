@@ -233,6 +233,31 @@ CONFIG.MAX_RETRIES = 5;             // макс 5 попыток перед сд
 
 ---
 
+## 🎯 Targeting — ограничения уровня кабинета (с 21.10.2026, v25.14)
+
+Вкладка после «🔎 Accounts». Пишет `act_X/account_controls` (AdAccountBusinessConstraints): мин. возраст,
+гео, исключённые гео, исключённые плейсменты — FB применяет их ко **всем** кампаниям каба, включая запущенные.
+Идея из [FBTargetingManager](https://github.com/dvygolov/FBTargetingManager) (Yellow Web, `UNLICENSED` —
+код не брали, реализация своя: `mountTargeting` + хелперы `tg*` в `bookmarklet.js`).
+
+| Что | Как устроено |
+|---|---|
+| Чтение | `me/adaccounts` → Batch API по 50 кабов `GET act_X/account_controls` (без `fields` — так отдаёт всё, вкл. недокументированный `is_age_restriction_enabled`). Ленивое: сеть только при первом открытии вкладки |
+| Запись | Batch по 50 `POST act_X/account_controls`: текущее состояние + правки формы (нетронутое уходит как было). Тело: `audience_controls`, `placement_controls`, `is_age_restriction_enabled`, `is_gender_exclusion_enabled` |
+| Batch упал | `S.noBatch` → дальше поштучно через `API.get/post` |
+| Гео | страна `US`, регион — числовой key FB (`533` или `CA:533` = Онтарио). Исключение гео: добавить / заменить / снять |
+| Плейсменты | AN, AN-R, AN-IS (`audience_network_instream_video` — есть в доке FB, нет у FBTM), MP, RHC. Справка FB местами пишет `facebook_rhc` — читаем как алиас |
+| Защиты | каб с непрочитанным состоянием не пишется (запись вслепую затёрла бы его ограничения — у FBTM эта дыра есть); `confirm()` со сводкой; после записи перечитывает и сверяет — «FB ответил ok, но не поставил X» уходит в журнал и статус «⚠ частично» |
+
+POST создаёт новый объект ограничений целиком (update/delete на ноде FB нет), поэтому «снять» = отправить
+состояние без поля. Как FB ведёт себя на снятии исключённых гео — проверено только на заглушке; сверка после
+записи покажет, если не снялось.
+
+Тест: `bun code/metactrl-pro/_visual-test/test-targeting.ts` — заглушка Graph с памятью (`harness-targeting.html`):
+5 кабов, каб без доступа, каб где FB «теряет» исключение гео, отключённый каб; 14 проверок + скрины `tgt-*.png`.
+
+**Первая вкладка при открытии панели — 🔎 Accounts** (с v25.14; была Autorules) — `boot()` → `ui.setTab('insp')`.
+
 ## Оформление — тема TradingView (с 06.09.2026)
 
 MetaCtrl PRO (v25.1) и MetaLaunch PRO (v0.28.0) больше не держат собственную
@@ -327,3 +352,4 @@ grep -o "var B64 = '[^']*'" code/metactrl-pro/install-page.html | wc -c
 |--------|------|----------------|
 | 1.0 | 2026-04-08 | Первичный деплой на tessa-bot. Авторулы, column presets, analytics, inspector. B64: 220552 |
 | | | Улучшены правила на клики: спенд × 2. Улучшены правила на лиды/регистрации: спенд × 1.5 |
+| 25.14 | 2026-10-21 | Вкладка 🎯 Targeting (account_controls по многим кабам через Batch); панель открывается на 🔎 Accounts |

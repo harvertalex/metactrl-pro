@@ -57,6 +57,10 @@ const layout = await page.evaluate(() => {
 });
 console.log("LAYOUT:", JSON.stringify(layout));
 
+// v25.14: the panel opens on 🔎 Accounts — switch to Autorules explicitly.
+await page.click("#tab-ar");
+await new Promise((r) => setTimeout(r, 300));
+
 await panel.screenshot({ path: resolve(dir, "panel-top.png") });
 
 // Scroll the AR tab content to the bottom to capture the Generate Rules / TARGET ACCOUNTS area.

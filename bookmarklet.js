@@ -33,6 +33,9 @@
    ========================================================= */
 
 /* -------------------- CONFIG -------------------- */
+// v25.14 — 🎯 Targeting tab: account-level controls (act_X/account_controls) — min age, geo, excluded geo,
+//          excluded placements on many accounts at once via Batch API, re-read + verify after write.
+//          Panel opens on 🔎 Accounts instead of Autorules.
 // v25.13 — Graph API version unified: CONFIG.VERSION is now the single source for every
 //          Graph call (was v19.0/v22.0/v23.0 mixed across 4 scopes; v19.0 sunset 2026-05-21
 //          silently killed the BM invite flow). One line to move all calls to a new version.
@@ -73,7 +76,7 @@
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v23.0',   // single source for ALL Graph calls — see v25.13 note above
-  APP_VERSION: 'v25.13',
+  APP_VERSION: 'v25.14',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -789,6 +792,7 @@ function makeModal() {
       <button id="tab-anl"   class="ar-tab">📊 Analytics</button>
       <button id="tab-met"   class="ar-tab">📐 Custom Metrics</button>
       <button id="tab-insp"  class="ar-tab">🔎 Accounts</button>
+      <button id="tab-tgt"   class="ar-tab">🎯 Targeting</button>
       <button id="tab-px"    class="ar-tab">🔗 Pixel Manager</button>
       <button id="tab-ops"   class="ar-tab">🛠 Ops</button>
       <button id="tab-links" class="ar-tab">🌐 Links</button>
@@ -808,6 +812,7 @@ function makeModal() {
   const anl   = document.createElement('div'); anl.id   = 'ar-anl';
   const met   = document.createElement('div'); met.id   = 'ar-met';
   const insp  = document.createElement('div'); insp.id  = 'ar-insp';
+  const tgt   = document.createElement('div'); tgt.id   = 'ar-tgt';
   const px    = document.createElement('div'); px.id    = 'ar-px';
   const ops   = document.createElement('div'); ops.id   = 'ar-ops';
   const links = document.createElement('div'); links.id = 'ar-links';
@@ -816,6 +821,7 @@ function makeModal() {
   scroll.appendChild(anl);
   scroll.appendChild(met);
   scroll.appendChild(insp);
+  scroll.appendChild(tgt);
   scroll.appendChild(px);
   scroll.appendChild(ops);
   scroll.appendChild(links);
@@ -839,6 +845,7 @@ function makeModal() {
   wrap.querySelector('#tab-col').onclick     = () => { setTab('col'); };
   wrap.querySelector('#tab-anl').onclick     = () => { setTab('anl'); };
   wrap.querySelector('#tab-insp').onclick    = () => { setTab('insp'); };
+  wrap.querySelector('#tab-tgt').onclick     = () => { setTab('tgt'); };
   wrap.querySelector('#tab-met').onclick     = () => { setTab('met'); };
   wrap.querySelector('#tab-px').onclick      = () => { setTab('px'); };
   wrap.querySelector('#tab-ops').onclick     = () => { setTab('ops'); };
@@ -850,6 +857,7 @@ function makeModal() {
     anl.style.display   = t === 'anl'   ? 'block' : 'none';
     met.style.display   = t === 'met'   ? 'block' : 'none';
     insp.style.display  = t === 'insp'  ? 'block' : 'none';
+    tgt.style.display   = t === 'tgt'   ? 'block' : 'none';
     px.style.display    = t === 'px'    ? 'block' : 'none';
     ops.style.display   = t === 'ops'   ? 'block' : 'none';
     links.style.display = t === 'links' ? 'block' : 'none';
@@ -859,11 +867,13 @@ function makeModal() {
     wrap.querySelector('#tab-met').classList.toggle('active',   t === 'met');
     if (t === 'met' && met.__cmInit) met.__cmInit();   // lazy: fetch existing metrics only on first open
     wrap.querySelector('#tab-insp').classList.toggle('active',  t === 'insp');
+    wrap.querySelector('#tab-tgt').classList.toggle('active',   t === 'tgt');
+    if (t === 'tgt' && tgt.__tgInit) tgt.__tgInit();   // lazy: read account controls only on first open
     wrap.querySelector('#tab-px').classList.toggle('active',    t === 'px');
     wrap.querySelector('#tab-ops').classList.toggle('active',   t === 'ops');
     wrap.querySelector('#tab-links').classList.toggle('active', t === 'links');
   }
-  return { wrap, ar, col, anl, met, insp, px, ops, links, setTab };
+  return { wrap, ar, col, anl, met, insp, tgt, px, ops, links, setTab };
 }
 
 
@@ -5120,6 +5130,539 @@ function getCurrentActId() {
 
 }
 
+/* -------------------- UI: TARGETING (account controls) -------------------- */
+// v25.14 — ограничения уровня кабинета (act_X/account_controls): мин. возраст, гео, исключённые гео и
+// плейсменты — на всех кампаниях каба разом, включая уже запущенные. Читает и пишет пачками Batch API
+// (50 кабов = 1 запрос); batch не прошёл — по одному. Идея — FBTargetingManager (Yellow Web), реализация своя:
+// + исключение гео (регион Онтарио = 533), + AN in-stream, каб с непрочитанным состоянием не пишется вслепую,
+// после записи перечитывает и сверяет, что FB действительно поставил.
+const TG_PLACEMENTS = [
+  { id: 'audience_network_classic',        code: 'AN',    name: 'Audience Network: native, banner, interstitial' },
+  { id: 'audience_network_rewarded_video', code: 'AN-R',  name: 'Audience Network: rewarded video' },
+  { id: 'audience_network_instream_video', code: 'AN-IS', name: 'Audience Network: in-stream video' },
+  { id: 'facebook_marketplace',            code: 'MP',    name: 'Facebook Marketplace' },
+  { id: 'facebook_right_hand_column',      code: 'RHC',   name: 'Facebook: правая колонка' },
+];
+const TG_PL_ALIAS = { facebook_rhc: 'facebook_right_hand_column' }; // в справке FB поле читается и так
+const TG_CTRL_STATUS = { APPLICATION_IN_PROGRESS: 'применяется…', WITH_CAMPAIGN_ERROR: 'ошибки в кампаниях' };
+const TG_ACC_STATUS = { 1: 'ACTIVE', 2: 'DISABLED', 3: 'UNSETTLED', 7: 'PENDING_RISK_REVIEW', 8: 'PENDING_SETTLEMENT', 9: 'IN_GRACE_PERIOD', 100: 'PENDING_CLOSURE', 101: 'CLOSED' };
+const TG_LOC_TYPES = ['home', 'recent'];
+
+function tgParseGeo(text) {
+  const countries = [], regions = [], bad = [];
+  String(text || '').split(/[\s,;]+/).filter(Boolean).forEach(tok => {
+    const t = tok.toUpperCase();
+    const m = t.match(/^(?:[A-Z]{2}:)?(\d+)$/);
+    if (/^[A-Z]{2}$/.test(t)) { if (!countries.includes(t)) countries.push(t); }
+    else if (m) { if (!regions.includes(m[1])) regions.push(m[1]); }
+    else bad.push(tok);
+  });
+  return { countries, regions, bad };
+}
+const tgGeoList = p => [...p.countries, ...p.regions.map(k => '#' + k)].join(', ');
+
+function tgGeoParts(g) {
+  if (!g) return [];
+  const out = [...(g.countries || [])];
+  (g.regions || []).forEach(r => out.push(r.name ? r.name + (r.country ? ` (${r.country})` : '') : '#' + r.key));
+  (g.country_groups || []).filter(x => x !== 'worldwide').forEach(x => out.push(x));
+  ['cities', 'zips', 'geo_markets', 'electoral_districts'].forEach(k => { if (g[k]?.length) out.push(`${k} ×${g[k].length}`); });
+  return out;
+}
+const tgIsWorldwide = g => !g || (g.country_groups || []).includes('worldwide') || !tgGeoParts(g).length;
+const tgKeys = list => (list || []).map(r => String(r.key));
+const tgSameSet = (a, b) => a.length === b.length && a.every(x => b.includes(x));
+
+function tgNorm(raw) {
+  raw = raw || {};
+  const ac = raw.audience_controls || {};
+  const ageOn = raw.is_age_restriction_enabled != null ? String(raw.is_age_restriction_enabled) === 'true' : !!ac.age_min;
+  return {
+    ac, ageOn,
+    ageMin: ageOn ? (ac.age_min || null) : null,
+    genderOn: String(raw.is_gender_exclusion_enabled) === 'true',
+    geo: ac.geo_locations || null,
+    exGeo: ac.excluded_geo_locations || null,
+    exclusions: [...new Set(((raw.placement_controls || {}).placement_exclusions || [])
+      .map(p => String(p).toLowerCase()).map(p => TG_PL_ALIAS[p] || p))],
+    status: raw.status || null,
+    errCampaigns: (raw.campaigns_with_error || []).length,
+  };
+}
+const tgHasAny = c => !!c && !c.error && (c.ageOn || !tgIsWorldwide(c.geo) || tgGeoParts(c.exGeo).length > 0 || c.exclusions.length > 0);
+
+// Новый объект ограничений = текущий + правки: то, что форма не трогает, уходит обратно как было.
+function tgBody(cur, ops) {
+  const ac = JSON.parse(JSON.stringify(cur.ac || {}));
+  if (!ac.geo_locations) ac.geo_locations = { country_groups: ['worldwide'], location_types: TG_LOC_TYPES };
+
+  let ageOn = cur.ageOn;
+  if (ops.age.mode === 'set') { ac.age_min = ops.age.value; ageOn = true; }
+  else if (ops.age.mode === 'clear') { delete ac.age_min; ageOn = false; }
+  else if (!ageOn) delete ac.age_min;
+
+  if (ops.geo.mode === 'set') {
+    ac.geo_locations = { location_types: TG_LOC_TYPES };
+    if (ops.geo.p.countries.length) ac.geo_locations.countries = ops.geo.p.countries;
+    if (ops.geo.p.regions.length) ac.geo_locations.regions = ops.geo.p.regions.map(key => ({ key }));
+  } else if (ops.geo.mode === 'worldwide') {
+    ac.geo_locations = { country_groups: ['worldwide'], location_types: TG_LOC_TYPES };
+  }
+
+  if (ops.exGeo.mode !== 'keep') {
+    const prev = ac.excluded_geo_locations || {};
+    const add = ops.exGeo.mode === 'add';
+    const ex = add ? { ...prev } : {};
+    const countries = add ? [...(prev.countries || [])] : [];
+    const regions = add ? tgKeys(prev.regions) : [];
+    if (ops.exGeo.mode !== 'clear') {
+      ops.exGeo.p.countries.forEach(c => { if (!countries.includes(c)) countries.push(c); });
+      ops.exGeo.p.regions.forEach(k => { if (!regions.includes(k)) regions.push(k); });
+    }
+    delete ex.countries; delete ex.regions;
+    if (countries.length) ex.countries = countries;
+    if (regions.length) ex.regions = regions.map(key => ({ key }));
+    if (Object.keys(ex).length) ac.excluded_geo_locations = ex; else delete ac.excluded_geo_locations;
+  }
+
+  const excl = new Set(cur.exclusions);
+  TG_PLACEMENTS.forEach(p => {
+    if (ops.placements[p.id] === 'exclude') excl.add(p.id);
+    if (ops.placements[p.id] === 'allow') excl.delete(p.id);
+  });
+
+  return {
+    audience_controls: JSON.stringify(ac),
+    placement_controls: JSON.stringify({ placement_exclusions: [...excl] }),
+    is_age_restriction_enabled: String(ageOn),
+    is_gender_exclusion_enabled: String(cur.genderOn),
+  };
+}
+
+// Что из заказанного FB не поставил — по свежему чтению.
+function tgVerify(ops, c) {
+  if (!c || c.error) return ['не перечитала'];
+  const miss = [];
+  if (ops.age.mode === 'set' && !(c.ageOn && +c.ageMin === ops.age.value)) miss.push('возраст');
+  if (ops.age.mode === 'clear' && c.ageOn) miss.push('возраст');
+  if (ops.geo.mode === 'set' && !(tgSameSet(c.geo?.countries || [], ops.geo.p.countries) && tgSameSet(tgKeys(c.geo?.regions), ops.geo.p.regions))) miss.push('гео');
+  if (ops.geo.mode === 'worldwide' && !tgIsWorldwide(c.geo)) miss.push('гео');
+  const ec = c.exGeo?.countries || [], er = tgKeys(c.exGeo?.regions);
+  const p = ops.exGeo.p;
+  if (ops.exGeo.mode === 'add' && !(p.countries.every(x => ec.includes(x)) && p.regions.every(x => er.includes(x)))) miss.push('исключение гео');
+  if (ops.exGeo.mode === 'replace' && !(tgSameSet(ec, p.countries) && tgSameSet(er, p.regions))) miss.push('исключение гео');
+  if (ops.exGeo.mode === 'clear' && (ec.length || er.length)) miss.push('исключение гео');
+  TG_PLACEMENTS.forEach(pl => {
+    const op = ops.placements[pl.id], has = c.exclusions.includes(pl.id);
+    if ((op === 'exclude' && !has) || (op === 'allow' && has)) miss.push(pl.code);
+  });
+  return miss;
+}
+
+function mountTargeting(container) {
+  container.innerHTML = '';
+  const log = (m, t = 'info') => STATUS.log(m, t);
+  const LS_ACTIVE = 'mc_tg_active';
+  const S = {
+    accounts: [], controls: {}, results: {}, selected: new Set(), query: '', busy: false, noBatch: false,
+    onlyActive: (() => { try { return localStorage.getItem(LS_ACTIVE) === '1'; } catch { return false; } })(),
+  };
+
+  if (!document.getElementById('tgt-style')) {
+    const st = document.createElement('style');
+    st.id = 'tgt-style';
+    st.textContent = `
+      #ar-tgt .tgt-bar { display:flex; gap:8px; align-items:center; margin:10px 0 6px; }
+      #ar-tgt .tgt-bar input[type=search] { flex:1; width:auto; }
+      #ar-tgt label.tgt-check { display:flex; gap:6px; align-items:center; font-size:12px; color:var(--text-dim); white-space:nowrap; cursor:pointer; }
+      #ar-tgt .tgt-state { font-size:11px; color:var(--text-faint); min-height:16px; margin-bottom:4px; }
+      #ar-tgt .tgt-scroll { max-height:44vh; overflow:auto; border:1px solid var(--border); border-radius:var(--r); }
+      #ar-tgt table { width:100%; border-collapse:collapse; font-size:12px; table-layout:fixed; }
+      #ar-tgt th { position:sticky; top:0; z-index:1; background:var(--bg); color:var(--text-faint); font-weight:400; font-size:11px; text-align:left; padding:6px 8px; border-bottom:1px solid var(--border); white-space:nowrap; }
+      #ar-tgt td { padding:5px 8px; border-bottom:1px solid var(--border-soft); vertical-align:middle; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text); }
+      #ar-tgt td.tgt-st { white-space:normal; font-size:11px; line-height:1.3; }
+      #ar-tgt tbody tr { cursor:pointer; }
+      #ar-tgt tbody tr:hover td { background:var(--surface); }
+      #ar-tgt tbody tr.sel td { background:var(--accent-bg); }
+      #ar-tgt .tgt-acc { font-weight:600; overflow:hidden; text-overflow:ellipsis; }
+      #ar-tgt .tgt-id { font-size:10.5px; color:var(--text-faint); overflow:hidden; text-overflow:ellipsis; }
+      #ar-tgt .tgt-dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:5px; vertical-align:middle; }
+      #ar-tgt .tgt-tag { display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; vertical-align:middle; padding:1px 7px; border-radius:var(--r-sm); background:var(--accent-bg); color:var(--text); font-size:11px; }
+      #ar-tgt .tgt-tag.ex, #ar-tgt .tgt-pl { background:var(--crit-bg); color:var(--crit); }
+      #ar-tgt .tgt-pl { display:inline-block; padding:1px 5px; margin-right:3px; border-radius:var(--r-sm); font-size:10px; font-weight:700; }
+      #ar-tgt .tgt-none { color:var(--text-faint); }
+      #ar-tgt .tgt-ok { color:var(--good); } #ar-tgt .tgt-err { color:var(--crit); } #ar-tgt .tgt-warn { color:var(--warn); }
+      #ar-tgt .tgt-edit { margin-top:12px; padding:12px 14px; border:1px solid var(--border); border-radius:var(--r); background:var(--surface); }
+      #ar-tgt .tgt-edit-hd { display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:12px; font-weight:600; color:var(--text); }
+      #ar-tgt .tgt-grid { display:grid; grid-template-columns:110px 1fr; gap:8px 12px; align-items:center; }
+      #ar-tgt .tgt-grid > label { font-size:12px; color:var(--text-dim); }
+      #ar-tgt .tgt-row { display:flex; gap:8px; align-items:center; }
+      #ar-tgt .tgt-row select { width:170px; flex-shrink:0; }
+      #ar-tgt .tgt-row input { flex:1; width:auto; min-width:0; }
+      #ar-tgt .tgt-row input[type=number] { flex:0 0 72px; }
+      #ar-tgt .tgt-row input:disabled { opacity:.45; }
+      #ar-tgt .tgt-chips { display:flex; gap:6px; flex-wrap:wrap; }
+      #ar-tgt .tgt-chip { min-width:52px; height:26px; padding:0 8px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--bg); color:var(--text-dim); font-size:11px; font-weight:700; cursor:pointer; font-family:var(--font-ui); }
+      #ar-tgt .tgt-chip.exclude { background:var(--crit-bg); border-color:var(--crit); color:var(--crit); }
+      #ar-tgt .tgt-chip.allow { background:var(--good-bg); border-color:var(--good); color:var(--good); }
+      #ar-tgt .tgt-hint { font-size:11px; color:var(--text-faint); margin-top:10px; line-height:1.5; }
+      #ar-tgt .tgt-actions { display:flex; gap:8px; align-items:center; margin-top:12px; }
+    `;
+    document.head.appendChild(st);
+  }
+
+  const plChips = TG_PLACEMENTS.map(p =>
+    `<button class="tgt-chip" data-pl="${p.id}" data-state="keep" title="${escapeHtml(p.name)} — не трогать">${p.code}</button>`).join('');
+  container.innerHTML = `
+    <div class="ar-info" style="margin-top:12px">
+      <b>Account controls</b> — ограничения уровня кабинета: мин. возраст, гео, исключённые гео и плейсменты.
+      Действуют на <b>все</b> кампании каба, включая уже запущенные; адсет шире ограничения FB режет до него.
+      Пишутся в <code>act_X/account_controls</code>.
+    </div>
+    <div class="tgt-bar">
+      <input id="tgt-q" type="search" placeholder="Поиск по названию или ID">
+      <label class="tgt-check"><input id="tgt-active" type="checkbox"${S.onlyActive ? ' checked' : ''}> только активные</label>
+      <button id="tgt-reload" class="ar-btn ar-btn-ghost ar-btn-sm">⟲ Обновить</button>
+    </div>
+    <div id="tgt-state" class="tgt-state"></div>
+    <div class="tgt-scroll">
+      <table>
+        <colgroup><col style="width:30px"><col><col style="width:58px"><col style="width:112px"><col style="width:112px"><col style="width:120px"><col style="width:150px"></colgroup>
+        <thead><tr>
+          <th><input id="tgt-all" type="checkbox" title="Выбрать видимые"></th>
+          <th id="tgt-acc-hd">Кабинет</th><th>Возраст</th><th>Гео</th><th>Искл. гео</th><th>Искл. плейсменты</th><th>Статус</th>
+        </tr></thead>
+        <tbody id="tgt-body"></tbody>
+      </table>
+    </div>
+    <div class="tgt-edit">
+      <div class="tgt-edit-hd">Что поставить выбранным</div>
+      <div class="tgt-grid">
+        <label>Возраст</label>
+        <div class="tgt-row">
+          <select id="tgt-age-mode"><option value="keep">не трогать</option><option value="set">от … лет</option><option value="clear">снять</option></select>
+          <input id="tgt-age-val" type="number" min="18" max="65" value="18">
+        </div>
+        <label>Гео</label>
+        <div class="tgt-row">
+          <select id="tgt-geo-mode"><option value="keep">не трогать</option><option value="set">только эти</option><option value="worldwide">весь мир (снять)</option></select>
+          <input id="tgt-geo-val" type="text" placeholder="US, CA, 533">
+        </div>
+        <label>Исключить гео</label>
+        <div class="tgt-row">
+          <select id="tgt-ex-mode"><option value="keep">не трогать</option><option value="add">добавить</option><option value="replace">заменить на</option><option value="clear">снять все</option></select>
+          <input id="tgt-ex-val" type="text" placeholder="CA:533 (Онтарио)">
+        </div>
+        <label>Плейсменты</label>
+        <div class="tgt-chips">${plChips}</div>
+      </div>
+      <div class="tgt-hint">
+        Плейсмент — клик по кругу: не трогать → <span class="tgt-err">исключить</span> → <span class="tgt-ok">вернуть</span>.
+        Гео: страна — двумя буквами (US), регион — числовой key FB (Онтарио = 533, можно писать CA:533).
+      </div>
+      <div class="tgt-actions">
+        <button id="tgt-apply" class="ar-btn ar-btn-primary">Применить к выбранным (0)</button>
+        <button id="tgt-reset" class="ar-btn ar-btn-ghost ar-btn-sm">Сбросить форму</button>
+      </div>
+    </div>`;
+
+  const $ = sel => container.querySelector(sel);
+  const tbody = $('#tgt-body'), headCheck = $('#tgt-all'), stateEl = $('#tgt-state');
+  const btnApply = $('#tgt-apply'), btnReload = $('#tgt-reload');
+
+  const setState = (text, cls = '') => { stateEl.className = 'tgt-state' + (cls ? ' ' + cls : ''); stateEl.textContent = text; };
+  function setProgress(frac) {
+    const p = document.getElementById('ar-progress'), b = document.getElementById('ar-progress-bar');
+    if (!p || !b) return;
+    p.style.display = frac == null ? 'none' : 'block';
+    if (frac != null) b.style.width = Math.round(frac * 100) + '%';
+  }
+  function setBusy(on) {
+    S.busy = on;
+    btnApply.disabled = on; btnReload.disabled = on;
+    btnApply.textContent = on ? '⏳ Работаю…' : `Применить к выбранным (${S.selected.size})`;
+  }
+
+  /* --- API: Batch с откатом на поштучные вызовы --- */
+  async function batch(reqs) {
+    const t0 = performance.now();
+    let j = null;
+    try {
+      const res = await fetch(`${API.baseUrl}/`, {
+        ...API._baseOpts, method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ batch: JSON.stringify(reqs), include_headers: 'false', access_token: TOKEN }).toString()
+      });
+      j = await res.json();
+    } catch (e) { REQLOG('POST', `batch ×${reqs.length}`, false, performance.now() - t0, e.message); throw e; }
+    const ok = Array.isArray(j);
+    REQLOG('POST', `batch ×${reqs.length}`, ok, performance.now() - t0, j?.error?.message);
+    if (!ok) throw new Error(j?.error?.message || 'ответ batch не массив');
+    return j.map(it => { let body = null; try { body = JSON.parse(it?.body || 'null'); } catch {} return { code: it?.code || 0, body }; });
+  }
+  async function single(r) {
+    const j = r.method === 'GET'
+      ? await API.get(r.relative_url)
+      : await API.post(r.relative_url, Object.fromEntries(new URLSearchParams(r.body)));
+    return { code: j?.error ? 400 : 200, body: j };
+  }
+  async function run(reqs, onChunk) {
+    const out = [];
+    for (let i = 0; i < reqs.length; i += 50) {
+      const chunk = reqs.slice(i, i + 50);
+      let res = null;
+      if (!S.noBatch) {
+        try { res = await batch(chunk); }
+        catch (e) { S.noBatch = true; log(`Targeting: batch не прошёл (${e.message}) — дальше по одному запросу`, 'warning'); }
+      }
+      if (!res) {
+        res = [];
+        for (const r of chunk) {
+          try { res.push(await single(r)); } catch (e) { res.push({ code: 0, body: { error: { message: e.message } } }); }
+          await sleep(250);
+        }
+      }
+      out.push(...res);
+      onChunk?.(Math.min(i + 50, reqs.length), reqs.length);
+      if (i + 50 < reqs.length) await sleep(1200);
+    }
+    return out;
+  }
+  const errText = r => {
+    const e = r?.body?.error;
+    return (e && (e.error_user_msg || e.message)) || r?.body?.error_message || (r?.code ? 'HTTP ' + r.code : 'нет ответа');
+  };
+
+  async function loadAccounts() {
+    const items = [];
+    let page = await API.get('me/adaccounts', { fields: 'id,account_id,name,account_status', limit: 200 });
+    for (;;) {
+      if (page?.error) throw new Error(page.error.message);
+      items.push(...(page?.data || []));
+      if (!page?.paging?.next) break;
+      page = await API.get(page.paging.next);
+    }
+    return items.sort((a, b) => ((a.account_status === 1 ? 0 : 1) - (b.account_status === 1 ? 0 : 1)) || String(a.name).localeCompare(String(b.name)));
+  }
+  async function readControls(accs, label) {
+    const res = await run(accs.map(a => ({ method: 'GET', relative_url: `${a.id}/account_controls` })), (d, n) => {
+      setProgress(d / n); setState(`${label} ${d}/${n}…`); render();
+    });
+    accs.forEach((a, i) => {
+      const r = res[i];
+      S.controls[a.id] = r && r.code === 200 && r.body && !r.body.error ? tgNorm((r.body.data || [])[0]) : { error: errText(r) };
+    });
+  }
+
+  /* --- таблица --- */
+  const visible = () => {
+    const q = S.query.trim().toLowerCase();
+    return S.accounts.filter(a => (!S.onlyActive || a.account_status === 1)
+      && (!q || String(a.name || '').toLowerCase().includes(q) || a.id.includes(q)));
+  };
+  const none = '<span class="tgt-none">—</span>';
+  const tag = (parts, cls = '') => parts.length
+    ? `<span class="tgt-tag${cls}" title="${escapeHtml(parts.join(', '))}">${escapeHtml(parts.join(', '))}</span>` : none;
+  function rowHtml(a) {
+    const c = S.controls[a.id], r = S.results[a.id];
+    const st = a.account_status;
+    const dot = st === 1 ? 'var(--good)' : (st === 2 || st === 101) ? 'var(--crit)' : 'var(--warn)';
+    const acc = `<div class="tgt-acc"><span class="tgt-dot" style="background:${dot}" title="${TG_ACC_STATUS[st] || st}"></span>${escapeHtml(a.name || a.id)}</div><div class="tgt-id">${a.id} · ${TG_ACC_STATUS[st] || st}</div>`;
+    let age = none, geo = none, ex = none, pl = none, status = '';
+    if (!c) { age = geo = ex = pl = '<span class="tgt-none">…</span>'; }
+    else if (c.error) { status = `<span class="tgt-warn" title="${escapeHtml(c.error)}">⚠ не прочитала</span>`; age = geo = ex = pl = ''; }
+    else {
+      if (c.ageOn && c.ageMin) age = tag([c.ageMin + '+']);
+      if (!tgIsWorldwide(c.geo)) geo = tag(tgGeoParts(c.geo));
+      ex = tag(tgGeoParts(c.exGeo), ' ex');
+      if (c.exclusions.length) pl = c.exclusions.map(id => {
+        const p = TG_PLACEMENTS.find(x => x.id === id);
+        return `<span class="tgt-pl" title="${escapeHtml(p ? p.name : id)}">${escapeHtml(p ? p.code : id)}</span>`;
+      }).join('');
+      status = TG_CTRL_STATUS[c.status]
+        ? `<span class="tgt-warn" title="${c.errCampaigns ? 'кампаний с ошибкой: ' + c.errCampaigns : ''}">${TG_CTRL_STATUS[c.status]}</span>` : '';
+    }
+    if (r) status = r.ok
+      ? `<span class="${r.miss?.length ? 'tgt-warn' : 'tgt-ok'}" title="${escapeHtml(r.miss?.length ? 'FB не поставил: ' + r.miss.join(', ') : 'записано и перепроверено')}">${r.miss?.length ? '⚠ частично' : '✓ записано'}</span>`
+      : `<span class="tgt-err" title="${escapeHtml(r.msg || '')}">✗ ${escapeHtml(r.msg || 'ошибка')}</span>`;
+    return `<tr data-id="${a.id}"${S.selected.has(a.id) ? ' class="sel"' : ''}>
+      <td><input type="checkbox" data-id="${a.id}"${S.selected.has(a.id) ? ' checked' : ''}></td>
+      <td>${acc}</td><td>${age}</td><td>${geo}</td><td>${ex}</td><td>${pl}</td><td class="tgt-st">${status}</td></tr>`;
+  }
+  function render() {
+    const list = visible();
+    tbody.innerHTML = list.length ? list.map(rowHtml).join('')
+      : `<tr><td colspan="7" class="tgt-none" style="text-align:center;padding:18px">${S.busy && !S.accounts.length ? 'Загружаю кабинеты…' : 'Кабинетов не нашла'}</td></tr>`;
+    const sel = list.filter(a => S.selected.has(a.id)).length;
+    headCheck.checked = list.length > 0 && sel === list.length;
+    headCheck.indeterminate = sel > 0 && sel < list.length;
+    $('#tgt-acc-hd').textContent = `Кабинет · ${S.selected.size ? S.selected.size + '/' : ''}${S.accounts.length}`;
+    if (!S.busy) btnApply.textContent = `Применить к выбранным (${S.selected.size})`;
+  }
+
+  /* --- форма --- */
+  function syncInputs() {
+    $('#tgt-age-val').disabled = $('#tgt-age-mode').value !== 'set';
+    $('#tgt-geo-val').disabled = $('#tgt-geo-mode').value !== 'set';
+    $('#tgt-ex-val').disabled = !['add', 'replace'].includes($('#tgt-ex-mode').value);
+  }
+  function setChip(chip, state) {
+    const p = TG_PLACEMENTS.find(x => x.id === chip.dataset.pl);
+    chip.dataset.state = state;
+    chip.className = 'tgt-chip' + (state === 'keep' ? '' : ' ' + state);
+    chip.title = `${p.name} — ${{ keep: 'не трогать', exclude: 'исключить', allow: 'вернуть' }[state]}`;
+  }
+  function collect() {
+    const errors = [], summary = [];
+    const ageMode = $('#tgt-age-mode').value, ageVal = parseInt($('#tgt-age-val').value, 10);
+    if (ageMode === 'set') { if (ageVal >= 18 && ageVal <= 65) summary.push(`возраст ${ageVal}+`); else errors.push('возраст — от 18 до 65'); }
+    if (ageMode === 'clear') summary.push('возраст: снять');
+
+    const geoMode = $('#tgt-geo-mode').value, geoP = tgParseGeo($('#tgt-geo-val').value);
+    if (geoMode === 'set') {
+      if (geoP.bad.length) errors.push('гео: не разобрала ' + geoP.bad.join(', '));
+      else if (!geoP.countries.length && !geoP.regions.length) errors.push('гео: впиши страны (US) или регионы (533)');
+      else summary.push('гео: только ' + tgGeoList(geoP));
+    }
+    if (geoMode === 'worldwide') summary.push('гео: весь мир');
+
+    const exMode = $('#tgt-ex-mode').value, exP = tgParseGeo($('#tgt-ex-val').value);
+    if (exMode === 'add' || exMode === 'replace') {
+      if (exP.bad.length) errors.push('исключить гео: не разобрала ' + exP.bad.join(', '));
+      else if (!exP.countries.length && !exP.regions.length) errors.push('исключить гео: пусто');
+      else summary.push(`исключить гео: ${exMode === 'add' ? '+ ' : '= '}${tgGeoList(exP)}`);
+    }
+    if (exMode === 'clear') summary.push('исключения гео: снять все');
+
+    const placements = {}, plText = [];
+    container.querySelectorAll('.tgt-chip').forEach(ch => {
+      placements[ch.dataset.pl] = ch.dataset.state;
+      const p = TG_PLACEMENTS.find(x => x.id === ch.dataset.pl);
+      if (ch.dataset.state === 'exclude') plText.push('−' + p.code);
+      if (ch.dataset.state === 'allow') plText.push('+' + p.code);
+    });
+    if (plText.length) summary.push('плейсменты: ' + plText.join(' '));
+
+    return { age: { mode: ageMode, value: ageVal }, geo: { mode: geoMode, p: geoP }, exGeo: { mode: exMode, p: exP }, placements, errors, summary };
+  }
+
+  /* --- действия --- */
+  async function reload() {
+    if (S.busy) return;
+    setBusy(true);
+    S.accounts = []; S.controls = {}; S.results = {};
+    render();
+    try {
+      setState('Загружаю кабинеты…');
+      S.accounts = await loadAccounts();
+      const ids = new Set(S.accounts.map(a => a.id));
+      [...S.selected].forEach(id => { if (!ids.has(id)) S.selected.delete(id); });
+      render();
+      if (!S.accounts.length) { setState('Кабинетов не нашла.'); return; }
+      await readControls(S.accounts, 'Читаю ограничения');
+      const bad = S.accounts.filter(a => S.controls[a.id]?.error).length;
+      const withAny = S.accounts.filter(a => tgHasAny(S.controls[a.id])).length;
+      setState(`${S.accounts.length} кабов · ограничения стоят на ${withAny}${bad ? ` · не прочитала ${bad}` : ''}`, bad ? 'tgt-warn' : '');
+      log(`Targeting: прочитала ${S.accounts.length - bad}/${S.accounts.length} кабов, ограничения стоят на ${withAny}.`, bad ? 'warning' : 'success');
+    } catch (e) {
+      setState('Ошибка: ' + e.message, 'tgt-err');
+      log('Targeting: ' + e.message, 'error');
+    } finally {
+      setProgress(null);
+      setBusy(false);
+      render();
+    }
+  }
+
+  async function apply() {
+    if (S.busy) return;
+    const ops = collect();
+    if (ops.errors.length) { log('Targeting: ' + ops.errors.join('; '), 'error'); setState(ops.errors.join('; '), 'tgt-err'); return; }
+    if (!ops.summary.length) { log('Targeting: в форме всё «не трогать» — применять нечего.', 'warning'); return; }
+    const chosen = S.accounts.filter(a => S.selected.has(a.id));
+    if (!chosen.length) { log('Targeting: отметь хотя бы один кабинет.', 'warning'); return; }
+    const unread = chosen.filter(a => !S.controls[a.id] || S.controls[a.id].error);
+    const targets = chosen.filter(a => S.controls[a.id] && !S.controls[a.id].error);
+    if (unread.length) log(`Targeting: пропускаю ${unread.length} каб. без прочитанного состояния — запись вслепую затёрла бы их текущие ограничения: ${unread.map(a => a.name || a.id).join(', ')}`, 'warning');
+    if (!targets.length) return;
+    if (!confirm(`Применить к ${targets.length} кабинетам:\n\n• ${ops.summary.join('\n• ')}\n\nОграничения кабинета действуют на ВСЕ его кампании, включая уже запущенные.`)) return;
+
+    setBusy(true);
+    log(`Targeting: пишу в ${targets.length} каб. — ${ops.summary.join(' · ')}`);
+    try {
+      const reqs = targets.map(a => ({ method: 'POST', relative_url: `${a.id}/account_controls`, body: new URLSearchParams(tgBody(S.controls[a.id], ops)).toString() }));
+      const res = await run(reqs, (d, n) => { setProgress(d / n); setState(`Пишу ${d}/${n}…`); });
+      const written = [];
+      targets.forEach((a, i) => {
+        const r = res[i];
+        const ok = !!r && r.code === 200 && !!r.body && !r.body.error && r.body.success !== false;
+        S.results[a.id] = ok ? { ok: true } : { ok: false, msg: errText(r) };
+        if (ok) written.push(a); else log(`✗ ${a.name || a.id}: ${errText(r)}`, 'error');
+      });
+      render();
+      if (written.length) {
+        setState('Перечитываю, что поставил FB…');
+        await sleep(1500);
+        await readControls(written, 'Перечитываю');
+        let partial = 0;
+        written.forEach(a => {
+          const miss = tgVerify(ops, S.controls[a.id]);
+          S.results[a.id].miss = miss;
+          if (miss.length) { partial++; log(`⚠ ${a.name || a.id}: FB ответил ok, но не поставил — ${miss.join(', ')}`, 'warning'); }
+        });
+        const full = written.length - partial;
+        log(`Targeting: записано ${full}/${targets.length}${partial ? `, частично ${partial}` : ''}${targets.length - written.length ? `, ошибок ${targets.length - written.length}` : ''}.`,
+          full === targets.length ? 'success' : 'warning');
+        setState(`Готово: записано ${full}/${targets.length}${partial ? ` · частично ${partial}` : ''}${targets.length - written.length ? ` · ошибок ${targets.length - written.length}` : ''}`,
+          full === targets.length ? 'tgt-ok' : 'tgt-warn');
+      } else {
+        setState(`Ни один каб не принял запись (${targets.length}) — причины в журнале.`, 'tgt-err');
+      }
+    } catch (e) {
+      setState('Ошибка: ' + e.message, 'tgt-err');
+      log('Targeting: ' + e.message, 'error');
+    } finally {
+      setProgress(null);
+      setBusy(false);
+      render();
+    }
+  }
+
+  /* --- обработчики --- */
+  $('#tgt-q').oninput = e => { S.query = e.target.value; render(); };
+  $('#tgt-active').onchange = e => {
+    S.onlyActive = e.target.checked;
+    try { localStorage.setItem(LS_ACTIVE, S.onlyActive ? '1' : '0'); } catch {}
+    render();
+  };
+  btnReload.onclick = reload;
+  btnApply.onclick = apply;
+  headCheck.onchange = e => { visible().forEach(a => e.target.checked ? S.selected.add(a.id) : S.selected.delete(a.id)); render(); };
+  tbody.onclick = e => {
+    const tr = e.target.closest('tr[data-id]');
+    if (!tr) return;
+    const id = tr.dataset.id;
+    S.selected.has(id) ? S.selected.delete(id) : S.selected.add(id);
+    render();
+  };
+  ['#tgt-age-mode', '#tgt-geo-mode', '#tgt-ex-mode'].forEach(s => { $(s).onchange = syncInputs; });
+  container.querySelectorAll('.tgt-chip').forEach(ch => {
+    ch.onclick = () => setChip(ch, { keep: 'exclude', exclude: 'allow', allow: 'keep' }[ch.dataset.state]);
+  });
+  $('#tgt-reset').onclick = () => {
+    ['#tgt-age-mode', '#tgt-geo-mode', '#tgt-ex-mode'].forEach(s => { $(s).value = 'keep'; });
+    $('#tgt-age-val').value = '18'; $('#tgt-geo-val').value = ''; $('#tgt-ex-val').value = '';
+    container.querySelectorAll('.tgt-chip').forEach(ch => setChip(ch, 'keep'));
+    syncInputs();
+  };
+  syncInputs();
+  render();
+
+  // Lazy: сеть только при первом открытии вкладки (setTab зовёт __tgInit).
+  let inited = false;
+  container.__tgInit = () => { if (inited) return; inited = true; reload(); };
+}
+
 /* -------------------- PIXEL MANAGER -------------------- */
 function mountPixelManager(container) {
   container.innerHTML = '';
@@ -6723,8 +7266,9 @@ function mountQuickLinks(container) {
     mountAnalytics(ui.anl);
     mountMetrics(ui.met);
     mountInspector(ui.insp);
+    mountTargeting(ui.tgt);
     mountPixelManager(ui.px);
-    ui.setTab('ar');
+    ui.setTab('insp');   // v25.14: first screen = Accounts (was Autorules)
   } else {
     const notice = `<div style="padding:40px;text-align:center;color:var(--muted)">
       <div style="font-size:32px;margin-bottom:12px">🔒</div>
@@ -6732,7 +7276,7 @@ function mountQuickLinks(container) {
       <div style="font-size:12px;line-height:1.6">This tab requires a Facebook access token.<br>
       Open <a href="https://adsmanager.facebook.com/adsmanager" target="_blank" style="color:var(--acc)">Ads Manager</a> and run the bookmarklet there.</div>
     </div>`;
-    [ui.ar, ui.col, ui.anl, ui.met, ui.insp, ui.px].forEach(el => { el.innerHTML = notice; });
+    [ui.ar, ui.col, ui.anl, ui.met, ui.insp, ui.tgt, ui.px].forEach(el => { el.innerHTML = notice; });
     ui.setTab('ops');
   }
 })();

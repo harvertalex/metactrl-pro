@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>MetaCtrl PRO — Targeting harness</title>
+<style>html,body{margin:0;padding:0;background:#0a0f14;width:100%;height:100%;overflow:hidden}</style>
+</head>
+<body>
+<script>
+  // Targeting tab test harness: fake Graph API with an in-memory account_controls store.
+  //   act_101 — already has 18+ / US / AN excluded
+  //   act_102 — clean
+  //   act_103 — FB "accepts" the write but drops excluded_geo_locations (verify must flag it)
+  //   act_104 — GET account_controls is denied (must be skipped on write)
+  //   act_105 — disabled account, POST rejected
+  var __accessToken = 'VISUAL_TEST_TOKEN';
+  window.alert = function () {};
+  window.confirm = function () { return true; };
+  window.__posts = [];
+
+  var ACCS = [
+    { id: 'act_101', account_id: '101', name: 'CA-gamb-01 VERT', account_status: 1 },
+    { id: 'act_102', account_id: '102', name: 'CA-gamb-02 VERT', account_status: 1 },
+    { id: 'act_103', account_id: '103', name: 'AU-gamb-03 farm', account_status: 1 },
+    { id: 'act_104', account_id: '104', name: 'DE-lead-04 no-access', account_status: 1 },
+    { id: 'act_105', account_id: '105', name: 'ES-old-05', account_status: 2 }
+  ];
+  var STORE = {
+    act_101: { audience_controls: { age_min: 18, geo_locations: { countries: ['US'], location_types: ['home', 'recent'] } },
+               placement_controls: { placement_exclusions: ['audience_network_classic'] }, is_age_restriction_enabled: true, status: 'ACTIVE' }
+  };
+  function json(o) { return Promise.resolve({ json: function () { return Promise.resolve(o); } }); }
+
+  function handle(method, rel, body) {
+    var m = rel.match(/^(act_\d+)\/account_controls/);
+    if (!m) return { code: 400, body: { error: { message: 'unexpected ' + rel } } };
+    var id = m[1];
+    if (method === 'GET') {
+      if (id === 'act_104') return { code: 403, body: { error: { code: 200, message: 'Permissions error' } } };
+      return { code: 200, body: { data: STORE[id] ? [STORE[id]] : [] } };
+    }
+    var p = new URLSearchParams(body);
+    window.__posts.push({ id: id, audience_controls: JSON.parse(p.get('audience_controls')), placement_controls: JSON.parse(p.get('placement_controls')),
+      is_age_restriction_enabled: p.get('is_age_restriction_enabled'), is_gender_exclusion_enabled: p.get('is_gender_exclusion_enabled') });
+    if (id === 'act_105') return { code: 400, body: { error: { code: 100, message: 'Ad account is disabled', error_user_msg: 'Кабинет отключён' } } };
+    var ac = JSON.parse(p.get('audience_controls'));
+    if (id === 'act_103') delete ac.excluded_geo_locations;
+    if (ac.excluded_geo_locations && ac.excluded_geo_locations.regions)
+      ac.excluded_geo_locations.regions = ac.excluded_geo_locations.regions.map(function (r) { return { key: r.key, name: r.key === '533' ? 'Ontario' : 'R' + r.key, country: 'CA' }; });
+    STORE[id] = { audience_controls: ac, placement_controls: JSON.parse(p.get('placement_controls')),
+      is_age_restriction_enabled: p.get('is_age_restriction_enabled') === 'true', status: 'APPLICATION_IN_PROGRESS' };
+    return { code: 200, body: { success: true } };
+  }
+
+  window.fetch = function (url, opts) {
+    url = String(url);
+    if (/\/me\/adaccounts/.test(url)) return json({ data: ACCS });
+    if (/\/v[\d.]+\/$/.test(url.split('?')[0]) && opts && opts.method === 'POST') {
+      var batch = JSON.parse(new URLSearchParams(opts.body).get('batch'));
+      return json(batch.map(function (r) { var res = handle(r.method, r.relative_url, r.body); return { code: res.code, body: JSON.stringify(res.body) }; }));
+    }
+    return new Promise(function () {});   // Inspector & the rest: never resolve, layout stays sync
+  };
+</script>
+<script src="../bookmarklet.js"></script>
+</body>
+</html>
