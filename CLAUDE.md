@@ -357,3 +357,8 @@ grep -o "var B64 = '[^']*'" code/metactrl-pro/install-page.html | wc -c
 | ML 0.32.0 | 2026-10-21 | MetaLaunch: Graph v26.0; ABO шлёт `is_adset_budget_sharing_enabled=false` (без него с v24 — ошибка 100/4834011, проверено validate_only на v23–v26); исправлены ключи штатов US (были сдвинуты на +3/+4); антидубль на любом потерянном ответе; деньги в минорных единицах валюты каба; статусы видео — Batch вместо `?ids=`; IG-поиск и PBIA-фолбэк без гонок и без привязки к языку FB |
 
 > ⚠️ **Корневой `GET /?ids=` у FB падает на ВСЕХ версиях с 27.10.2026** (Graph v26 changelog). В букмарклетах его больше нет — несколько объектов читать только через Batch API.
+
+## Связано
+
+- [[project_fb_oauth_server]] — fb-oauth — OAuth-сервер для делегированного доступа партнёров к FB Marketing API. Development Mode app, до 25 testers. Деплой на Tessa.
+- [[agents-registry]] — Реестр проектов и структура репозитория
