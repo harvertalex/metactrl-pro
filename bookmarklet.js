@@ -33,6 +33,10 @@
    ========================================================= */
 
 /* -------------------- CONFIG -------------------- */
+// v25.16 — 🔑 CAPI token block in Pixel Manager (single + bulk) and on the Events Manager page itself:
+//          reads the `EAA…ZDZD` session token from the pixel's Events Manager HTML (Yellow Web trick),
+//          masked view, Copy / Copy all, Check (debug_token + pixel read). Token is never stored or logged.
+//          Fix: Pixel Manager "Bulk mode" crashed with ReferenceError (ACC_STATUS was out of scope).
 // v25.15 — Graph v23.0 -> v25.0. Marketing API v23 expired 09.06.2026, v24 06.10.2026: FB already ran our v23
 //          calls under the oldest live version, so this pins the behaviour we actually get (probe 21.10: v23-v26 answer).
 // v25.14 — 🎯 Targeting tab: account-level controls (act_X/account_controls) — min age, geo, excluded geo,
@@ -78,7 +82,7 @@
 // v24.3 — de-clutter pass: drop per-section corner brackets (only ▸ section headers frame now), calm .ar-info/.ar-preset-btn resting borders (cyan marks active, not every box), teal-ify the Accounts/Inspector tab (was a navy island), fixed frame brackets via inner #ar-scroll wrapper (modal no longer scrolls itself). Skin only.
 const CONFIG = {
   VERSION: 'v25.0',   // single source for ALL Graph calls — see v25.13 note above
-  APP_VERSION: 'v25.15',
+  APP_VERSION: 'v25.16',
   HOST:    'https://adsmanager-graph.facebook.com',
   RATE_MS: 3000,          // delay between each rule POST (increased to avoid #17 on 5+ accounts)
   ACCOUNT_PAUSE_MS: 8000,       // extra pause between accounts
@@ -5678,6 +5682,8 @@ function mountPixelManager(container) {
   const GQL_CONNECTED  = { name: 'BizKitSettingsAssetToAssetConnectionListContainerQuery', docId: '25989701040671987' };
   const GQL_REMOVE     = { name: 'BizKitSettingsRemoveAssetToAssetConnectionMutation',     docId: '23922031614068524' };
   const AD_STATUSES    = ['ACTIVE','DISABLED','IN_GRACE_PERIOD','PENDING_CLOSURE','PENDING_RISK_REVIEW','PENDING_SETTLEMENT','UNSETTLED'];
+  /* v25.16: renderBulkMode reads ACC_STATUS, but the only one lived inside mountInspector -> Bulk mode threw ReferenceError as soon as a BM had accounts */
+  const ACC_STATUS     = { 1:'ACTIVE', 2:'DISABLED', 3:'UNSETTLED', 7:'PENDING_RISK_REVIEW', 8:'PENDING_SETTLEMENT', 9:'IN_GRACE_PERIOD', 100:'PENDING_CLOSURE', 101:'CLOSED' };
 
   /* mode: 'single' | 'bulk' */
   const pxState = {
@@ -6414,13 +6420,171 @@ function mountPixelManager(container) {
       });
     });
 
+    /* v25.16: token block lives outside render() (keeps its rows) — re-attach, refresh the "(N)" counter */
+    container.firstElementChild.appendChild(emHost);
+    emHost.__emRefresh();
   }
+
+  /* v25.16: CAPI token from Events Manager for the selected pixel (single) / ticked pixels (bulk) */
+  const emHost = document.createElement('div');
+  mountEmToken(emHost, {
+    getBizId:  () => pxState.businessId,
+    getPixels: () => {
+      const name = new Map(pxState.pixels.map(p => [p.id, p.name]));
+      const ids  = pxState.mode === 'bulk' ? [...pxState.bulkPixelIds] : (pxState.selectedPixelId ? [pxState.selectedPixelId] : []);
+      return ids.map(id => ({ id, name: name.get(id) || '' }));
+    },
+  });
 
   /* ---- Init ---- */
   const bizId = getBizId();
   pxState.businessId = bizId;
   render();
   if (bizId) { loadContext(bizId); } else { loadBusinessesOnly(); }
+}
+
+/* -------------------- EVENTS MANAGER TOKEN (CAPI) -------------------- */
+// v25.16 — CAPI token straight from the Events Manager page (Yellow Web trick, t.me/yellow_web/3762):
+// FB inlines a session token `EAA…ZDZD` into the Events Manager HTML, so a pixel without a BM
+// (no system-user token) still gets one. Same regex as the console one-liner
+//   document.documentElement.innerHTML.match(/EAA[A-Za-z0-9_-]{40,500}ZDZD/)[0]
+// Source order per pixel: the current page DOM (when we ARE on Events Manager) -> fetch of the pixel's
+// Events Manager page with the user's cookies. The token never leaves the browser: not stored, not logged
+// (REQLOG gets paths only), shown masked, copied on click. Check = debug_token + a pixel read, no writes.
+function mountEmToken(host, opts) {
+  opts = opts || {};
+  const RE   = /EAA[A-Za-z0-9_-]{40,500}ZDZD/;
+  const EM   = 'https://business.facebook.com/events_manager2/list/pixel/';
+  const onEm = /events_manager/.test(location.pathname);
+  const st   = { busy: false, stop: false, rows: [], note: '', copied: -1, copiedAll: false };
+
+  const pageId = () => (location.pathname.match(/\/(?:pixel|dataset)\/(\d+)/) || location.search.match(/[?&](?:selected_pixel_id|dataset_id|pixel_id)=(\d+)/) || [])[1] || '';
+  const mask   = t => t.slice(0, 8) + '…' + t.slice(-8) + ' (' + t.length + ')';
+
+  function targets() {
+    const list = (opts.getPixels ? opts.getPixels() : []).filter(p => p && p.id);
+    if (list.length) return list;
+    return onEm ? [{ id: pageId(), name: 'текущая страница' }] : [];
+  }
+
+  async function copy(text) {
+    try { await navigator.clipboard.writeText(text); return true; } catch {}
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.cssText = 'position:fixed;left:-9999px;opacity:0';
+      document.body.appendChild(ta); ta.select();
+      const ok = document.execCommand('copy'); ta.remove(); return ok;
+    } catch { return false; }
+  }
+
+  async function readToken(p) {
+    if (onEm && (!p.id || p.id === pageId())) {
+      const m = document.documentElement.innerHTML.match(RE);
+      if (m) return { token: m[0], via: 'page' };
+    }
+    if (!p.id) throw new Error('на странице токена нет, ID пикселя не определён');
+    const biz = opts.getBizId ? opts.getBizId() : '';
+    const t0 = performance.now();
+    const res = await fetch(EM + p.id + (biz ? '?business_id=' + biz : ''), { credentials: 'include' });
+    const html = await res.text();
+    REQLOG('GET', '/events_manager2/list/pixel/' + p.id, res.ok, performance.now() - t0, res.ok ? '' : 'HTTP ' + res.status);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const m = html.match(RE);
+    if (!m) throw new Error('в HTML страницы токена нет — открой Events Manager этого пикселя и запусти панель там');
+    return { token: m[0], via: 'fetch' };
+  }
+
+  async function run() {
+    const list = targets();
+    if (!list.length || st.busy) return;
+    st.busy = true; st.stop = false; st.rows = []; st.note = '';
+    render();
+    for (let i = 0; i < list.length && !st.stop; i++) {
+      const p = list[i];
+      st.note = 'Читаю ' + (i + 1) + '/' + list.length + '…'; render();
+      const row = { pixelId: p.id || '', name: p.name || '' };
+      try { Object.assign(row, await readToken(p)); } catch (e) { row.err = e.message || String(e); }
+      st.rows.push(row);
+      if (i < list.length - 1 && !st.stop) await sleep(1500);
+    }
+    const ok = st.rows.filter(r => r.token), uniq = new Set(ok.map(r => r.token)).size;
+    st.note = st.stop ? 'Остановлено.' : ok.length
+      ? 'Токенов: ' + ok.length + '/' + st.rows.length + (uniq === 1 && ok.length > 1 ? ' — один и тот же на все пиксели' : '') + '.'
+      : 'Токен не получен.';
+    st.busy = false; render();
+  }
+
+  async function check(i) {
+    const r = st.rows[i]; if (!r || !r.token) return;
+    r.chk = 'проверяю…'; render();
+    const g = async (path, params) => {
+      const u = new URL('https://graph.facebook.com/' + CONFIG.VERSION + '/' + path);
+      Object.entries(params).forEach(([k, v]) => u.searchParams.set(k, v));
+      u.searchParams.set('access_token', r.token);
+      const t0 = performance.now();
+      const j = await (await fetch(u)).json();   // no cookies on purpose: proves the token works on its own
+      REQLOG('GET', '/' + path, !j.error, performance.now() - t0, j.error && j.error.message);
+      return j;
+    };
+    try {
+      const d = (await g('debug_token', { input_token: r.token })).data || {};
+      const exp = d.expires_at ? new Date(d.expires_at * 1000).toLocaleString() : 'never';
+      let msg = (d.is_valid ? '✓ valid' : '✗ invalid') + ' · ' + (d.type || '?') + ' · expires: ' + exp
+        + ' · scopes: ' + ((d.scopes || []).length) + ((d.scopes || []).some(s => /ads_management|business_management/.test(s)) ? ' (ads/bm)' : '');
+      if (r.pixelId) { const px = await g(r.pixelId, { fields: 'id,name' }); msg += ' · pixel: ' + (px.error ? '✗ ' + px.error.message : '✓ read'); }
+      r.chk = msg;
+    } catch (e) { r.chk = '✗ ' + (e.message || e); }
+    render();
+  }
+
+  function render() {
+    const n = targets().length;
+    const rowsHtml = st.rows.map((r, i) => `
+      <div style="padding:7px 10px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;margin-bottom:5px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <div style="min-width:0">
+            <div style="font-size:12px;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(r.name || 'pixel')} <span style="color:var(--text-faint)">${escapeHtml(r.pixelId)}</span></div>
+            <div style="font-size:11px;font-family:var(--font-mono);color:${r.token ? 'var(--good)' : 'var(--crit)'}">${r.token ? escapeHtml(mask(r.token)) + ' · ' + r.via : '✗ ' + escapeHtml(r.err)}</div>
+            ${r.chk ? `<div style="font-size:11px;color:var(--text-faint);margin-top:2px">${escapeHtml(r.chk)}</div>` : ''}
+          </div>
+          ${r.token ? `<div style="display:flex;gap:5px;flex-shrink:0">
+            <button class="ar-btn ar-btn-ghost ar-btn-sm" data-em="copy" data-i="${i}">${st.copied === i ? '✓ Copied' : 'Copy'}</button>
+            <button class="ar-btn ar-btn-ghost ar-btn-sm" data-em="check" data-i="${i}">Check</button>
+          </div>` : ''}
+        </div>
+      </div>`).join('');
+    const anyTok = st.rows.some(r => r.token);
+    host.innerHTML = `
+      <div style="margin-top:14px;padding:10px 12px;background:var(--card);border:1px solid var(--bdr);border-radius:8px">
+        <div style="font-size:12px;font-weight:700;color:var(--txt);margin-bottom:4px">🔑 CAPI token — Events Manager</div>
+        <div style="font-size:11px;color:var(--text-faint);line-height:1.5;margin-bottom:8px">Токен сессии аккаунта (без BM). Падает при логауте, смене пароля, чекпойнте. Не отдавай сторонним сервисам.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:${rowsHtml || st.note ? 8 : 0}px">
+          <button class="ar-btn ar-btn-primary ar-btn-sm" data-em="run" ${n && !st.busy ? '' : 'disabled'}>${st.busy ? 'Читаю…' : '🔑 Get token' + (n ? ' (' + n + ')' : '')}</button>
+          ${st.busy ? '<button class="ar-btn ar-btn-ghost ar-btn-sm" data-em="stop">■ Stop</button>' : ''}
+          ${anyTok ? `<button class="ar-btn ar-btn-ghost ar-btn-sm" data-em="copyall">${st.copiedAll ? '✓ Copied' : '⧉ Copy all (pixel ⇥ token)'}</button>` : ''}
+        </div>
+        ${!n && !st.rows.length ? '<div style="font-size:11px;color:var(--text-faint)">Выбери пиксель выше — или открой Events Manager пикселя и запусти панель там.</div>' : ''}
+        ${rowsHtml}
+        ${st.note ? `<div style="font-size:11px;color:var(--text-faint)">${escapeHtml(st.note)}</div>` : ''}
+      </div>`;
+    host.querySelectorAll('[data-em]').forEach(el => el.addEventListener('click', async () => {
+      const a = el.getAttribute('data-em'), i = +el.getAttribute('data-i');
+      if (a === 'run')   run();
+      if (a === 'stop')  { st.stop = true; }
+      if (a === 'check') check(i);
+      if (a === 'copy' || a === 'copyall') {
+        const text = a === 'copy' ? st.rows[i].token : st.rows.filter(r => r.token).map(r => r.pixelId + '\t' + r.token).join('\n');
+        const ok = await copy(text);
+        st.copied = a === 'copy' && ok ? i : -1; st.copiedAll = a === 'copyall' && ok;
+        st.note = ok ? '' : 'Буфер обмена недоступен — токен не скопирован.';
+        render();
+        setTimeout(() => { st.copied = -1; st.copiedAll = false; render(); }, 1600);
+      }
+    }));
+  }
+
+  host.__emRefresh = render;
+  render();
 }
 
 /* -------------------- OPERATIONS -------------------- */
@@ -7279,7 +7443,12 @@ function mountQuickLinks(container) {
       Open <a href="https://adsmanager.facebook.com/adsmanager" target="_blank" style="color:var(--acc)">Ads Manager</a> and run the bookmarklet there.</div>
     </div>`;
     [ui.ar, ui.col, ui.anl, ui.met, ui.insp, ui.tgt, ui.px].forEach(el => { el.innerHTML = notice; });
-    ui.setTab('ops');
+    /* v25.16: the Events Manager page has no Ads token, but the CAPI-token reader needs none */
+    const emBox = document.createElement('div');
+    emBox.style.cssText = 'padding:0 16px 16px';
+    ui.px.appendChild(emBox);
+    mountEmToken(emBox, {});
+    ui.setTab(/events_manager/.test(location.pathname) ? 'px' : 'ops');
   }
 })();
 

@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>MetaCtrl PRO — Events Manager token harness</title>
+<style>html,body{margin:0;padding:0;background:#0a0f14;width:100%;height:100%;overflow:hidden}</style>
+</head>
+<body>
+<script>
+  // 🔑 CAPI-token block test harness. Fake FB, fake token (never a real one):
+  //   pixel 111 — Events Manager HTML carries the token
+  //   pixel 222 — HTML without a token (SPA shell)
+  //   pixel 333 — HTTP 403
+  // ?nolocal=1 (page-mode) is served by test-emtoken.ts at business.facebook.com/events_manager2/...
+  // and drops __accessToken, so boot() takes the "no Ads token" branch and reads the token from the DOM.
+  var FAKE = 'EAAB' + 'x'.repeat(60) + 'ZDZD';
+  window.__fakeToken = FAKE;
+  if (!/pagemode/.test(location.search)) var __accessToken = 'VISUAL_TEST_TOKEN';
+  window.alert = function () {};
+  window.confirm = function () { return true; };
+  window.__calls = [];
+
+  function json(o, code) { return Promise.resolve({ ok: !code || code < 400, status: code || 200, json: function () { return Promise.resolve(o); }, text: function () { return Promise.resolve(JSON.stringify(o)); } }); }
+  function html(t, code) { return Promise.resolve({ ok: !code || code < 400, status: code || 200, text: function () { return Promise.resolve(t); } }); }
+
+  window.fetch = function (url, opts) {
+    url = String(url);
+    window.__calls.push({ url: url.replace(/access_token=[^&]+/, 'access_token=<t>'), cookies: !!(opts && opts.credentials === 'include') });
+    var m = url.match(/events_manager2\/list\/pixel\/(\d+)/);
+    if (m) {
+      if (m[1] === '111') return html('<html><scr' + 'ipt>window.x={"accessToken":"' + FAKE + '","y":1}</scr' + 'ipt></html>');   // split tags: a literal closing script tag would end this inline block
+      if (m[1] === '222') return html('<html><body>shell, no token</body></html>');
+      return html('forbidden', 403);
+    }
+    if (/\/debug_token/.test(url)) return json({ data: { is_valid: true, type: 'USER', expires_at: 0, scopes: ['ads_management', 'business_management', 'public_profile'] } });
+    if (/\/111\?/.test(url)) return json({ id: '111', name: 'A-with-token' });
+    if (/owned_pixels/.test(url)) return json({ data: [{ id: '111', name: 'A-with-token' }, { id: '222', name: 'B-no-token' }, { id: '333', name: 'C-403' }] });
+    if (/owned_ad_accounts|client_ad_accounts|adaccounts/.test(url)) return json({ data: [{ id: 'act_1', account_id: '1', name: 'ACC-1', account_status: 1 }] });
+    if (/\/me\/businesses/.test(url)) return json({ data: [{ id: '999', name: 'BM-test' }] });
+    return json({ data: [] });   // everything else: empty, never hangs
+  };
+</script>
+<script src="../bookmarklet.js"></script>
+</body>
+</html>
