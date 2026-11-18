@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.32.0 — Bookmarklet
+ * MetaLaunch PRO v0.33.0 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -182,6 +182,21 @@
  *          (4) multi-account launch logs a ⚠ that the ONE pixel (step 4/CSV) is applied to ALL
  *              accounts — promoted_object and {pixel_id} alike.
  *          (5) collapsible "macros reference" under step 8 — all launcher tokens + FB macros.
+ *
+ * v0.33.0: залив по языкам (Meta Multi-Language Ads). Галка «6.1 🌐 Залив по языкам» в шаге 6:
+ *          одно объявление на адсет, у каждого языка своё видео + title + body, язык и видео
+ *          выбираются из выпадающих списков (видео — из загруженных в шаге 6 или по video ID),
+ *          один язык помечается default. Ссылка, кнопка и URL-теги общие (шаг 7) — оффер один.
+ *          Креатив уходит как asset_feed_spec с optimization_type=LANGUAGE: метки adlabels на
+ *          видео/текстах/ссылке + по правилу asset_customization_rules на язык (customization_spec.
+ *          locales). Список языков и их ключи — живьём из /search?type=adlocale (92 языка, имена
+ *          на английском; ключи руками не держим: Portuguese (Brazil)=16, Portugal=31, All=1005).
+ *          Проверено на живом API (validate_only, 18.11.2026): видео на язык ✓, одно видео на
+ *          два языка (две метки) ✓, одна ссылка на все языки ✓, без is_default ✗ (#100/2490266),
+ *          якорь video_data в object_story_spec ✗ (#100/1443048) — поэтому identity = page (+IG).
+ *          Режим включён → JSON креативов шага 6 не используется; CSV Ad Name/Image Hash/Video ID
+ *          игнорируются; полу-заполненная таблица блокирует LAUNCH. Только видео (картинки — позже).
+ *          Мульти-кабы: ID видео переводятся в ID каба по загрузкам (как у обычных креативов).
  *
  * v0.32.0: ревью CORA 21.10 — деньги, гео, дубли, IG, версия Graph.
  *          (1) ABO-кампания шлёт is_adset_budget_sharing_enabled=false — с v24 FB без него
@@ -566,6 +581,16 @@
     creativesInput: '',       // v0.2: raw user input (textarea)
     creativesParsed: null,    // v0.2: { mode: 'list'|'map'|'single', list?, map?, value? }
     creativesError: '',
+    // v0.33.0: multi-language ad — one ad per adset whose creative is chosen BY VIEWER LANGUAGE
+    // (Meta "Multi-Language Ads": asset_feed_spec + optimization_type LANGUAGE). Link/CTA/URL tags
+    // stay shared (one offer for every language); per language: video + title + body.
+    langMode: false,
+    langAdName: '',           // '' → "LANG"
+    langRows: [],             // [{ key:'6', name:'English (US)', videoId:'', title:'', body:'' }] — videoId = PRIMARY cab's id (remapped per cab at launch)
+    langDefault: 0,           // index of the row that gets is_default (FB requires exactly one)
+    langLocales: null,        // [{key,name}] from /search?type=adlocale — loaded on demand, once per session
+    langLocalesBusy: false,
+    langLocalesError: '',
     urlTagParam: 'sub2',      // legacy: single-param replacement in URL Tags
     urlTagMode: 'acc_id',
     urlTagCustom: '',
@@ -2516,11 +2541,215 @@
     }
   }
 
+  // ─── MULTI-LANGUAGE ADS (v0.33.0) ───────────────────────────────────────
+  // One ad per adset; FB picks the creative by the VIEWER'S language (Marketing API "Multi-Language
+  // Ads": asset_feed_spec + optimization_type LANGUAGE + one asset_customization_rule per language).
+  // Per language: video + title + body. Link, button and URL tags are shared — every language
+  // leads to the same offer.
+  // Locale keys are FB-internal numbers nobody should hardcode (Portuguese (Brazil) = 16,
+  // Portugal = 31, "Portuguese (All)" = 1005) → always read from /search?type=adlocale.
+  const LANG_POPULAR = /^(English \(US\)|English \(UK\)|Spanish|Portuguese \(Brazil\)|Portuguese \(All\)|German|French \(France\)|Italian|Russian|Ukrainian|Polish|Turkish|Arabic|Hindi|Indonesian|Thai|Vietnamese|Japanese|Korean)/;
+
+  async function loadLangLocales() {
+    if (state.langLocales || state.langLocalesBusy) return;
+    state.langLocalesBusy = true;
+    state.langLocalesError = '';
+    render();
+    try {
+      const out = [];
+      let after = '';
+      for (let page = 0; page < 5; page++) {
+        // locale=en_US: names come in English whatever the session language is.
+        const r = await apiFetch('/search', { params: { type: 'adlocale', limit: 1000, locale: 'en_US', after } });
+        out.push(...(r?.data || []));
+        after = r?.paging?.next ? (r.paging.cursors?.after || '') : '';
+        if (!after) break;
+      }
+      const seen = new Set();
+      const list = out
+        .filter(x => x && x.key != null && !seen.has(String(x.key)) && seen.add(String(x.key)))
+        .map(x => ({ key: String(x.key), name: String(x.name || x.key) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      if (list.length) state.langLocales = list;
+      else state.langLocalesError = 'FB вернул пустой список языков';
+    } catch (e) {
+      state.langLocalesError = e.message || String(e);
+    }
+    state.langLocalesBusy = false;
+    render();
+  }
+
+  function newLangRow() { return { key: '', name: '', videoId: '', title: '', body: '' }; }
+
+  // Videos uploaded in step 6 (primary cab's ids) — the per-language pick list.
+  function langVideoOptions() {
+    return (state.uploads || []).filter(u => u.type === 'video' && u.videoId).map(u => ({ id: String(u.videoId), name: u.name }));
+  }
+
+  // What is wrong with the language setup; [] = good to go.
+  function langIssues() {
+    if (!state.langMode) return [];
+    const rows = state.langRows;
+    const out = [];
+    if (rows.length < 2) out.push('нужно минимум 2 языка');
+    const seen = new Set();
+    rows.forEach((r, i) => {
+      const tag = `#${i + 1} ${r.name || 'язык не выбран'}`;
+      if (!r.key) out.push(`${tag}: выбери язык`);
+      else if (seen.has(r.key)) out.push(`${tag}: язык уже есть выше`);
+      if (r.key) seen.add(r.key);
+      if (!/^\d{8,20}$/.test(String(r.videoId || '').trim())) out.push(`${tag}: нет видео — выбери загруженное или вставь ID`);
+      if (!String(r.body || '').trim()) out.push(`${tag}: нет body (основной текст)`);
+    });
+    if (rows.length && (state.langDefault < 0 || state.langDefault >= rows.length)) out.push('не выбран язык по умолчанию');
+    return out;
+  }
+
+  // The plan item that stands in for "creatives JSON" while language mode is on: ONE ad per adset.
+  function langModeItem() {
+    if (!state.langMode) return null;
+    const rows = state.langRows;
+    const dflt = rows[state.langDefault] || rows[0] || {};
+    return {
+      name: (state.langAdName || '').trim() || 'LANG',
+      imageHash: '',
+      videoId: String(dflt.videoId || rows.find(r => r.videoId)?.videoId || '').trim(),
+      thumbnailHash: null, title: null, body: null, cta: null,
+      lang: { rows: rows.map(r => ({ ...r })), defaultIdx: state.langDefault },
+    };
+  }
+
+  // Auto-thumbnail URL of a video, once per video per session.
+  async function videoThumbUrl(videoId) {
+    let thumbUrl = _thumbByVideo[videoId] || '';
+    if (!thumbUrl) {
+      try {
+        const vInfo = await apiFetch(`/${videoId}`, { params: { fields: 'picture,thumbnails{uri,is_preferred}' } });
+        const prefThumb = vInfo?.thumbnails?.data?.find(t => t.is_preferred)?.uri;
+        thumbUrl = prefThumb || vInfo?.thumbnails?.data?.[0]?.uri || vInfo?.picture || '';
+      } catch {}
+      if (thumbUrl) _thumbByVideo[videoId] = thumbUrl;
+    }
+    return thumbUrl;
+  }
+
+  // asset_feed_spec for one cab. Shape checked on the live API with validate_only (18.11.2026):
+  //  ✓ one video entry per distinct video carrying every language label that uses it (or one per
+  //    language); ✓ one link entry labelled with all languages; ✓ one rule per language, exactly
+  //    ONE is_default (without it FB: #100/2490266); ✗ NO video_data anchor in object_story_spec —
+  //    FB rejects it next to a LANGUAGE feed (#100/1443048), so identity is page(+IG) only.
+  // Returns { feed } or { error } (a language's video not uploaded to this cab).
+  async function buildLangFeed(lang, link, cta, accId) {
+    const rows = lang.rows;
+    const labelOf = r => `lang_${r.key}`;
+    const videoLabels = new Map();   // this cab's video id → [labels]
+    for (const r of rows) {
+      const m = remapCreativeForAccount('', String(r.videoId).trim(), accId);
+      if (m.remapFailed) return { error: `видео "${m.remapFailed}" (${r.name}) не загружено в этот каб` };
+      const vid = m.videoId || String(r.videoId).trim();
+      if (!videoLabels.has(vid)) videoLabels.set(vid, []);
+      videoLabels.get(vid).push(labelOf(r));
+    }
+    const videos = [];
+    for (const [vid, labels] of videoLabels) {
+      const thumb = await videoThumbUrl(vid);
+      videos.push({ video_id: vid, ...(thumb ? { thumbnail_url: thumb } : {}), adlabels: labels.map(name => ({ name })) });
+    }
+    const lab = name => ({ name });
+    const titles = rows.filter(r => String(r.title || '').trim())
+      .map(r => ({ text: String(r.title).trim(), adlabels: [lab(labelOf(r))] }));
+    const bodies = rows.filter(r => String(r.body || '').trim())
+      .map(r => ({ text: String(r.body).trim(), adlabels: [lab(labelOf(r))] }));
+    // A rule names ONE label per asset type; the video that carries that label is the language's video.
+    const rules = rows.map((r, i) => ({
+      ...(i === lang.defaultIdx ? { is_default: true } : {}),
+      customization_spec: { locales: [Number(r.key)] },
+      video_label: lab(labelOf(r)),
+      ...(String(r.title || '').trim() ? { title_label: lab(labelOf(r)) } : {}),
+      ...(String(r.body || '').trim() ? { body_label: lab(labelOf(r)) } : {}),
+      link_url_label: lab(labelOf(r)),
+    }));
+    const feed = {
+      ad_formats: ['SINGLE_VIDEO'],
+      call_to_action_types: [cta],
+      optimization_type: 'LANGUAGE',
+      videos,
+      ...(titles.length ? { titles } : {}),
+      bodies,
+      link_urls: [{ website_url: link, adlabels: rows.map(r => lab(labelOf(r))) }],
+      asset_customization_rules: rules,
+    };
+    return { feed };
+  }
+
+  // Checklist line under the language rows: red = what blocks LAUNCH, green = ready.
+  function langStatusHtml() {
+    const issues = langIssues();
+    if (issues.length) return `<span style="color:var(--crit)">⚠ ${issues.map(esc).join(' · ')}</span>`;
+    const dflt = state.langRows[state.langDefault];
+    return `<span style="color:var(--good)">✓ ${state.langRows.length} языков · default: ${esc(dflt?.name || '?')} · 1 объявление на адсет</span>`;
+  }
+
+  function renderLangBlock() {
+    const vids = langVideoOptions();
+    const locs = state.langLocales;
+    const inp = 'padding:5px 7px;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:11px;box-sizing:border-box;width:100%;font-family:inherit';
+    const langOptions = (selKey, selName) => {
+      if (!locs) return `<option value="${esc(selKey)}">${esc(selKey ? (selName || selKey) : (state.langLocalesBusy ? 'загружаю языки…' : '— язык —'))}</option>`;
+      const o = l => `<option value="${esc(l.key)}" ${l.key === selKey ? 'selected' : ''}>${esc(l.name)}</option>`;
+      return `<option value="">— язык —</option>`
+        + `<optgroup label="Частые">${locs.filter(l => LANG_POPULAR.test(l.name)).map(o).join('')}</optgroup>`
+        + `<optgroup label="Все языки">${locs.filter(l => !LANG_POPULAR.test(l.name)).map(o).join('')}</optgroup>`;
+    };
+    const rowHtml = (r, i) => `
+      <div class="fbl-lang-row" data-i="${i}" style="padding:8px;background:var(--bg);border:1px solid ${i === state.langDefault ? 'var(--accent-dim)' : 'var(--border)'};border-radius:6px;margin-bottom:6px">
+        <div style="display:grid;grid-template-columns:minmax(140px,1.1fr) minmax(140px,1.2fr) minmax(110px,.8fr) auto auto;gap:6px;align-items:center">
+          <select data-lf="key" style="${inp}">${langOptions(r.key, r.name)}</select>
+          <select data-lf="pick" style="${inp}">
+            <option value="">— видео из загруженных —</option>
+            ${vids.map(v => `<option value="${esc(v.id)}" ${v.id === r.videoId ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}
+          </select>
+          <input id="fbl-lang-vid-${i}" data-lf="videoId" placeholder="или video ID" value="${esc(r.videoId)}" style="${inp};font-family:var(--font-mono)">
+          <label title="Языковая версия по умолчанию: её видят все, чей язык не входит в список" style="display:flex;align-items:center;gap:4px;font-size:11px;white-space:nowrap;cursor:pointer">
+            <input type="radio" name="fbl-lang-default" data-lf="default" ${i === state.langDefault ? 'checked' : ''}> default
+          </label>
+          <button data-lf="del" title="Убрать язык" style="padding:3px 8px">✕</button>
+        </div>
+        <input id="fbl-lang-title-${i}" data-lf="title" placeholder="Title (заголовок) — по желанию" value="${esc(r.title)}" style="${inp};margin-top:6px">
+        <textarea id="fbl-lang-body-${i}" data-lf="body" placeholder="Body (основной текст) *" style="${inp};margin-top:6px;min-height:46px;resize:vertical">${esc(r.body)}</textarea>
+      </div>`;
+    return `
+      <div class="field" style="${state.langMode ? 'border-left-color:var(--accent)' : ''}">
+        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">
+          <input type="checkbox" id="fbl-lang-mode" ${state.langMode ? 'checked' : ''} style="margin-top:2px;width:auto;flex:none">
+          <span>6.1 🌐 Залив по языкам <span style="color:var(--text-faint)">— одно объявление: под каждый язык своё видео, title и body. Ссылка, кнопка и метки — общие (шаг 7), оффер один. FB показывает креатив по языку зрителя.</span></span>
+        </label>
+        ${state.langMode ? `
+        <div id="fbl-lang-rows" style="margin-top:8px">
+          <div style="font-size:10px;color:var(--text-faint);margin-bottom:6px">Пока режим включён, JSON креативов из шага 6 не используется: на каждый адсет уходит 1 объявление из строк ниже. Видео берутся из загруженных в шаге 6 (или вставь video ID).</div>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+            <input id="fbl-lang-adname" data-lf="adname" placeholder="Имя объявления (пусто = LANG)" value="${esc(state.langAdName)}" style="${inp};max-width:260px">
+            ${state.langLocalesBusy ? '<span style="font-size:11px;color:var(--text-faint)">⏳ загружаю список языков…</span>' : ''}
+            ${state.langLocalesError ? `<span style="font-size:11px;color:var(--crit)">⚠ список языков: ${esc(state.langLocalesError)}</span><button data-lf="reload" style="padding:3px 8px">↻</button>` : ''}
+          </div>
+          ${state.langRows.map(rowHtml).join('')}
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button data-lf="add">＋ Добавить язык</button>
+            ${vids.length ? '' : '<span style="font-size:11px;color:var(--warn)">загруженных видео нет — загрузи файлы в шаге 6 или вставь video ID</span>'}
+          </div>
+          <div id="fbl-lang-status" style="font-size:11px;margin-top:8px">${langStatusHtml()}</div>
+          <div style="font-size:10px;color:var(--text-faint);margin-top:4px">Зрителю с языком вне списка показывается версия «default». Язык «All» (например Portuguese (All)) покрывает все регионы языка.</div>
+        </div>` : ''}
+      </div>`;
+  }
+
   // ─── LAUNCH PLAN ANALYSIS ───────────────────────────────────────────────
   function analyzePlan() {
     // v0.10.0: ads-mode = creatives (uploaded or pasted JSON) define new ads per adset.
-    const adsMode = state.creativesParsed?.mode === 'ads';
-    const adsModeItems = adsMode ? state.creativesParsed.items : null;
+    // v0.33.0: language mode replaces the creatives JSON with ONE multi-language ad per adset.
+    const langItem = langModeItem();
+    const adsMode = langItem ? true : state.creativesParsed?.mode === 'ads';
+    const adsModeItems = langItem ? [langItem] : (adsMode ? state.creativesParsed.items : null);
     const hasRows = state.rows.length > 0;
     const splitClusters = (state.adsetSplitClusters || []).filter(i => GEO_PRESETS[i])
       .map(i => ({ ...GEO_PRESETS[i], label: clusterLabel(i), value: clusterGeoValue(i) }));  // v0.25.0: effective geo
@@ -3104,6 +3333,13 @@
     if (plan.csvless) {
       if (!plan.objective) { setStatus('error', 'CSV-less: pick a Campaign Objective (step 1b/9 area).'); return; }
       if (!state.linkOverride) { setStatus('error', 'CSV-less: set a destination Link (step 7).'); return; }
+    }
+
+    // v0.33.0: language mode — a half-filled table must not reach FB (it would build a broken feed).
+    if (state.langMode) {
+      const li = langIssues();
+      if (li.length) { setStatus('error', `Языки: ${li.join(' · ')}`); return; }
+      if (!state.linkOverride && !state.rows.some(r => r['Link'])) { setStatus('error', 'Языки: нужна общая ссылка (шаг 7 или колонка Link в CSV).'); return; }
     }
 
     // Pre-flight: DSA Beneficiary required. FB used to enforce this only for EU
@@ -3782,7 +4018,25 @@
           // column, so we just trust the pre-validated value here.
           const objectStorySpec = { page_id: pageId };
           if (resolvedIg) objectStorySpec.instagram_user_id = resolvedIg;
-          if (videoId) {
+          // v0.33.0: language mode → the creative is an asset_feed_spec (video/text/rules per language);
+          // object_story_spec then carries identity only — no video_data/link_data anchor.
+          const itemLang = adInfo.forcedItem?.lang || null;
+          let langFeed = null;
+          if (itemLang) {
+            if (!link) throw new Error('языки: нет ссылки (шаг 7 или колонка Link в CSV)');
+            const built = await buildLangFeed(itemLang, link, cta, accId);
+            if (built.error) {
+              totalAdErr++;
+              state.progress.done++;
+              addLog('error', `[${accLabel}] ✗ ad "${adName}": ${built.error}, пропущено`);
+              adGlobalIdx++;
+              continue;
+            }
+            langFeed = built.feed;
+          }
+          if (langFeed) {
+            // identity only — see above
+          } else if (videoId) {
             // Thumbnail priority: per-item thumbnailHash (from upload pairing or JSON) > FB auto-thumbnail
             let itemThumb = adInfo.forcedItem?.thumbnailHash || null;
             // v0.6: remap thumbnail hash for non-primary accounts.
@@ -3802,15 +4056,7 @@
             } else {
               // Fallback: fetch auto-thumbnail from FB
               // v0.32.0: once per video (was: again for every ad set the video goes into)
-              let thumbUrl = _thumbByVideo[videoId] || '';
-              if (!thumbUrl) {
-                try {
-                  const vInfo = await apiFetch(`/${videoId}`, { params: { fields: 'picture,thumbnails{uri,is_preferred}' } });
-                  const prefThumb = vInfo?.thumbnails?.data?.find(t => t.is_preferred)?.uri;
-                  thumbUrl = prefThumb || vInfo?.thumbnails?.data?.[0]?.uri || vInfo?.picture || '';
-                } catch {}
-                if (thumbUrl) _thumbByVideo[videoId] = thumbUrl;
-              }
+              const thumbUrl = await videoThumbUrl(videoId);
               if (thumbUrl) objectStorySpec.video_data.image_url = thumbUrl;
             }
           } else if (imageHash) {
@@ -3827,6 +4073,7 @@
           }
 
           const creativeBody = { object_story_spec: JSON.stringify(objectStorySpec) };
+          if (langFeed) creativeBody.asset_feed_spec = JSON.stringify(langFeed);  // v0.33.0
           if (urlTags) creativeBody.url_tags = urlTags;
           // v0.23.0: no explicit IG resolved and NOT FB-only mode → use_page_actor_override=true.
           // Documented API equivalent of AM's "Use Facebook Page" IG identity: FB resolves the
@@ -3843,6 +4090,7 @@
           let creative;
           if (state.dryRun) {
             addLog('info', `[${accLabel}] 🟦 creative: ${JSON.stringify(objectStorySpec).slice(0, 500)}${creativeBody.use_page_actor_override ? ' · +use_page_actor_override=true (Page identity on IG)' : ''}`);
+            if (langFeed) addLog('info', `[${accLabel}] 🟦 asset_feed_spec (языки): ${JSON.stringify(langFeed)}`);
             creative = { id: 'DRY_CREATIVE' };
           } else {
           try {
@@ -3867,7 +4115,7 @@
               if (fallbackIg && fallbackIg !== rejectedIg) {
                 addLog('info', `[${accLabel}] IG fallback found ${fallbackIg} — retrying "${adName}", remaining ads will reuse it`);
                 const retrySpec = { ...objectStorySpec, instagram_user_id: fallbackIg };
-                const retryBody = { object_story_spec: JSON.stringify(retrySpec) };
+                const retryBody = { object_story_spec: JSON.stringify(retrySpec), ...(langFeed ? { asset_feed_spec: JSON.stringify(langFeed) } : {}) };
                 if (urlTags) retryBody.url_tags = urlTags;
                 try {
                   creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: retryBody });
@@ -3877,7 +4125,7 @@
                   addLog('warning', `[${accLabel}] IG fallback ${fallbackIg} also rejected: ${e2.message} — dropping explicit IG, using use_page_actor_override for remaining ads`);
                   const noIgSpec = { ...objectStorySpec };
                   delete noIgSpec.instagram_user_id;
-                  const noIgBody = { object_story_spec: JSON.stringify(noIgSpec) };
+                  const noIgBody = { object_story_spec: JSON.stringify(noIgSpec), ...(langFeed ? { asset_feed_spec: JSON.stringify(langFeed) } : {}) };
                   if (urlTags) noIgBody.url_tags = urlTags;
                   if (!state.usePageAsActor) noIgBody.use_page_actor_override = 'true';
                   creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: noIgBody });
@@ -3887,7 +4135,7 @@
                 addLog('warning', `[${accLabel}] No IG fallback available (account/page/PBIA all empty or same as rejected) — retrying "${adName}" with use_page_actor_override, remaining ads follow`);
                 const retrySpec = { ...objectStorySpec };
                 delete retrySpec.instagram_user_id;
-                const retryBody = { object_story_spec: JSON.stringify(retrySpec) };
+                const retryBody = { object_story_spec: JSON.stringify(retrySpec), ...(langFeed ? { asset_feed_spec: JSON.stringify(langFeed) } : {}) };
                 if (urlTags) retryBody.url_tags = urlTags;
                 if (!state.usePageAsActor) retryBody.use_page_actor_override = 'true';
                 creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: retryBody });
@@ -4276,7 +4524,9 @@
         <div><b>${plan.adsetCount}</b> adset${plan.adsetCount > 1 ? 's' : ''} ${plan.adsMode ? `× <b>${plan.adsModeItems.length}</b> creatives = <b>${plan.adCount}</b> ads` : `· <b>${plan.adCount}</b> ad${plan.adCount > 1 ? 's' : ''}`} · <b>${plan.isCBO ? 'CBO' : 'ABO'}</b> ${plan.isCBO ? `${curPfx}${plan.cboBudget}/d` : `${curPfx}${plan.aboTotal}/d total`}</div>
         <div>Objective: <b>${esc(plan.objective || '?')}</b> · Event: <b>${esc(effEvent)}</b></div>
         <div>Pixel: <b style="color:${pixelValid && pixelInAccount ? 'var(--good)' : 'var(--crit)'}">${esc(effPixel || 'MISSING')}</b> ${state.pixelOverride ? '<span style="color:var(--text-faint)">(override)</span>' : '<span style="color:var(--text-faint)">(from CSV)</span>'} ${!pixelValid && effPixel ? '<span style="color:var(--crit)">⚠ invalid format</span>' : ''} ${pixelValid && state.pixelsList.length && !pixelInAccount ? '<span style="color:var(--crit)">⚠ not in this account</span>' : ''}</div>
-        ${plan.adsMode ? `<div style="color:var(--good)">⚡ ads-mode: each adset gets ${plan.adsModeItems.length} new ads from creatives JSON (CSV Ad Name/Image Hash/Video ID ignored)</div>` : ''}
+        ${plan.adsMode ? (state.langMode
+          ? `<div style="color:var(--good)">🌐 языки: каждый адсет получает 1 объявление «${esc(plan.adsModeItems[0].name)}» · ${state.langRows.length} языков (asset_feed_spec, CSV Ad Name/Image Hash/Video ID игнорируются)</div>`
+          : `<div style="color:var(--good)">⚡ ads-mode: each adset gets ${plan.adsModeItems.length} new ads from creatives JSON (CSV Ad Name/Image Hash/Video ID ignored)</div>`) : ''}
         ${plan.sacList.length ? `<div style="color:var(--warn)">SAC: <b>${esc(plan.sacList[0])}</b> (region-targeting disabled)</div>` : ''}
       </div>` : '';
 
@@ -4299,6 +4549,9 @@
     // v0.10.0: CSV-less needs objective + destination link from the UI.
     else if (plan && plan.csvless && !plan.objective) blockReason = '⬆ CSV-less: pick a Campaign Objective (1b)';
     else if (plan && plan.csvless && !state.linkOverride) blockReason = '⬆ CSV-less: set destination Link (step 7)';
+    // v0.33.0: language mode needs a complete language table and one shared link.
+    else if (state.langMode && langIssues().length) blockReason = `⚠ Языки: ${langIssues()[0]}`;
+    else if (state.langMode && !state.linkOverride && !state.rows.some(r => r['Link'])) blockReason = '⬆ Языки: задай общую ссылку (шаг 7)';
     const runDisabled = !!blockReason;
     const totalAds = plan?.adCount || 0;
     const buttonLabel = blockReason
@@ -4322,7 +4575,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.32.0</span></span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.33.0</span></span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -4789,6 +5042,8 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
           : 'Single value (all ads same creative)'
         }</div>` : ''}
       </div>
+
+      ${renderLangBlock()}
 
       ${plan?.adsMode && plan.adsModeItems.length > 1 && plan.adsetCount > 1 ? `
       <div class="field" style="background:var(--surface);border:1px solid var(--good);border-radius:var(--r);padding:8px 10px">
@@ -5402,6 +5657,69 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       state.bidStrategyOverride = e.target.value;
       render();  // enable/disable bid-amount field
     });
+    // v0.33.0: language mode — one delegated set of handlers for the whole block.
+    document.getElementById('fbl-lang-mode')?.addEventListener('change', e => {
+      state.langMode = e.target.checked;
+      if (state.langMode) {
+        if (!state.langRows.length) state.langRows = [newLangRow(), newLangRow()];
+        loadLangLocales();   // renders itself
+      }
+      render();
+    });
+    const langBox = document.getElementById('fbl-lang-rows');
+    if (langBox) {
+      const rowIdx = el => { const d = el.closest('.fbl-lang-row'); return d ? Number(d.dataset.i) : -1; };
+      const refreshStatus = () => { const el = document.getElementById('fbl-lang-status'); if (el) el.innerHTML = langStatusHtml(); };
+      // Text fields: only state + the checklist line, NO re-render (it would drop the cursor).
+      langBox.addEventListener('input', e => {
+        const f = e.target.dataset?.lf;
+        if (f === 'adname') { state.langAdName = e.target.value; return; }
+        const r = state.langRows[rowIdx(e.target)];
+        if (!r) return;
+        if (f === 'title') r.title = e.target.value;
+        else if (f === 'body') r.body = e.target.value;
+        else if (f === 'videoId') r.videoId = e.target.value.trim();
+        else return;
+        refreshStatus();
+      });
+      // Pickers / radio: rebuild the block (the other controls depend on them).
+      langBox.addEventListener('change', e => {
+        const f = e.target.dataset?.lf;
+        const i = rowIdx(e.target);
+        const r = state.langRows[i];
+        if (!r) return;
+        if (f === 'key') {
+          const l = (state.langLocales || []).find(x => x.key === e.target.value);
+          r.key = e.target.value;
+          r.name = l ? l.name : '';
+        } else if (f === 'pick') {
+          if (e.target.value) r.videoId = e.target.value;
+        } else if (f === 'default') {
+          state.langDefault = i;
+        } else return;
+        render();
+      });
+      // Leaving the block (not moving between its own fields) refreshes the LAUNCH button reason.
+      langBox.addEventListener('focusout', e => {
+        if (e.relatedTarget && langBox.contains(e.relatedTarget)) return;
+        if (['title', 'body', 'videoId'].includes(e.target.dataset?.lf)) render();
+      });
+      langBox.addEventListener('click', e => {
+        const b = e.target.closest('button[data-lf]');
+        if (!b) return;
+        const f = b.dataset.lf;
+        if (f === 'add') state.langRows.push(newLangRow());
+        else if (f === 'reload') { state.langLocales = null; loadLangLocales(); return; }
+        else if (f === 'del') {
+          const i = rowIdx(b);
+          if (i < 0) return;
+          state.langRows.splice(i, 1);
+          if (state.langDefault === i) state.langDefault = 0;
+          else if (state.langDefault > i) state.langDefault--;
+        } else return;
+        render();
+      });
+    }
     document.getElementById('fbl-bid-amount')?.addEventListener('input', e => { state.bidAmountOverride = e.target.value.trim(); });
     document.getElementById('fbl-attribution')?.addEventListener('change', e => { state.attributionOverride = e.target.value; });
     const creativesEl = document.getElementById('fbl-creatives');
