@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.33.0 — Bookmarklet
+ * MetaLaunch PRO v0.33.1 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -182,6 +182,13 @@
  *          (4) multi-account launch logs a ⚠ that the ONE pixel (step 4/CSV) is applied to ALL
  *              accounts — promoted_object and {pixel_id} alike.
  *          (5) collapsible "macros reference" under step 8 — all launcher tokens + FB macros.
+ *
+ * v0.33.1: таблица языков (6.1) сохраняется в пресеты (ручных и авто): режим, имя объявления, язык,
+ *          title, body, default, video ID и имя файла видео. Загрузка пресета возвращает таблицу
+ *          и включает режим; пресет без языков режим ВЫКЛЮЧАЕТ (иначе языки прошлого пресета
+ *          уехали бы в обычный залив). Загрузки видео при загрузке пресета сбрасываются, поэтому
+ *          после новой загрузки строки сами подтягивают свежий video ID по имени файла.
+ *          Видео, вставленные по ID руками, остаются как были. В списке пресетов метка 🌐.
  *
  * v0.33.0: залив по языкам (Meta Multi-Language Ads). Галка «6.1 🌐 Залив по языкам» в шаге 6:
  *          одно объявление на адсет, у каждого языка своё видео + title + body, язык и видео
@@ -1333,6 +1340,15 @@
       // via the "restore accounts" checkbox — a preset built for 5 cabs should not
       // silently retarget a session the operator opened for one).
       targetAccIds: state.targetAccIds.slice(),
+      // v0.33.1: language table (step 6.1). videoName = file name of the upload the row points at:
+      // uploads are wiped on preset load, so after a fresh upload the row re-links by this name.
+      langMode: state.langMode,
+      langAdName: state.langAdName,
+      langDefault: state.langDefault,
+      langRows: state.langRows.map(r => ({
+        key: r.key, name: r.name, videoId: r.videoId, title: r.title, body: r.body,
+        videoName: (state.uploads || []).find(u => u.type === 'video' && String(u.videoId) === String(r.videoId))?.name || r.videoName || '',
+      })),
     };
   }
 
@@ -1447,6 +1463,22 @@
       if (missing.length) {
         addLog('warning', `⚠ Preset account(s) not visible to this token, skipped: ${missing.join(', ')}`);
       }
+    }
+    // v0.33.1: language table. A preset without it (older, or saved with the mode off) switches the
+    // mode OFF — otherwise the previous preset's languages would silently ride along on a plain launch.
+    state.langMode = !!s.langMode;
+    state.langAdName = s.langAdName || '';
+    state.langRows = Array.isArray(s.langRows)
+      ? s.langRows.map(r => ({
+          key: String(r?.key ?? ''), name: String(r?.name ?? ''), videoId: String(r?.videoId ?? ''),
+          title: String(r?.title ?? ''), body: String(r?.body ?? ''), videoName: String(r?.videoName ?? ''),
+        }))
+      : [];
+    state.langDefault = Number.isInteger(s.langDefault) && s.langDefault >= 0 && s.langDefault < state.langRows.length ? s.langDefault : 0;
+    if (state.langMode) {
+      if (!state.langRows.length) state.langRows = [newLangRow(), newLangRow()];
+      loadLangLocales();
+      if (state.langRows.some(r => r.videoId)) addLog('warning', `🌐 Preset "${preset.name}": языки (${state.langRows.length}) восстановлены. Видео заново загрузи в шаге 6 — строки с тем же именем файла подтянут новый ID сами; ID, вставленные руками, остались как были.`);
     }
     state.selectedPresetId = presetId;
     // Reset creatives — must be fresh per launch
@@ -1964,6 +1996,16 @@
       state.creativesParsed = parseCreatives(json);
     }
     state.uploading = false;
+    // v0.33.1: language rows restored from a preset carry the file name of their video — point them at the fresh upload.
+    if (state.langRows.some(r => r.videoName)) {
+      let relinked = 0;
+      for (const r of state.langRows) {
+        if (!r.videoName) continue;
+        const u = [...state.uploads].reverse().find(x => x.type === 'video' && x.videoId && x.name === r.videoName);
+        if (u && String(u.videoId) !== String(r.videoId)) { r.videoId = String(u.videoId); relinked++; }
+      }
+      if (relinked) addLog('info', `🌐 Языки: ${relinked} видео подтянуто по имени файла из пресета.`);
+    }
     const okCount = state.uploads.filter(u => u.status === 'done').length;
     const partialCount = state.uploads.filter(u => u.status === 'partial').length;
     const pairedSuffix = pairedCount ? ` · ${pairedCount} thumbnail${pairedCount > 1 ? 's' : ''} paired` : '';
@@ -4575,7 +4617,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.33.0</span></span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.33.1</span></span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -4605,7 +4647,7 @@
               const dt = new Date(p.createdAt);
               const dStr = `${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')}`;
               // v0.27.0: 🤖 auto-saved · ✍️ manual (no CSV) · 📋 CSV-backed
-              const tag = p.auto ? ' 🤖' : (p.manual ? ' ✍️' : ' 📋');
+              const tag = (p.auto ? ' 🤖' : (p.manual ? ' ✍️' : ' 📋')) + (p.settings?.langMode ? ' 🌐' : '');
               const accN = p.settings && Array.isArray(p.settings.targetAccIds) ? p.settings.targetAccIds.length : 0;
               return `<option value="${esc(p.id)}" ${state.selectedPresetId === p.id ? 'selected' : ''}>${esc(p.name)} · ${dStr}${tag}${accN ? ` · ${accN}acc` : ''}</option>`;
             }).join('')}
