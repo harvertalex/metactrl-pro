@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MetaLaunch PRO — launch harness (v0.34: копии, ссылки языков, Instagram 1772103)</title>
+</head>
+<body style="margin:0;background:#0b0e14">
+<script>
+  // Функциональный стенд v0.34.0: настоящий launcher.js против подставного Graph API.
+  // Кабы 111 и 222. Страница БЕЗ привязанного IG и без роли (PBIA #10), как у баера на чужой странице.
+  // Переключатели в __mock:
+  //   hist       — true: в истории креативов каба лежит IG страницы (лестница его находит); false: IG взять неоткуда;
+  //   identity   — 'off' | 'flag' | 'always': FB отвечает #100/1772103 на креатив БЕЗ личности:
+  //                'flag'   — отказ, если нет ни instagram_user_id, ни use_page_actor_override (чистый page-only);
+  //                'always' — отказ, даже если флаг есть (FB перестал принимать и его).
+  //   Каждый POST /adcreatives оседает в __mock.posts целиком, каждое ads — в __mock.ads, адсеты считаются в __mock.adsets.
+  var __accessToken = 'VISUAL_TEST_TOKEN';
+  window.alert = function () {};
+  window.confirm = function () { return true; };
+  window.prompt = function () { return 'preset-v34'; };
+
+  var PAGE = '1039445349258069', IG = '17841431636764372', PIXEL = '1451350725476785';
+  window.__mock = { n: 0, vid: 0, posts: [], ads: [], adsets: 0, uploads: {}, locSearches: 0, hist: true, identity: 'off', rejected: 0 };
+
+  function ok(b) {
+    return Promise.resolve(new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  }
+  function fbErr(code, message, subcode) {
+    var e = { code: code, message: message, type: 'OAuthException' };
+    if (subcode) e.error_subcode = subcode;
+    return Promise.resolve(new Response(JSON.stringify({ error: e }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+  }
+
+  var LOCALES = [
+    { name: 'English (US)', key: 6 }, { name: 'German', key: 5 }, { name: 'Portuguese (Brazil)', key: 16 },
+    { name: 'Portuguese (Portugal)', key: 31 }, { name: 'Russian', key: 17 }, { name: 'Armenian', key: 68 },
+  ];
+
+  window.fetch = function (input, init) {
+    var u = new URL(typeof input === 'string' ? input : input.url);
+    var method = (init && init.method) || 'GET';
+    var path = u.pathname.replace(/^\/v\d+\.\d+/, '');
+    var fields = u.searchParams.get('fields') || '';
+    var body = {};
+    if (init && init.body instanceof URLSearchParams) init.body.forEach(function (v, k) { body[k] = v; });
+    var m;
+
+    if (path === '/search' && u.searchParams.get('type') === 'adlocale') {
+      __mock.locSearches++;
+      return ok({ data: LOCALES, paging: { cursors: { before: 'a', after: 'b' } } });
+    }
+    if (path === '/me/adaccounts') return ok({ data: [
+      { id: 'act_111', account_id: '111', name: 'Cab A', account_status: 1, currency: 'USD' },
+      { id: 'act_222', account_id: '222', name: 'Cab B', account_status: 1, currency: 'USD' },
+    ] });
+    if (path === '/me/accounts' && fields.indexOf('access_token') >= 0) return ok({ data: [] });
+    if (path === '/me/businesses' || path === '/me/accounts') return ok({ data: [] });
+    if (/^\/act_\d+\/adspixels$/.test(path)) return ok({ data: [{ id: PIXEL, name: 'px' }] });
+    if (/^\/act_\d+\/promote_pages$/.test(path)) return ok({ data: [{ id: PAGE, name: 'Drrdasddds' }] });
+    if (/^\/act_\d+\/instagram_accounts$/.test(path)) return ok({ data: [] });
+    if (path === '/' + PAGE + '/instagram_accounts') return fbErr(100, '(#100) Tried accessing nonexisting field (instagram_accounts)');
+    if (path === '/' + PAGE + '/page_backed_instagram_accounts') {
+      return method === 'POST' ? fbErr(10, '(#10) Permission Denied') : fbErr(100, '(#100) nonexisting field');
+    }
+    if (path === '/' + PAGE && fields === 'access_token') return ok({ id: PAGE });
+    if (path === '/' + PAGE) return ok(fields.indexOf('instagram') >= 0 ? { id: PAGE } : { id: PAGE, name: 'Drrdasddds' });
+
+    if ((m = path.match(/^\/act_(\d+)\/advideos$/)) && method === 'POST') {
+      var vid = '9' + String(++__mock.vid).padStart(12, '0') + m[1];
+      return ok({ id: vid });
+    }
+    if (path === '/' && method === 'POST' && body.batch) {
+      var items = JSON.parse(body.batch);
+      return ok(items.map(function () { return { code: 200, body: JSON.stringify({ status: { video_status: 'ready' } }) }; }));
+    }
+    if ((m = path.match(/^\/(\d{13,18})$/)) && fields.indexOf('thumbnails') >= 0) {
+      return ok({ picture: 'https://scontent.test/p_' + m[1] + '.jpg', thumbnails: { data: [{ uri: 'https://scontent.test/t_' + m[1] + '.jpg', is_preferred: true }] } });
+    }
+
+    if ((m = path.match(/^\/act_(\d+)\/adcreatives$/))) {
+      if (method === 'POST') {
+        var oss = JSON.parse(body.object_story_spec || '{}');
+        var hasIdentity = !!oss.instagram_user_id || body.use_page_actor_override === 'true';
+        if ((__mock.identity === 'flag' && !oss.instagram_user_id && body.use_page_actor_override !== 'true') ||
+            (__mock.identity === 'always' && !oss.instagram_user_id)) {
+          __mock.rejected++;
+          return fbErr(100, 'Выберите аккаунт Instagram или Страницу Facebook, которые будут представлять вашу кампанию в Instagram.', 1772103);
+        }
+        var id = 'cr_' + (++__mock.n);
+        __mock.posts.push({ acc: m[1], id: id, body: body });
+        return ok({ id: id });
+      }
+      return ok({ data: __mock.hist && (m[1] === '111' || m[1] === '222')
+        ? [{ id: 'old1', instagram_user_id: IG, object_story_spec: { page_id: PAGE } }] : [] });
+    }
+    if (path === '/' + IG) return ok({ id: IG, username: 'drr_pbia' });
+    if ((m = path.match(/^\/(cr_\d+)$/))) {
+      var c = __mock.posts.filter(function (p) { return p.id === m[1]; })[0];
+      var o2 = c ? JSON.parse(c.body.object_story_spec || '{}') : {};
+      return ok({ id: m[1], object_story_spec: o2.instagram_user_id ? { instagram_user_id: o2.instagram_user_id } : {} });
+    }
+    if (/^\/act_\d+\/campaigns$/.test(path) && method === 'POST') return ok({ id: 'camp_' + (++__mock.n) });
+    if (/^\/act_\d+\/adsets$/.test(path) && method === 'POST') { __mock.adsets++; return ok({ id: 'as_' + (++__mock.n) }); }
+    if (/^\/act_\d+\/ads$/.test(path) && method === 'POST') { __mock.ads.push(body); return ok({ id: 'ad_' + (++__mock.n) }); }
+    return ok({ data: [] });
+  };
+</script>
+<script src="../launcher.js"></script>
+</body>
+</html>

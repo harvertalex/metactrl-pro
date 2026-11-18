@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.33.1 — Bookmarklet
+ * MetaLaunch PRO v0.34.0 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -182,6 +182,19 @@
  *          (4) multi-account launch logs a ⚠ that the ONE pixel (step 4/CSV) is applied to ALL
  *              accounts — promoted_object and {pixel_id} alike.
  *          (5) collapsible "macros reference" under step 8 — all launcher tokens + FB macros.
+ *
+ * v0.34.0: (1) Instagram: галка «FB-only» действует ТОЛЬКО когда Instagram убран из плейсментов. С Instagram
+ *          в плейсментах page_id без личности FB отвергает целиком (#100/1772103 «выберите аккаунт Instagram
+ *          или Страницу Facebook») — раньше галка молча убивала залив и ещё ехала в пресетах. Теперь она
+ *          игнорируется (лестница IG как обычно), в пресеты не сохраняется и не восстанавливается.
+ *          1772103 распознаётся по subcode: каб останавливается (без пустых адсетов), в ленте — что делать
+ *          (роль ADVERTISER на странице → PBIA создастся; IG ID в шаге 3; или убрать Instagram из плейсментов).
+ *          (2) «Ads per ad set — copies»: каждый креатив кладётся в адсет N раз (1 видео × 5 = структура 1-1-5),
+ *          имена -1…-N, копии делят один креатив (1 POST /adcreatives + N POST /ads), максимум 50 в адсете,
+ *          сохраняется в пресетах. Только ads-mode (загрузки / JSON / языки).
+ *          (3) Ссылка на язык: в каждой строке таблицы языков (6.1) поле «ссылка» (пусто = общая из шага 7,
+ *          токены работают); языки с одной ссылкой делят одну запись link_urls. В JSON креативов (ads-mode)
+ *          поле `link` — своя ссылка у креатива. Общая ссылка не нужна, если своя есть у каждого.
  *
  * v0.33.1: таблица языков (6.1) сохраняется в пресеты (ручных и авто): режим, имя объявления, язык,
  *          title, body, default, video ID и имя файла видео. Загрузка пресета возвращает таблицу
@@ -621,6 +634,7 @@
     objectiveOverride: '',    // v0.10.0: '' = CSV | OUTCOME_SALES | OUTCOME_LEADS | ... (needed for CSV-less)
     adsetSplitClusters: [],   // v0.10.0: GEO_PRESETS indices → one adset per cluster (waterfall in one click)
     clusterGeoEdits: {},      // v0.25.0: { presetIdx: 'CA, AU, …' } — per-cluster geo edits; key absent = preset default
+    adCopiesOverride: '',     // v0.34.0: ads-mode only — each creative goes into every ad set N times (''/1 = once). 1-1-5 = 1 video, N=5.
     adsetCountOverride: '',   // v0.12.0: CSV-less only — N identical synthetic adsets (''/1 = single). Ignored when CSV loaded or cluster-split active.
     startDate: '',            // v0.10.0: datetime-local; adset start_time (delayed start / Kyiv→US timing)
     dryRun: false,            // v0.10.0: build + log payloads without POSTing
@@ -1297,7 +1311,8 @@
       customEventOverride: state.customEventOverride,
       pageIdOverride: state.pageIdOverride,
       instagramOverride: state.instagramOverride,
-      usePageAsActor: state.usePageAsActor,
+      // v0.34.0: «FB-only» is NOT saved — a sticky tick silently killed IG on every later launch
+      // (and, with Instagram in the placements, the whole launch: FB #100/1772103). Per-launch choice.
       dsaBeneficiary: state.dsaBeneficiary,
       dsaPayer: state.dsaPayer,
       urlTagParam: state.urlTagParam,
@@ -1318,6 +1333,7 @@
       adsetSplitClusters: state.adsetSplitClusters,
       clusterGeoEdits: state.clusterGeoEdits,
       adsetCountOverride: state.adsetCountOverride,
+      adCopiesOverride: state.adCopiesOverride,
       startDate: state.startDate,
       placementPlatforms: state.placementPlatforms,
       placementPositionGroups: state.placementPositionGroups,
@@ -1346,7 +1362,7 @@
       langAdName: state.langAdName,
       langDefault: state.langDefault,
       langRows: state.langRows.map(r => ({
-        key: r.key, name: r.name, videoId: r.videoId, title: r.title, body: r.body,
+        key: r.key, name: r.name, videoId: r.videoId, title: r.title, body: r.body, link: r.link || '',
         videoName: (state.uploads || []).find(u => u.type === 'video' && String(u.videoId) === String(r.videoId))?.name || r.videoName || '',
       })),
     };
@@ -1402,9 +1418,9 @@
     state.customEventOverride = s.customEventOverride || '';
     state.pageIdOverride = s.pageIdOverride || '';
     state.instagramOverride = s.instagramOverride || '';
-    state.usePageAsActor = !!s.usePageAsActor;
-    // v0.29.0: the FB-only tick rides along in presets — say so, or a preset silently kills IG.
-    if (state.usePageAsActor) addLog('warning', `⛔ Preset "${preset.name}" turned ON «FB-only — БЕЗ Instagram»: IG will not be attached. Need IG → untick it in step 3.`);
+    // v0.34.0: the tick never comes back from a preset (older presets carry it — dropped, loudly).
+    state.usePageAsActor = false;
+    if (s.usePageAsActor) addLog('warning', `ℹ Preset "${preset.name}" был сохранён с галкой «FB-only — БЕЗ Instagram» — не восстанавливаю (IG ищется как обычно). Нужен залив без Instagram → поставь галку в шаге 3 и убери Instagram из плейсментов.`);
     state.dsaBeneficiary = s.dsaBeneficiary || '';
     state.dsaPayer = s.dsaPayer || '';
     state.urlTagParam = s.urlTagParam || 'sub2';
@@ -1425,6 +1441,7 @@
     state.adsetSplitClusters = Array.isArray(s.adsetSplitClusters) ? s.adsetSplitClusters : [];
     state.clusterGeoEdits = (s.clusterGeoEdits && typeof s.clusterGeoEdits === 'object' && !Array.isArray(s.clusterGeoEdits)) ? s.clusterGeoEdits : {};
     state.adsetCountOverride = s.adsetCountOverride || '';
+    state.adCopiesOverride = s.adCopiesOverride || '';
     state.startDate = s.startDate || '';
     state.placementPlatforms = Array.isArray(s.placementPlatforms) ? s.placementPlatforms : [];
     state.placementPositionGroups = Array.isArray(s.placementPositionGroups) ? s.placementPositionGroups : [];
@@ -1471,7 +1488,7 @@
     state.langRows = Array.isArray(s.langRows)
       ? s.langRows.map(r => ({
           key: String(r?.key ?? ''), name: String(r?.name ?? ''), videoId: String(r?.videoId ?? ''),
-          title: String(r?.title ?? ''), body: String(r?.body ?? ''), videoName: String(r?.videoName ?? ''),
+          title: String(r?.title ?? ''), body: String(r?.body ?? ''), link: String(r?.link ?? ''), videoName: String(r?.videoName ?? ''),
         }))
       : [];
     state.langDefault = Number.isInteger(s.langDefault) && s.langDefault >= 0 && s.langDefault < state.langRows.length ? s.langDefault : 0;
@@ -2487,13 +2504,20 @@
     // and let FB use the Page as the IG identity (equivalent to omitting
     // instagram_user_id at ad creation). Ads Manager UI will show
     // "Use Facebook Page" in the IG profile field.
-    if (state.usePageAsActor) {
+    if (fbOnlyActive()) {
       // v0.18.2: PURE page-only. Send ONLY page_id, omit instagram_user_id entirely.
       // No IG endpoint calls, no PBIA create, no readback, no warnings — the Facebook
       // Page is the identity, full stop. Ads Manager shows "Use Facebook Page".
       // (v0.15.0 made this create a PBIA on demand — reverted: that's an unwanted
       // Instagram side-effect when the operator explicitly wants page-only.)
+      // v0.34.0: only when Instagram is NOT in the placements (see fbOnlyActive).
       return { igId: '', source: 'page-only' };
+    }
+    if (state.usePageAsActor) {
+      // v0.34.0: the tick is ON but Instagram is targeted → page-only is a guaranteed FB refusal
+      // (#100/1772103 «select an Instagram account or a Facebook Page to represent your campaign
+      // on Instagram»: no identity at all, not even the page-actor flag). Same ladder as ARIA.
+      addLog('warning', `🟦 «FB-only» включено, но Instagram в плейсментах → галка НЕ действует: FB без IG-личности отвечает 1772103. Ищу IG страницы по лестнице (как в заливе ARIA). Реально без Instagram — сними Instagram в плейсментах.`);
     }
     const csvIg = stripPfx(state.rows[0]?.['Instagram Account ID'] || '');
     const desired = state.instagramOverride || csvIg;
@@ -2621,7 +2645,17 @@
     render();
   }
 
-  function newLangRow() { return { key: '', name: '', videoId: '', title: '', body: '' }; }
+  function newLangRow() { return { key: '', name: '', videoId: '', title: '', body: '', link: '' }; }
+
+  // v0.34.0: the shared destination (step 7 / CSV Link column) exists; language rows may override it.
+  function langHasSharedLink() { return !!state.linkOverride || state.rows.some(r => r['Link']); }
+  // Every language (language mode) or every creative (ads-mode JSON) carries its own link →
+  // the shared link in step 7 is optional.
+  function ownLinksCoverAll() {
+    if (state.langMode) return state.langRows.length > 0 && state.langRows.every(r => String(r.link || '').trim());
+    const p = state.creativesParsed;
+    return !!(p && p.mode === 'ads' && p.items.length && p.items.every(it => it.link));
+  }
 
   // Videos uploaded in step 6 (primary cab's ids) — the per-language pick list.
   function langVideoOptions() {
@@ -2642,6 +2676,8 @@
       if (r.key) seen.add(r.key);
       if (!/^\d{8,20}$/.test(String(r.videoId || '').trim())) out.push(`${tag}: нет видео — выбери загруженное или вставь ID`);
       if (!String(r.body || '').trim()) out.push(`${tag}: нет body (основной текст)`);
+      const own = String(r.link || '').trim();
+      if (own && !/^(https?:\/\/|\{)/i.test(own)) out.push(`${tag}: ссылка должна начинаться с http(s)://`);
     });
     if (rows.length && (state.langDefault < 0 || state.langDefault >= rows.length)) out.push('не выбран язык по умолчанию');
     return out;
@@ -2681,9 +2717,16 @@
   //    ONE is_default (without it FB: #100/2490266); ✗ NO video_data anchor in object_story_spec —
   //    FB rejects it next to a LANGUAGE feed (#100/1443048), so identity is page(+IG) only.
   // Returns { feed } or { error } (a language's video not uploaded to this cab).
-  async function buildLangFeed(lang, link, cta, accId) {
+  // v0.34.0: a language may carry its OWN link (row.link, tokens resolved by resolveLink); empty = `link`.
+  // Languages that end up on the same URL share ONE link_urls entry (all their labels on it), so a table
+  // without own links builds exactly what v0.33 built. Not checked on the live API (no token here):
+  // several link_urls entries each tied to its languages by link_url_label — the standard asset-customization shape.
+  async function buildLangFeed(lang, link, cta, accId, resolveLink) {
     const rows = lang.rows;
     const labelOf = r => `lang_${r.key}`;
+    const urlOf = r => { const own = String(r.link || '').trim(); return own ? (resolveLink ? resolveLink(own) : own) : link; };
+    const noLink = rows.find(r => !urlOf(r));
+    if (noLink) return { error: `ссылка (${noLink.name || noLink.key}) пуста: задай её в строке языка или общую в шаге 7` };
     const videoLabels = new Map();   // this cab's video id → [labels]
     for (const r of rows) {
       const m = remapCreativeForAccount('', String(r.videoId).trim(), accId);
@@ -2711,6 +2754,13 @@
       ...(String(r.body || '').trim() ? { body_label: lab(labelOf(r)) } : {}),
       link_url_label: lab(labelOf(r)),
     }));
+    const byUrl = new Map();   // final URL → [language labels]
+    for (const r of rows) {
+      const u = urlOf(r);
+      if (!byUrl.has(u)) byUrl.set(u, []);
+      byUrl.get(u).push(labelOf(r));
+    }
+    const linkUrls = [...byUrl].map(([url, labels]) => ({ website_url: url, adlabels: labels.map(lab) }));
     const feed = {
       ad_formats: ['SINGLE_VIDEO'],
       call_to_action_types: [cta],
@@ -2718,7 +2768,7 @@
       videos,
       ...(titles.length ? { titles } : {}),
       bodies,
-      link_urls: [{ website_url: link, adlabels: rows.map(r => lab(labelOf(r))) }],
+      link_urls: linkUrls,
       asset_customization_rules: rules,
     };
     return { feed };
@@ -2729,7 +2779,10 @@
     const issues = langIssues();
     if (issues.length) return `<span style="color:var(--crit)">⚠ ${issues.map(esc).join(' · ')}</span>`;
     const dflt = state.langRows[state.langDefault];
-    return `<span style="color:var(--good)">✓ ${state.langRows.length} языков · default: ${esc(dflt?.name || '?')} · 1 объявление на адсет</span>`;
+    const own = state.langRows.filter(r => String(r.link || '').trim()).length;
+    const linkNote = own ? ` · ссылки: ${own} своих${own < state.langRows.length ? ` + ${state.langRows.length - own} общая` : ''}` : '';
+    const copiesNote = adCopiesCount() > 1 ? ` × ${adCopiesCount()} копий` : '';
+    return `<span style="color:var(--good)">✓ ${state.langRows.length} языков · default: ${esc(dflt?.name || '?')} · 1 объявление${copiesNote} на адсет${linkNote}</span>`;
   }
 
   function renderLangBlock() {
@@ -2757,6 +2810,7 @@
           </label>
           <button data-lf="del" title="Убрать язык" style="padding:3px 8px">✕</button>
         </div>
+        <input id="fbl-lang-link-${i}" data-lf="link" placeholder="Ссылка для этого языка — пусто = общая из шага 7 (можно {pixel_id} {account_id} {geo}…)" value="${esc(r.link || '')}" style="${inp};margin-top:6px;font-family:var(--font-mono)">
         <input id="fbl-lang-title-${i}" data-lf="title" placeholder="Title (заголовок) — по желанию" value="${esc(r.title)}" style="${inp};margin-top:6px">
         <textarea id="fbl-lang-body-${i}" data-lf="body" placeholder="Body (основной текст) *" style="${inp};margin-top:6px;min-height:46px;resize:vertical">${esc(r.body)}</textarea>
       </div>`;
@@ -2764,7 +2818,7 @@
       <div class="field" style="${state.langMode ? 'border-left-color:var(--accent)' : ''}">
         <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">
           <input type="checkbox" id="fbl-lang-mode" ${state.langMode ? 'checked' : ''} style="margin-top:2px;width:auto;flex:none">
-          <span>6.1 🌐 Залив по языкам <span style="color:var(--text-faint)">— одно объявление: под каждый язык своё видео, title и body. Ссылка, кнопка и метки — общие (шаг 7), оффер один. FB показывает креатив по языку зрителя.</span></span>
+          <span>6.1 🌐 Залив по языкам <span style="color:var(--text-faint)">— одно объявление: под каждый язык своё видео, title и body. Кнопка и метки — общие (шаг 7); ссылка — общая (шаг 7) или своя на язык (поле в строке). FB показывает креатив по языку зрителя.</span></span>
         </label>
         ${state.langMode ? `
         <div id="fbl-lang-rows" style="margin-top:8px">
@@ -2783,6 +2837,11 @@
           <div style="font-size:10px;color:var(--text-faint);margin-top:4px">Зрителю с языком вне списка показывается версия «default». Язык «All» (например Portuguese (All)) покрывает все регионы языка.</div>
         </div>` : ''}
       </div>`;
+  }
+
+  // v0.34.0: "ads per ad set" multiplier — 1..50 (FB allows at most 50 ads in one ad set).
+  function adCopiesCount() {
+    return Math.max(1, Math.min(50, parseInt(state.adCopiesOverride, 10) || 1));
   }
 
   // ─── LAUNCH PLAN ANALYSIS ───────────────────────────────────────────────
@@ -2872,17 +2931,18 @@
     }
 
     // Ad count (adsMode/adsModeItems computed at top of function)
-    let adCount;
+    // v0.34.0: adCopies — every creative of an ad set is repeated N times (1 video × 5 = "1-1-5").
+    // Only in ads-mode (uploads / JSON / languages); CSV ad rows define their own ads.
+    const adCopies = adsMode ? adCopiesCount() : 1;
+    let adCount, maxAdsPerAdset = 0;
     if (adsMode) {
       const hasAssignments = Object.keys(state.adsetAssignments || {}).length > 0;
-      if (hasAssignments) {
-        adCount = 0;
-        for (const [adsetName] of groups) {
-          const assigned = state.adsetAssignments[adsetName];
-          adCount += (assigned && assigned.length) ? assigned.length : adsModeItems.length;
-        }
-      } else {
-        adCount = groups.size * adsModeItems.length;
+      adCount = 0;
+      for (const [adsetName] of groups) {
+        const assigned = hasAssignments ? state.adsetAssignments[adsetName] : null;
+        const n = ((assigned && assigned.length) ? assigned.length : adsModeItems.length) * adCopies;
+        adCount += n;
+        maxAdsPerAdset = Math.max(maxAdsPerAdset, n);
       }
     } else {
       adCount = state.rows.length;
@@ -2892,6 +2952,8 @@
       groups,
       adsetCount: groups.size,
       adCount,
+      adCopies,
+      maxAdsPerAdset,
       adsMode,
       adsModeItems,
       csvless,
@@ -2986,6 +3048,20 @@
     }
     return out;
   }
+
+  // v0.34.0: does this launch put ads on Instagram? Checkbox placements win, else the CSV column;
+  // nothing chosen = FB automatic placements = Instagram included.
+  function igTargeted(row) {
+    const place = resolvePlacements();
+    const pubs = place
+      ? (place.publisher_platforms || [])
+      : String((row || state.rows[0] || {})['Publisher Platforms'] || '').split(',').map(s => s.trim()).filter(Boolean);
+    return !pubs.length || pubs.includes('instagram');
+  }
+  // v0.34.0: «FB-only» (page_id alone, no IG) is honoured ONLY when Instagram is out of the placements.
+  // With Instagram in, FB refuses the ad (#100/1772103) — the tick used to be a silent launch-killer,
+  // and it rode along in presets. ARIA never runs page-only unless told so by config; neither do we now.
+  function fbOnlyActive() { return !!state.usePageAsActor && !igTargeted(); }
 
   function renderTpl(tpl, ctx) {
     return String(tpl || '').replace(/\{(\w+)\}|\$\{(\w+)\}/g, (_, a, b) => String(ctx[a || b] ?? ''));
@@ -3143,6 +3219,7 @@
               title: String(o.title || o.headline || '').trim() || null,
               body: String(o.body || o.message || '').trim() || null,
               cta: String(o.cta || o.call_to_action || '').trim() || null,
+              link: String(o.link || o.url || o.website_url || '').trim() || null,  // v0.34.0: own destination for this creative
             })).filter(o => o.imageHash || o.videoId);
             if (items.length) return { mode: 'ads', items };
           }
@@ -3374,15 +3451,16 @@
     // v0.10.0: CSV-less needs objective + destination link in the UI (CSV normally supplies these).
     if (plan.csvless) {
       if (!plan.objective) { setStatus('error', 'CSV-less: pick a Campaign Objective (step 1b/9 area).'); return; }
-      if (!state.linkOverride) { setStatus('error', 'CSV-less: set a destination Link (step 7).'); return; }
+      if (!state.linkOverride && !ownLinksCoverAll()) { setStatus('error', 'CSV-less: set a destination Link (step 7), or give every creative / language its own link.'); return; }
     }
 
     // v0.33.0: language mode — a half-filled table must not reach FB (it would build a broken feed).
     if (state.langMode) {
       const li = langIssues();
       if (li.length) { setStatus('error', `Языки: ${li.join(' · ')}`); return; }
-      if (!state.linkOverride && !state.rows.some(r => r['Link'])) { setStatus('error', 'Языки: нужна общая ссылка (шаг 7 или колонка Link в CSV).'); return; }
+      if (!langHasSharedLink() && state.langRows.some(r => !String(r.link || '').trim())) { setStatus('error', 'Языки: нужна общая ссылка (шаг 7 или колонка Link в CSV) или своя ссылка в каждой строке языка.'); return; }
     }
+    if (plan.maxAdsPerAdset > 50) { setStatus('error', `${plan.maxAdsPerAdset} объявлений в адсете — FB пускает максимум 50. Уменьши «Ads per ad set — copies».`); return; }
 
     // Pre-flight: DSA Beneficiary required. FB used to enforce this only for EU
     // targeting, but in 2026 they expanded the rule to almost all ad sets — error
@@ -3458,6 +3536,7 @@
     }
     _tokenWarned.clear();  // v0.26.1: unknown-token warnings dedup per launch
     _sub2Warned.clear();
+    for (const k in _creativeMemo) delete _creativeMemo[k];  // v0.34.0
     _removedPosWarned.clear();  // v0.32.0
     for (const k in _igVerdicts) delete _igVerdicts[k];  // v0.32.0: IG read-back verdicts are per launch
     state.igReport = [];   // v0.29.0: IG summary is per run
@@ -3648,6 +3727,7 @@
   // now keyed off the accId param instead of state.targetAccId. Returns true on
   // full success, false on any ad-level error inside this account.
   const _thumbByVideo = {};  // v0.32.0: videoId → FB auto-thumbnail URL, per panel session
+  const _creativeMemo = {};  // v0.34.0: request body → creative id, per launch (copies of one ad share a creative)
 
   // v0.32.0: did FB refuse the creative because of its Instagram identity? Machine fields only:
   // subcode 1815199 «Ad account has no access to this Instagram account» (Marketing API error
@@ -3662,6 +3742,12 @@
     if (typeof data === 'string') { try { data = JSON.parse(data); } catch { data = null; } }
     const blamed = JSON.stringify(data?.blame_field_specs || []);
     return /instagram_(user|actor)_id/.test(`${fb.message || ''} ${blamed}`);
+  }
+  // v0.34.0: #100/1772103 «select an Instagram account or a Facebook Page to represent your campaign
+  // on Instagram» — FB wants an identity for the Instagram placements and got none. Subcode only
+  // (the user message is translated by FB into the session language).
+  function isIgRequiredError(e) {
+    return Number(e?.fbError?.error_subcode) === 1772103 || /\/1772103\]/.test(String(e?.message || ''));
   }
 
   async function runLaunchForAccount(accId, plan, dateStr) {
@@ -3706,10 +3792,9 @@
     // identity (proven live: flag-only creative reads back page-only). If IG is in targeting it
     // stays there (Alexander's call — warn, don't block, don't strip), but the AM IG field will
     // be empty until a real id is secured.
-    const igPlace = resolvePlacements();
-    const igTargeted = !igPlace || !(igPlace.publisher_platforms || []).length || igPlace.publisher_platforms.includes('instagram');
-    if (!resolvedIg && !state.usePageAsActor) {
-      if (igTargeted) {
+    const igOn = igTargeted(firstRow);
+    if (!resolvedIg && !fbOnlyActive()) {
+      if (igOn) {
         addLog('warning', `[${accLabel}] ⚠⚠ NO Instagram representative secured — IG stays in targeting but the AM IG field will be EMPTY (use_page_actor_override does not fill it). Fix: link an IG to the page (Page Settings → Linked accounts), grant this token ADVERTISER+ on the page, paste a promotable IG ID in step 3, or run one ad on this page from AM once so its PBIA lands in account history. Launch continues.`);
       }
     }
@@ -3789,6 +3874,8 @@
     let adsetIdx = 0;
     let adGlobalIdx = 0;  // 0-based across all adsets, for creatives list mode
     let totalAdOk = 0, totalAdErr = 0;
+    let igBlocked = false;   // v0.34.0: FB refused the identity (1772103) → no more ad sets in this cab
+    const copies = plan.adsMode ? plan.adCopies : 1;   // v0.34.0: identical copies of every ad in an ad set
     for (const [adsetSourceName, groupRows] of plan.groups) {
       adsetIdx++;
       const aFirst = groupRows[0];
@@ -3803,14 +3890,16 @@
         const indices = state.adsetAssignments[adsetSourceName];
         if (indices.length) activeItems = indices.map(i => plan.adsModeItems[i]).filter(Boolean);
       }
+      // v0.34.0: `copies` > 1 → every creative goes into the ad set N times (1-1-5 = 1 video × 5 ads).
+      // Names get -1…-N so each copy is told apart in the tracker ({ad_name} → sub5) and in AM.
       const adsToCreate = plan.adsMode
-        ? activeItems.map(item => ({
+        ? activeItems.flatMap(item => Array.from({ length: copies }, (_, k) => ({
             csvRow: groupRows[0],
-            forcedName: item.name,
+            forcedName: copies > 1 ? `${item.name}-${k + 1}` : item.name,
             forcedImageHash: item.imageHash,
             forcedVideoId: item.videoId,
             forcedItem: item,  // full reference for title/body/cta/thumbnailHash overrides
-          }))
+          })))
         : groupRows.map(r => ({
             csvRow: r,
             forcedName: null,
@@ -3818,6 +3907,13 @@
             forcedVideoId: null,
             forcedItem: null,
           }));
+
+      if (igBlocked) {
+        addLog('warning', `[${accLabel}] ⏭ adset ${adsetIdx}/${plan.adsetCount} не создаю: FB уже отказал в Instagram-личности (1772103) — иначе осталась бы пустая группа без объявлений.`);
+        totalAdErr += adsToCreate.length;
+        state.progress.done += 1 + adsToCreate.length;
+        continue;
+      }
 
       const adsetName = state.adsetNameTpl
         ? renderTpl(state.adsetNameTpl, {
@@ -4010,8 +4106,13 @@
           };
 
           // Link: override template or CSV (always run through resolveTokens for pixelID literal)
-          const rawLink = state.linkOverride || (r['Link'] || '');
+          // v0.34.0: a link on the creative itself (ads-mode JSON `link`) wins over the shared one,
+          // same as per-creative title/body/cta — different creatives can go to different pages.
+          const itemLang = adInfo.forcedItem?.lang || null;
+          const rawLink = adInfo.forcedItem?.link || state.linkOverride || (r['Link'] || '');
           const link = resolveTokens(rawLink, tokenCtx);
+          // v0.34.0: language rows may carry their own link (empty = the shared one above).
+          const langLinkOf = lr => { const own = String(lr.link || '').trim(); return own ? resolveTokens(own, tokenCtx) : link; };
 
           // URL Tags: override template OR CSV → resolveTokens → transformUrlTags (single-param replace)
           const rawTags = state.urlTagsOverride || (r['URL Tags'] || '');
@@ -4019,7 +4120,9 @@
           const urlTags = state.urlTagsOverride
             ? tagsResolved   // override mode: skip single-param replace (full template wins)
             : transformUrlTags(tagsResolved, accId, adName);
-          warnSub2(accLabel, accId, link, urlTags);  // строка плана со своим шаблоном — страховка
+          // строка плана со своим шаблоном — страховка (v0.34.0: языки — по каждой ссылке языка)
+          if (itemLang) new Set(itemLang.rows.map(langLinkOf).filter(Boolean)).forEach(l => warnSub2(accLabel, accId, l, urlTags));
+          else warnSub2(accLabel, accId, link, urlTags);
 
           // Resolve creative
           let imageHash, videoId;
@@ -4062,11 +4165,10 @@
           if (resolvedIg) objectStorySpec.instagram_user_id = resolvedIg;
           // v0.33.0: language mode → the creative is an asset_feed_spec (video/text/rules per language);
           // object_story_spec then carries identity only — no video_data/link_data anchor.
-          const itemLang = adInfo.forcedItem?.lang || null;
           let langFeed = null;
           if (itemLang) {
-            if (!link) throw new Error('языки: нет ссылки (шаг 7 или колонка Link в CSV)');
-            const built = await buildLangFeed(itemLang, link, cta, accId);
+            if (itemLang.rows.some(lr => !langLinkOf(lr))) throw new Error('языки: у языка нет ссылки и нет общей (шаг 7 или колонка Link в CSV)');
+            const built = await buildLangFeed(itemLang, link, cta, accId, raw => resolveTokens(raw, tokenCtx));
             if (built.error) {
               totalAdErr++;
               state.progress.done++;
@@ -4121,7 +4223,7 @@
           // Documented API equivalent of AM's "Use Facebook Page" IG identity: FB resolves the
           // page's PBIA server-side, no id / page role needed. This is the root fix for rented
           // cabs where the whole IG ladder comes back empty.
-          if (!resolvedIg && !state.usePageAsActor) creativeBody.use_page_actor_override = 'true';
+          if (!resolvedIg && !fbOnlyActive()) creativeBody.use_page_actor_override = 'true';
 
           // v0.6.4 safety net — if FB rejects the creative because of IG.
           // v0.6.10: instead of going straight to PBIA, run the full ladder
@@ -4130,8 +4232,17 @@
           // FB Ads Manager UI will then display in the IG identity dropdown —
           // PBIA, while functional, leaves that dropdown empty.
           let creative;
-          if (state.dryRun) {
-            addLog('info', `[${accLabel}] 🟦 creative: ${JSON.stringify(objectStorySpec).slice(0, 500)}${creativeBody.use_page_actor_override ? ' · +use_page_actor_override=true (Page identity on IG)' : ''}`);
+          // v0.34.0: copies of one ad are the SAME creative — one POST /adcreatives, N × POST /ads.
+          // Key = the whole request body, so copies whose URL tags differ (e.g. {ad_name} in sub5)
+          // still get their own creative.
+          const memoKey = (copies > 1 && !state.dryRun)
+            ? `${accId}|${creativeBody.object_story_spec}|${creativeBody.asset_feed_spec || ''}|${creativeBody.url_tags || ''}|${creativeBody.use_page_actor_override || ''}`
+            : '';
+          if (memoKey && _creativeMemo[memoKey]) {
+            creative = { id: _creativeMemo[memoKey] };
+            addLog('info', `[${accLabel}] ↺ creative ${creative.id} reused for the copy "${adName}"`);
+          } else if (state.dryRun) {
+            addLog('info', `[${accLabel}] 🟦 creative:${JSON.stringify(objectStorySpec).slice(0, 500)}${creativeBody.use_page_actor_override ? ' · +use_page_actor_override=true (Page identity on IG)' : ''}`);
             if (langFeed) addLog('info', `[${accLabel}] 🟦 asset_feed_spec (языки): ${JSON.stringify(langFeed)}`);
             creative = { id: 'DRY_CREATIVE' };
           } else {
@@ -4142,7 +4253,7 @@
             // the IG fallback dance — that's the whole point of the checkbox.
             // v0.32.0: IG rejection read from the error's fields, not from e.message (that is
             // error_user_msg first, which FB translates — on a ru/uk session it never matched).
-            if (isIgIdentityError(e) && objectStorySpec.instagram_user_id && !state.usePageAsActor) {
+            if (isIgIdentityError(e) && objectStorySpec.instagram_user_id && !fbOnlyActive()) {
               const rejectedIg = objectStorySpec.instagram_user_id;
               addLog('warning', `[${accLabel}] FB rejected IG ${rejectedIg} — falling back to Page-Backed IG (always promotable for this page)...`);
               // Bust any stale cache entry from initial resolveAccountIg so the
@@ -4169,7 +4280,7 @@
                   delete noIgSpec.instagram_user_id;
                   const noIgBody = { object_story_spec: JSON.stringify(noIgSpec), ...(langFeed ? { asset_feed_spec: JSON.stringify(langFeed) } : {}) };
                   if (urlTags) noIgBody.url_tags = urlTags;
-                  if (!state.usePageAsActor) noIgBody.use_page_actor_override = 'true';
+                  if (!fbOnlyActive()) noIgBody.use_page_actor_override = 'true';
                   creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: noIgBody });
                   resolvedIg = '';
                 }
@@ -4179,7 +4290,7 @@
                 delete retrySpec.instagram_user_id;
                 const retryBody = { object_story_spec: JSON.stringify(retrySpec), ...(langFeed ? { asset_feed_spec: JSON.stringify(langFeed) } : {}) };
                 if (urlTags) retryBody.url_tags = urlTags;
-                if (!state.usePageAsActor) retryBody.use_page_actor_override = 'true';
+                if (!fbOnlyActive()) retryBody.use_page_actor_override = 'true';
                 creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: retryBody });
                 resolvedIg = '';
               }
@@ -4188,6 +4299,7 @@
             }
           }
           }  // end else (non-dry-run creative)
+          if (memoKey && creative?.id) _creativeMemo[memoKey] = creative.id;
           // v0.11.0: confirm the IG identity actually stuck (catches FB's silent drop).
           const igVerdict = await verifyCreativeIg(creative?.id, resolvedIg, accLabel, adName, accId, resolvedIgPage, pageId);
           if (igVerdict === true) igKept++; else if (igVerdict === false) igDropped++;
@@ -4218,6 +4330,15 @@
           totalAdErr++;
           state.progress.done++;
           addLog('error', `[${accLabel}] ✗ ad "${adName}": ${e.message}`);
+          if (isIgRequiredError(e)) {
+            // v0.34.0: the same verdict will come back for every ad of this cab — stop here.
+            igBlocked = true;
+            const left = adsToCreate.length - i - 1;
+            totalAdErr += left;
+            state.progress.done += left;
+            addLog('warning', `[${accLabel}] 🛑 FB требует личность для Instagram-плейсментов, а у страницы ${resolvedIgPage || '?'} её нет${resolvedIg ? '' : ' (лестница IG ничего не нашла)'}. Остальные объявления этого каба не шлю. Что делать: (1) дай профилю Ads Manager роль ADVERTISER+ на странице (Page access) — тогда создастся page-backed IG; (2) вставь рабочий IG ID в шаге 3; (3) нужен залив без Instagram — убери Instagram из плейсментов (блок Placements) и поставь галку «FB-only».`);
+            break;
+          }
         }
         adGlobalIdx++;
         await sleep(jitter(RATE_AD_MS));
@@ -4237,7 +4358,7 @@
     } else {
       addLog(totalAdErr ? 'warning' : 'success', okMsg);
     }
-    state.igReport.push({ accLabel, igId: resolvedIg, igTargeted, ads: totalAdOk, kept: igKept, dropped: igDropped,
+    state.igReport.push({ accLabel, igId: resolvedIg, igTargeted: igOn, ads: totalAdOk, kept: igKept, dropped: igDropped,
       noPageRole: !!probePage && state.pageTokens[probePage] === '' });  // v0.30.0: why the IG wasn't found
     render();
     return !totalAdErr;
@@ -4250,7 +4371,7 @@
   function reportIgOutcome() {
     const rep = state.igReport || [];
     if (state.dryRun || !rep.some(r => r.ads > 0)) return;
-    if (state.usePageAsActor) {
+    if (fbOnlyActive()) {
       addLog('warning', '· 📷 Instagram выключен галкой «⛔ FB-only» (шаг 3) — IG не прикреплялся ни в одном кабе.');
       return;
     }
@@ -4565,6 +4686,7 @@
       <div class="preview">
         <div><b>${plan.adsetCount}</b> adset${plan.adsetCount > 1 ? 's' : ''} ${plan.adsMode ? `× <b>${plan.adsModeItems.length}</b> creatives = <b>${plan.adCount}</b> ads` : `· <b>${plan.adCount}</b> ad${plan.adCount > 1 ? 's' : ''}`} · <b>${plan.isCBO ? 'CBO' : 'ABO'}</b> ${plan.isCBO ? `${curPfx}${plan.cboBudget}/d` : `${curPfx}${plan.aboTotal}/d total`}</div>
         <div>Objective: <b>${esc(plan.objective || '?')}</b> · Event: <b>${esc(effEvent)}</b></div>
+        ${plan.adsMode && plan.adCopies > 1 ? `<div style="color:var(--good)">🔁 копии: каждый креатив × <b>${plan.adCopies}</b> → до <b>${plan.maxAdsPerAdset}</b> объявлений в адсете (структура 1-${plan.adsetCount}-${plan.maxAdsPerAdset})${plan.maxAdsPerAdset > 50 ? ' <b style="color:var(--crit)">⚠ FB: максимум 50 в адсете</b>' : ''}</div>` : ''}
         <div>Pixel: <b style="color:${pixelValid && pixelInAccount ? 'var(--good)' : 'var(--crit)'}">${esc(effPixel || 'MISSING')}</b> ${state.pixelOverride ? '<span style="color:var(--text-faint)">(override)</span>' : '<span style="color:var(--text-faint)">(from CSV)</span>'} ${!pixelValid && effPixel ? '<span style="color:var(--crit)">⚠ invalid format</span>' : ''} ${pixelValid && state.pixelsList.length && !pixelInAccount ? '<span style="color:var(--crit)">⚠ not in this account</span>' : ''}</div>
         ${plan.adsMode ? (state.langMode
           ? `<div style="color:var(--good)">🌐 языки: каждый адсет получает 1 объявление «${esc(plan.adsModeItems[0].name)}» · ${state.langRows.length} языков (asset_feed_spec, CSV Ad Name/Image Hash/Video ID игнорируются)</div>`
@@ -4590,10 +4712,13 @@
     else if (isLifetimeBudget() && !budgetEndTimeUnix()) blockReason = '⚠ Lifetime budget needs an end date (1b)';
     // v0.10.0: CSV-less needs objective + destination link from the UI.
     else if (plan && plan.csvless && !plan.objective) blockReason = '⬆ CSV-less: pick a Campaign Objective (1b)';
-    else if (plan && plan.csvless && !state.linkOverride) blockReason = '⬆ CSV-less: set destination Link (step 7)';
-    // v0.33.0: language mode needs a complete language table and one shared link.
+    else if (plan && plan.csvless && !state.linkOverride && !ownLinksCoverAll()) blockReason = '⬆ CSV-less: set destination Link (step 7) — or give every creative / language its own link';
+    // v0.34.0: FB takes at most 50 ads per ad set — copies × creatives must fit.
+    else if (plan && plan.maxAdsPerAdset > 50) blockReason = `⚠ ${plan.maxAdsPerAdset} объявлений в адсете — FB пускает максимум 50 (уменьши копии)`;
+    // v0.33.0: language mode needs a complete language table; v0.34.0: and a link for every language
+    // (its own, or the shared one from step 7).
     else if (state.langMode && langIssues().length) blockReason = `⚠ Языки: ${langIssues()[0]}`;
-    else if (state.langMode && !state.linkOverride && !state.rows.some(r => r['Link'])) blockReason = '⬆ Языки: задай общую ссылку (шаг 7)';
+    else if (state.langMode && !langHasSharedLink() && state.langRows.some(r => !String(r.link || '').trim())) blockReason = '⬆ Языки: задай общую ссылку (шаг 7) или ссылку в каждой строке языка';
     const runDisabled = !!blockReason;
     const totalAds = plan?.adCount || 0;
     const buttonLabel = blockReason
@@ -4617,7 +4742,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.33.1</span></span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.34.0</span></span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -4810,11 +4935,11 @@
         <input type="text" id="fbl-page-id" value="${esc(state.pageIdOverride)}" placeholder="${state.pagesList.length ? 'or paste custom page ID' : 'page ID (14-20 digits) — empty = use CSV'}" style="margin-bottom:8px">
         <label style="display:flex;align-items:center;gap:6px;margin-top:5px;cursor:pointer">
           <input type="checkbox" id="fbl-use-page-as-actor" ${state.usePageAsActor ? 'checked' : ''}>
-          <span><b style="color:${state.usePageAsActor ? 'var(--warn)' : 'inherit'}">⛔ FB-only — БЕЗ Instagram</b> <span style="color:var(--text-faint)">— ставь ТОЛЬКО если IG не нужен совсем: шлёт один page_id, instagram_user_id НЕ отправляется → объявление НЕ крутится в Instagram, IG-слот пустой. ${state.usePageAsActor ? '<b style="color:var(--warn)">⚠ сейчас включено — IG выключен</b>' : ''}</span></span>
+          <span><b style="color:${state.usePageAsActor ? 'var(--warn)' : 'inherit'}">⛔ FB-only — БЕЗ Instagram</b> <span style="color:var(--text-faint)">— только вместе с «Instagram убран из Placements»: шлёт один page_id, instagram_user_id НЕ отправляется. С Instagram в плейсментах FB отвечает 1772103, поэтому галка тогда <b>не действует</b> (лестница IG работает как обычно). Не сохраняется в пресетах. ${state.usePageAsActor ? (igTargeted() ? '<b style="color:var(--warn)">⚠ включено, но Instagram в плейсментах — игнорируется</b>' : '<b style="color:var(--warn)">⚠ действует — IG выключен</b>') : ''}</span></span>
         </label>
-        ${!state.usePageAsActor ? `<div style="font-size:11px;color:var(--text-faint);margin-top:3px;padding-left:22px">дефолт (галка снята): лаунчер ищет IG страницы по лестнице (page IG → account actor → PBIA → история каба) и шлёт его явным <b>instagram_user_id</b> — как AM. Нашёл → крутится в FB и IG под именем Страницы. Не нашёл → предупреждение, IG-слот будет пустой.</div>` : ''}
-        <label style="margin-top:5px;${state.usePageAsActor ? 'opacity:.4;pointer-events:none' : ''}">Instagram Account ID <span style="color:var(--text-faint)">— empty = auto-fetch from Page's connected IG${isMulti ? ' · ⚠ same ID for all accounts' : ''}</span></label>
-        <input type="text" id="fbl-ig-id" value="${esc(state.instagramOverride)}" placeholder="leave empty → launcher auto-detects from Page · or paste IG actor ID to override"${state.usePageAsActor ? ' disabled style="opacity:.4"' : ''}>
+        ${!fbOnlyActive() ? `<div style="font-size:11px;color:var(--text-faint);margin-top:3px;padding-left:22px">лаунчер ищет IG страницы по лестнице (page IG → account actor → PBIA токеном страницы → история каба) и шлёт его явным <b>instagram_user_id</b> — так же, как залив ARIA. Нашёл → крутится в FB и IG под именем Страницы. Не нашёл → <b>use_page_actor_override</b>; если FB и это не примет (1772103) — каб останавливается с подсказкой.</div>` : ''}
+        <label style="margin-top:5px;${fbOnlyActive() ? 'opacity:.4;pointer-events:none' : ''}">Instagram Account ID <span style="color:var(--text-faint)">— empty = auto-fetch from Page's connected IG${isMulti ? ' · ⚠ same ID for all accounts' : ''}</span></label>
+        <input type="text" id="fbl-ig-id" value="${esc(state.instagramOverride)}" placeholder="leave empty → launcher auto-detects from Page · or paste IG actor ID to override"${fbOnlyActive() ? ' disabled style="opacity:.4"' : ''}>
         ${(() => {
           // v0.6.4: cache key changed to "acc__page" since same page can resolve differently
           // per account. Hint shows status for the primary selected account.
@@ -4932,6 +5057,13 @@
             : '— CSV-less: make N identical ad sets (same targeting). Distribute creatives in 6.5 below.'
           }</span></label>
           <input type="number" min="1" max="50" id="fbl-adset-count" value="${esc(state.adsetCountOverride)}" placeholder="1"${(!plan?.csvless || splitActive) ? ' disabled style="opacity:.4"' : ''}>
+        </div>
+        <div class="field">
+          <label>Ads per ad set — copies <span style="color:var(--text-faint)">${
+            plan && !plan.adsMode ? '(ignored — CSV rows define the ads; use uploaded creatives / JSON / languages)'
+            : '— each creative goes into every ad set N times: 1 video × 5 = structure 1-1-5. Names get -1…-N, copies share one creative. Max 50 ads per ad set.'
+          }</span></label>
+          <input type="number" min="1" max="50" id="fbl-ad-copies" value="${esc(state.adCopiesOverride)}" placeholder="1"${(plan && !plan.adsMode) ? ' disabled style="opacity:.4"' : ''}>
         </div>
         <div class="grid2" style="margin-top:10px">
           <div class="field">
@@ -5158,7 +5290,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       </div>
 
       <div class="field">
-        <label>9. Ad copy override (optional) <span style="color:var(--text-faint)">— same for all ads; per-creative title/body/cta in ads-mode JSON wins</span></label>
+        <label>9. Ad copy override (optional) <span style="color:var(--text-faint)">— same for all ads; per-creative title/body/cta/link in ads-mode JSON wins</span></label>
         <div class="field">
           <label style="font-size:10px">AIDA phrase library <span style="color:var(--text-faint)">— pick to fill a field, then edit. Attention=title · Interest+Desire=body · Action=description</span></label>
           <select id="fbl-phrase-vertical">
@@ -5651,6 +5783,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
     document.getElementById('fbl-objective')?.addEventListener('change', e => { state.objectiveOverride = e.target.value; render(); });
     // v0.12.0: CSV-less adset count — re-render to update preview + show/hide the 6.5 distribution matrix
     document.getElementById('fbl-adset-count')?.addEventListener('input', e => { state.adsetCountOverride = e.target.value.trim(); render(); });
+    document.getElementById('fbl-ad-copies')?.addEventListener('input', e => { state.adCopiesOverride = e.target.value.trim(); render(); });
     document.getElementById('fbl-start-date')?.addEventListener('input', e => { state.startDate = e.target.value; });
     document.getElementById('fbl-dry-run')?.addEventListener('change', e => { state.dryRun = e.target.checked; render(); });
     // v0.8.0: placement preset fills the checkbox arrays
@@ -5721,6 +5854,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
         if (f === 'title') r.title = e.target.value;
         else if (f === 'body') r.body = e.target.value;
         else if (f === 'videoId') r.videoId = e.target.value.trim();
+        else if (f === 'link') r.link = e.target.value.trim();
         else return;
         refreshStatus();
       });
@@ -5744,7 +5878,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       // Leaving the block (not moving between its own fields) refreshes the LAUNCH button reason.
       langBox.addEventListener('focusout', e => {
         if (e.relatedTarget && langBox.contains(e.relatedTarget)) return;
-        if (['title', 'body', 'videoId'].includes(e.target.dataset?.lf)) render();
+        if (['title', 'body', 'videoId', 'link'].includes(e.target.dataset?.lf)) render();
       });
       langBox.addEventListener('click', e => {
         const b = e.target.closest('button[data-lf]');
