@@ -10,9 +10,11 @@
   // Кабы 111 и 222. Страница БЕЗ привязанного IG и без роли (PBIA #10), как у баера на чужой странице.
   // Переключатели в __mock:
   //   hist       — true: в истории креативов каба лежит IG страницы (лестница его находит); false: IG взять неоткуда;
-  //   identity   — 'off' | 'flag' | 'always': FB отвечает #100/1772103 на креатив БЕЗ личности:
-  //                'flag'   — отказ, если нет ни instagram_user_id, ни use_page_actor_override (чистый page-only);
+  //   identity   — 'off' | 'flag' | 'always': FB отвечает #100/1772103 на СОЗДАНИЕ ОБЪЯВЛЕНИЯ без личности
+  //                в адсете с Instagram в плейсментах:
+  //                'flag'   — отказ, если у креатива нет ни instagram_user_id, ни use_page_actor_override;
   //                'always' — отказ, даже если флаг есть (FB перестал принимать и его).
+  //                Адсет можно перевести на Facebook-плейсменты (POST /as_N targeting) — тогда объявление проходит.
   //   Каждый POST /adcreatives оседает в __mock.posts целиком, каждое ads — в __mock.ads, адсеты считаются в __mock.adsets.
   var __accessToken = 'VISUAL_TEST_TOKEN';
   window.alert = function () {};
@@ -20,7 +22,7 @@
   window.prompt = function () { return 'preset-v34'; };
 
   var PAGE = '1039445349258069', IG = '17841431636764372', PIXEL = '1451350725476785';
-  window.__mock = { n: 0, vid: 0, posts: [], ads: [], adsets: 0, uploads: {}, locSearches: 0, hist: true, identity: 'off', rejected: 0 };
+  window.__mock = { n: 0, vid: 0, posts: [], ads: [], adsets: 0, uploads: {}, locSearches: 0, hist: true, identity: 'off', rejected: 0, adsetIg: {}, adsetUpdates: [], adsetTargeting: [] };
 
   function ok(b) {
     return Promise.resolve(new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } }));
@@ -79,13 +81,6 @@
 
     if ((m = path.match(/^\/act_(\d+)\/adcreatives$/))) {
       if (method === 'POST') {
-        var oss = JSON.parse(body.object_story_spec || '{}');
-        var hasIdentity = !!oss.instagram_user_id || body.use_page_actor_override === 'true';
-        if ((__mock.identity === 'flag' && !oss.instagram_user_id && body.use_page_actor_override !== 'true') ||
-            (__mock.identity === 'always' && !oss.instagram_user_id)) {
-          __mock.rejected++;
-          return fbErr(100, 'Выберите аккаунт Instagram или Страницу Facebook, которые будут представлять вашу кампанию в Instagram.', 1772103);
-        }
         var id = 'cr_' + (++__mock.n);
         __mock.posts.push({ acc: m[1], id: id, body: body });
         return ok({ id: id });
@@ -100,8 +95,37 @@
       return ok({ id: m[1], object_story_spec: o2.instagram_user_id ? { instagram_user_id: o2.instagram_user_id } : {} });
     }
     if (/^\/act_\d+\/campaigns$/.test(path) && method === 'POST') return ok({ id: 'camp_' + (++__mock.n) });
-    if (/^\/act_\d+\/adsets$/.test(path) && method === 'POST') { __mock.adsets++; return ok({ id: 'as_' + (++__mock.n) }); }
-    if (/^\/act_\d+\/ads$/.test(path) && method === 'POST') { __mock.ads.push(body); return ok({ id: 'ad_' + (++__mock.n) }); }
+    // Ad sets remember whether Instagram is among their placements: FB refuses (1772103) an AD with no
+    // Instagram identity inside such an ad set — the same moment and the same reason as the real API.
+    function igOnIn(targetingJson) {
+      var t = JSON.parse(targetingJson || '{}');
+      return !t.publisher_platforms || t.publisher_platforms.indexOf('instagram') >= 0;
+    }
+    if (/^\/act_\d+\/adsets$/.test(path) && method === 'POST') {
+      __mock.adsets++;
+      var asId = 'as_' + (++__mock.n);
+      __mock.adsetIg[asId] = igOnIn(body.targeting);
+      __mock.adsetTargeting.push({ id: asId, targeting: JSON.parse(body.targeting || '{}') });
+      return ok({ id: asId });
+    }
+    if ((m = path.match(/^\/(as_\d+)$/)) && method === 'POST') {
+      __mock.adsetUpdates.push({ id: m[1], targeting: JSON.parse(body.targeting || '{}') });
+      __mock.adsetIg[m[1]] = igOnIn(body.targeting);
+      return ok({ success: true });
+    }
+    if (/^\/act_\d+\/ads$/.test(path) && method === 'POST') {
+      var crId = JSON.parse(body.creative || '{}').creative_id;
+      var cr = __mock.posts.filter(function (p) { return p.id === crId; })[0];
+      var coss = cr ? JSON.parse(cr.body.object_story_spec || '{}') : {};
+      var hasIg = !!coss.instagram_user_id, hasFlag = cr && cr.body.use_page_actor_override === 'true';
+      var igOn = __mock.adsetIg[body.adset_id] !== false;
+      if (igOn && ((__mock.identity === 'flag' && !hasIg && !hasFlag) || (__mock.identity === 'always' && !hasIg))) {
+        __mock.rejected++;
+        return fbErr(100, 'Выберите аккаунт Instagram или Страницу Facebook, которые будут представлять вашу кампанию в Instagram.', 1772103);
+      }
+      __mock.ads.push(body);
+      return ok({ id: 'ad_' + (++__mock.n) });
+    }
     return ok({ data: [] });
   };
 </script>

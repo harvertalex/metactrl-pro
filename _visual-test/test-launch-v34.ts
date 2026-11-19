@@ -73,8 +73,9 @@ const runState = (p: Page) => p.evaluate(() => {
 });
 const mock = (p: Page) => p.evaluate(() => {
   const m = (window as any).__mock;
-  return { posts: m.posts, ads: m.ads, adsets: m.adsets, rejected: m.rejected };
+  return { posts: m.posts, ads: m.ads, adsets: m.adsets, rejected: m.rejected, adsetUpdates: m.adsetUpdates, adsetTargeting: m.adsetTargeting };
 });
+const modal = (p: Page) => p.evaluate(() => (document.getElementById("fbl-ig-modal") as HTMLElement | null)?.innerText || "");
 const preview = (p: Page) => p.evaluate(() => (document.querySelector(".preview") as HTMLElement | null)?.innerText || "");
 
 /** value + input + blur (blur → panel re-render, как после ухода из поля) */
@@ -283,6 +284,12 @@ try {
   check("D1. tick ON + Instagram targeted → tick ignored, log says why", /галка НЕ действует/.test(log));
   check("D1. creative carries the page-identity flag (not bare page-only) → FB accepts, ad created",
     mk.rejected === 0 && mk.ads.length === 1 && mk.posts[0].body.use_page_actor_override === "true", `rejected=${mk.rejected} ads=${mk.ads.length}`);
+  let md = await modal(page);
+  check("D1. the launch passed WITHOUT an identity → modal tells the buyer to set Instagram by hand",
+    /Instagram не прикреплён/.test(md) && /первый залив/.test(md) && /нет IG-личности/.test(md) && /Cab A/.test(md), md.split("\n").join(" | ").slice(0, 220));
+  await page.click("#fbl-ig-modal-close");
+  await sleep(300);
+  check("D1. 'Понятно' closes the modal", (await modal(page)) === "");
 
   // D2. те же условия, но плейсменты только Facebook → галка действует: чистый page-only, без флага, без поиска IG
   await prep(page, { mock: { hist: false, identity: "off" } });
@@ -295,15 +302,48 @@ try {
   mk = await mock(page);
   const oss2 = JSON.parse(mk.posts[0].body.object_story_spec);
   check("D2. tick ON + Facebook-only placements → honest page-only", /Page-only identity/.test(log) && !oss2.instagram_user_id && !mk.posts[0].body.use_page_actor_override && mk.ads.length === 1);
+  check("D2. deliberate FB-only → no 'Instagram not attached' modal", (await modal(page)) === "");
 
-  // D3. FB не принимает и флаг (#1772103) → каб останавливается, второй адсет не создаётся
+  // D3. FB не принимает и флаг (#1772103), галка-фолбэк ВКЛ (по умолчанию) → адсет уходит на плейсменты Facebook,
+  //     объявление проходит, второй адсет рождается уже без Instagram, в конце — модалка
   await prep(page, { csv: csv2, mock: { hist: false, identity: "always" } });
   await upload(page, [vidA]);
+  check("D3. the fallback tick is ON by default",
+    await page.$eval("#fbl-ig-fallback", (el) => (el as HTMLInputElement).checked));
   log = await launch(page, DONE);
   mk = await mock(page);
-  check("D3. FB 1772103 → exactly one refusal, no ads", mk.rejected === 1 && mk.ads.length === 0, `rejected=${mk.rejected} ads=${mk.ads.length}`);
-  check("D3. the second ad set is NOT created (no empty groups)", mk.adsets === 1 && /adset 2\/2 не создаю/.test(log), `adsets=${mk.adsets}`);
-  check("D3. log explains what to do (role / IG ID / drop Instagram)", /🛑 FB требует личность/.test(log) && /ADVERTISER/.test(log) && /Placements/.test(log));
+  check("D3. FB refused exactly once (the first ad), then the ad set was moved to Facebook-only",
+    mk.rejected === 1 && mk.adsetUpdates.length === 1
+    && !mk.adsetUpdates[0].targeting.publisher_platforms.includes("instagram")
+    && mk.adsetUpdates[0].targeting.publisher_platforms.includes("facebook")
+    && !("instagram_positions" in mk.adsetUpdates[0].targeting),
+    `rejected=${mk.rejected} updates=${mk.adsetUpdates.length} platforms=${JSON.stringify(mk.adsetUpdates[0]?.targeting.publisher_platforms)}`);
+  check("D3. BOTH ads were created (the launch passed)", mk.ads.length === 2, String(mk.ads.length));
+  const asT2 = mk.adsetTargeting[1]?.targeting;
+  check("D3. the 2nd ad set was BORN Facebook-only (no second refusal)", !!asT2 && !asT2.publisher_platforms.includes("instagram") && mk.adsets === 2, JSON.stringify(asT2?.publisher_platforms));
+  check("D3. the retried creative carries no identity flag (page-only on Facebook placements)", !mk.posts[mk.posts.length - 1].body.use_page_actor_override);
+  check("D3. log names the fallback", /переведён на плейсменты Facebook/.test(log) && /БЕЗ Instagram/.test(log));
+  md = await modal(page);
+  check("D3. modal: Instagram stripped from placements, first launch on this cab, what to do",
+    /Instagram снят с плейсментов/.test(md) && /2 адсет/.test(md) && /первый залив/.test(md) && /Placements/.test(md) && /Identity/.test(md) && /Cab A/.test(md),
+    md.split("\n").join(" | ").slice(0, 260));
+  check("D3. the modal has a copy button and a close button", (await page.$("#fbl-ig-modal-copy")) !== null && (await page.$("#fbl-ig-modal-close")) !== null);
+  await page.screenshot({ path: resolve(dir, "launch-ig-modal.png") });
+  // перерисовка панели не стирает модалку
+  await page.evaluate(() => { const el = document.getElementById("fbl-dsa-beneficiary") as HTMLInputElement; el.value = "X"; el.dispatchEvent(new Event("input", { bubbles: true })); el.focus(); el.blur(); });
+  await sleep(300);
+  check("D3. a panel re-render does not wipe the modal", (await modal(page)) !== "");
+
+  // D3b. галка-фолбэк СНЯТА → как в 0.34: стоп каба, второй адсет не создаётся, модалки нет (ничего не залито)
+  await prep(page, { csv: csv2, mock: { hist: false, identity: "always" } });
+  await upload(page, [vidA]);
+  await page.evaluate(() => { const cb = document.getElementById("fbl-ig-fallback") as HTMLInputElement; if (cb.checked) cb.click(); });
+  await sleep(300);
+  log = await launch(page, DONE);
+  mk = await mock(page);
+  check("D3b. fallback OFF → FB 1772103 → one refusal, no ads, ad set NOT patched", mk.rejected === 1 && mk.ads.length === 0 && mk.adsetUpdates.length === 0, `rejected=${mk.rejected} ads=${mk.ads.length}`);
+  check("D3b. the second ad set is NOT created (no empty groups)", mk.adsets === 1 && /adset 2\/2 не создаю/.test(log), `adsets=${mk.adsets}`);
+  check("D3b. log explains what to do (role / IG ID / drop Instagram)", /🛑 FB требует личность/.test(log) && /ADVERTISER/.test(log) && /Placements/.test(log));
 
   // D4. IG найден в истории → уходит явным instagram_user_id даже с галкой (Instagram в плейсментах)
   await prep(page, { mock: { hist: true, identity: "flag" } });
@@ -313,6 +353,7 @@ try {
   await launch(page, DONE);
   mk = await mock(page);
   check("D4. IG known + tick ON + Instagram targeted → explicit instagram_user_id", JSON.parse(mk.posts[0].body.object_story_spec).instagram_user_id === "17841431636764372");
+  check("D4. IG attached → no modal", (await modal(page)) === "");
 
   check("no page errors", errors.length === 0, errors.join(" | "));
 } catch (e) {

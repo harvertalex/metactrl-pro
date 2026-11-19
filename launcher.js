@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.34.0 — Bookmarklet
+ * MetaLaunch PRO v0.35.0 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -182,6 +182,17 @@
  *          (4) multi-account launch logs a ⚠ that the ONE pixel (step 4/CSV) is applied to ALL
  *              accounts — promoted_object and {pixel_id} alike.
  *          (5) collapsible "macros reference" under step 8 — all launcher tokens + FB macros.
+ *
+ * v0.35.0: первый залив с новой страницей на кабе, где IG взять неоткуда (нет роли на странице, нет истории):
+ *          FB отвечает 1772103 → адсет сам переводится на плейсменты Facebook (POST /<adset> targeting —
+ *          Instagram снят, остальные платформы как были; авто-плейсменты = facebook+audience_network+messenger),
+ *          объявление повторяется, следующие адсеты этого каба рождаются уже без Instagram — залив ПРОХОДИТ.
+ *          В конце залива — окно «📷 Instagram не прикреплён — поставь руками»: по кабам — что случилось
+ *          (Instagram снят с плейсментов / объявления без IG-личности / FB выкинул IG), почему («первый залив с этой
+ *          страницей на этом кабе»), что делать (включить Instagram в Placements адсета; Identity → Instagram account →
+ *          «Use Facebook Page» → Publish) и что после этого следующий залив возьмёт IG сам из истории каба.
+ *          Окно — состояние панели (render() его не стирает), есть «Скопировать». Галка «Нет IG и FB отказал →
+ *          залить на плейсменты Facebook» в шаге 3, по умолчанию ВКЛ; снята — каб останавливается как в 0.34.
  *
  * v0.34.0: (1) Instagram: галка «FB-only» действует ТОЛЬКО когда Instagram убран из плейсментов. С Instagram
  *          в плейсментах page_id без личности FB отвергает целиком (#100/1772103 «выберите аккаунт Instagram
@@ -564,6 +575,8 @@
     targetAccIds: [],         // v0.6: array of selected account IDs (1+ for multi-account launch)
     pageIdOverride: '',
     instagramOverride: '',    // v0.6.1: forces instagram_user_id (skips CSV "Instagram Account ID")
+    igFallbackFb: true,       // v0.35.0: no IG found + FB refuses (1772103) → ad set goes to Facebook-only placements, launch passes, a modal tells the buyer to set IG by hand
+    igModal: null,            // v0.35.0: { rows:[…] } — "Instagram not attached" window shown after the run (state-driven so render() can't wipe it)
     usePageAsActor: false,    // v0.18.2: PURE page-only — page_id only, instagram_user_id omitted, ZERO IG/PBIA calls. Hard-set Facebook Page as identity.
     linkOverride: '',         // v0.2: replaces CSV Link column (with token substitution)
     urlTagsOverride: '',      // v0.2: replaces CSV URL Tags column (with token substitution)
@@ -3063,6 +3076,18 @@
   // and it rode along in presets. ARIA never runs page-only unless told so by config; neither do we now.
   function fbOnlyActive() { return !!state.usePageAsActor && !igTargeted(); }
 
+  // v0.35.0: the same targeting without Instagram — what an ad set is moved to when FB insists on an
+  // Instagram identity we cannot get. Explicit platforms keep everything but Instagram; automatic
+  // placements (no list) become facebook + audience_network + messenger. null = nothing left to run on.
+  function fbOnlyTargeting(t) {
+    const had = Array.isArray(t.publisher_platforms) ? t.publisher_platforms : [];
+    const pubs = had.length ? had.filter(p => p !== 'instagram') : ['facebook', 'audience_network', 'messenger'];
+    if (!pubs.length) return null;
+    const out = { ...t, publisher_platforms: pubs };
+    delete out.instagram_positions;
+    return out;
+  }
+
   function renderTpl(tpl, ctx) {
     return String(tpl || '').replace(/\{(\w+)\}|\$\{(\w+)\}/g, (_, a, b) => String(ctx[a || b] ?? ''));
   }
@@ -3769,6 +3794,10 @@
     let resolvedIg = igResolution.igId;
     let resolvedIgPage = probePage;       // v0.29.0: the page resolvedIg belongs to (for the IG memory)
     let igKept = 0, igDropped = 0;        // v0.29.0: readback verdicts → end-of-run IG summary
+    // v0.35.0: FB refused the identity (1772103) and the buyer allowed the fallback → from now on every
+    // ad set of this cab goes to Facebook-only placements and the creative carries no IG / identity flag.
+    let igFbFallback = false, fbAdsets = 0, fbAds = 0;
+    const pageOnlyNow = () => fbOnlyActive() || igFbFallback;
     if (igResolution.source === 'page-only') {
       addLog('info', `[${accLabel}] 🟦 Page-only identity — using Facebook Page ${probePage || '(from CSV)'} as identity, Instagram skipped entirely (instagram_user_id omitted, no IG/PBIA calls)`);
     } else if (igResolution.source === 'desired-valid') {
@@ -3991,7 +4020,7 @@
       // without it on every version; a CSV "On"/"Off" used to become NaN → null.
       const aaRaw = state.advantageAudienceOverride !== '' ? state.advantageAudienceOverride : aFirst['Advantage Audience'];
       const advantageAudience = /^(1|on|yes|true)$/i.test(String(aaRaw ?? '').trim()) ? 1 : 0;
-      const targeting = {
+      let targeting = {
         geo_locations: geoLocations,
         age_min: ageMin,
         age_max: ageMax,
@@ -4003,6 +4032,13 @@
       if (userOs.length) targeting.user_os = userOs;
       if (fbPositions.length) targeting.facebook_positions = fbPositions;
       if (igPositions.length) targeting.instagram_positions = igPositions;
+      // v0.35.0: this cab already got FB's 1772103 → the next ad sets are born Facebook-only
+      // (no failed first attempt, no ad set to patch afterwards).
+      let adsetFbOnly = false;
+      if (igFbFallback) {
+        const t2 = fbOnlyTargeting(targeting);
+        if (t2) { targeting = t2; adsetFbOnly = true; }
+      }
 
       const promoted = { pixel_id: pixelId, custom_event_type: customEventType };
 
@@ -4069,6 +4105,10 @@
           adsetId = adset.id;
         }
         state.progress.done++;
+        if (adsetFbOnly) {
+          fbAdsets++;
+          addLog('warning', `[${accLabel}] 📷 adset ${adsetIdx} создан на плейсментах Facebook БЕЗ Instagram (в этом кабе FB уже отказал в IG-личности).`);
+        }
         addLog('success', `[${accLabel}] ${state.dryRun ? '🟦 DRY ' : '✓ '}adset ${adsetIdx}/${plan.adsetCount} id=${adsetId} (${adsToCreate.length} ads coming)`);
       } catch (e) {
         addLog('error', `[${accLabel}] ✗ adset ${adsetIdx} "${adsetNameFinal}": ${e.message}`);
@@ -4223,7 +4263,7 @@
           // Documented API equivalent of AM's "Use Facebook Page" IG identity: FB resolves the
           // page's PBIA server-side, no id / page role needed. This is the root fix for rented
           // cabs where the whole IG ladder comes back empty.
-          if (!resolvedIg && !fbOnlyActive()) creativeBody.use_page_actor_override = 'true';
+          if (!resolvedIg && !pageOnlyNow()) creativeBody.use_page_actor_override = 'true';
 
           // v0.6.4 safety net — if FB rejects the creative because of IG.
           // v0.6.10: instead of going straight to PBIA, run the full ladder
@@ -4253,7 +4293,7 @@
             // the IG fallback dance — that's the whole point of the checkbox.
             // v0.32.0: IG rejection read from the error's fields, not from e.message (that is
             // error_user_msg first, which FB translates — on a ru/uk session it never matched).
-            if (isIgIdentityError(e) && objectStorySpec.instagram_user_id && !fbOnlyActive()) {
+            if (isIgIdentityError(e) && objectStorySpec.instagram_user_id && !pageOnlyNow()) {
               const rejectedIg = objectStorySpec.instagram_user_id;
               addLog('warning', `[${accLabel}] FB rejected IG ${rejectedIg} — falling back to Page-Backed IG (always promotable for this page)...`);
               // Bust any stale cache entry from initial resolveAccountIg so the
@@ -4280,7 +4320,7 @@
                   delete noIgSpec.instagram_user_id;
                   const noIgBody = { object_story_spec: JSON.stringify(noIgSpec), ...(langFeed ? { asset_feed_spec: JSON.stringify(langFeed) } : {}) };
                   if (urlTags) noIgBody.url_tags = urlTags;
-                  if (!fbOnlyActive()) noIgBody.use_page_actor_override = 'true';
+                  if (!pageOnlyNow()) noIgBody.use_page_actor_override = 'true';
                   creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: noIgBody });
                   resolvedIg = '';
                 }
@@ -4290,7 +4330,7 @@
                 delete retrySpec.instagram_user_id;
                 const retryBody = { object_story_spec: JSON.stringify(retrySpec), ...(langFeed ? { asset_feed_spec: JSON.stringify(langFeed) } : {}) };
                 if (urlTags) retryBody.url_tags = urlTags;
-                if (!fbOnlyActive()) retryBody.use_page_actor_override = 'true';
+                if (!pageOnlyNow()) retryBody.use_page_actor_override = 'true';
                 creative = await apiFetch(`/act_${accId}/adcreatives`, { method: 'POST', body: retryBody });
                 resolvedIg = '';
               }
@@ -4324,9 +4364,32 @@
               findCreated: sentAt => findCreatedByName(accId, 'ad', adNameFinal, sentAt, adsetId) });
           }
           totalAdOk++;
+          if (adsetFbOnly) fbAds++;
           state.progress.done++;
           addLog('success', `[${accLabel}] ${state.dryRun ? '🟦 DRY ' : '✓ '}ad ${i + 1}/${adsToCreate.length} "${adNameFinal}"`);
         } catch (e) {
+          // v0.35.0: FB wants an Instagram identity we could not find. Instead of stopping, move THIS ad set
+          // to Facebook-only placements (POST /<adset> targeting), redo this ad once, and tell the buyer
+          // in the end-of-run window to put Instagram back by hand. Not when the buyer switched it off,
+          // when nothing but Instagram was selected, or when the patch itself is refused → old stop below.
+          if (isIgRequiredError(e) && state.igFallbackFb && !state.dryRun && !adsetFbOnly) {
+            const fbT = fbOnlyTargeting(targeting);
+            if (fbT) {
+              try {
+                await apiFetch(`/${adsetId}`, { method: 'POST', body: { targeting: JSON.stringify(fbT) } });
+                targeting = fbT;
+                adsetFbOnly = true;
+                igFbFallback = true;
+                fbAdsets++;
+                addLog('warning', `[${accLabel}] 📷 FB требует личность Instagram, а её нет → адсет ${adsetIdx} переведён на плейсменты Facebook (Instagram снят), объявление пробую заново. Дальше в этом кабе все адсеты — тоже без Instagram. Баеру: после залива поставить IG руками (окно появится в конце).`);
+                i--;   // same ad again, now on Facebook-only placements
+                await sleep(jitter(RATE_AD_MS));
+                continue;
+              } catch (e2) {
+                addLog('warning', `[${accLabel}] не вышло перевести адсет на Facebook-плейсменты: ${e2.message}`);
+              }
+            }
+          }
           totalAdErr++;
           state.progress.done++;
           addLog('error', `[${accLabel}] ✗ ad "${adName}": ${e.message}`);
@@ -4358,7 +4421,9 @@
     } else {
       addLog(totalAdErr ? 'warning' : 'success', okMsg);
     }
-    state.igReport.push({ accLabel, igId: resolvedIg, igTargeted: igOn, ads: totalAdOk, kept: igKept, dropped: igDropped,
+    state.igReport.push({ accLabel, accId, pageId: resolvedIgPage || probePage, campaignId: campaignId || '',
+      fbFallback: igFbFallback, fbAdsets, fbAds,   // v0.35.0: ad sets moved to Facebook-only placements
+      igId: resolvedIg, igTargeted: igOn, ads: totalAdOk, kept: igKept, dropped: igDropped,
       noPageRole: !!probePage && state.pageTokens[probePage] === '' });  // v0.30.0: why the IG wasn't found
     render();
     return !totalAdErr;
@@ -4377,13 +4442,80 @@
     }
     const bad = rep.filter(r => r.igTargeted && r.ads > 0 && (!r.igId || r.dropped > 0));
     if (bad.length) {
-      const why = r => !r.igId
-        ? `${r.accLabel} — IG не найден${r.noPageRole ? ', у профиля нет роли на странице' : ''} (${r.ads} объяв.)`
-        : `${r.accLabel} — FB выкинул IG ${r.igId} в ${r.dropped} из ${r.kept + r.dropped} объяв.`;
+      const why = r => r.fbFallback
+        ? `${r.accLabel} — Instagram СНЯТ с плейсментов (${r.fbAdsets} адсет., ${r.fbAds} объяв.): FB не принял объявления без IG-личности${r.noPageRole ? ', у профиля нет роли на странице' : ''}`
+        : !r.igId
+          ? `${r.accLabel} — IG не найден${r.noPageRole ? ', у профиля нет роли на странице' : ''} (${r.ads} объяв.)`
+          : `${r.accLabel} — FB выкинул IG ${r.igId} в ${r.dropped} из ${r.kept + r.dropped} объяв.`;
       addLog('warning', `· 📷 Instagram НЕ прикреплён — кампании залиты, реклама идёт. Выставь IG руками в Ads Manager (объявление → Личность → аккаунт Instagram): ${bad.map(why).join(' · ')}`);
+      // v0.35.0: and a window the buyer cannot miss — a log line is exactly what gets overlooked.
+      state.igModal = {
+        rows: bad.map(r => ({
+          accLabel: r.accLabel, accId: r.accId, pageId: r.pageId, campaignId: r.campaignId,
+          kind: r.fbFallback ? 'fallback' : (!r.igId ? 'noident' : 'dropped'),
+          ads: r.ads, fbAdsets: r.fbAdsets, fbAds: r.fbAds, igId: r.igId, dropped: r.dropped,
+          noPageRole: r.noPageRole,
+        })),
+      };
     }
     const good = rep.filter(r => r.ads > 0 && r.igId && !r.dropped && !bad.includes(r));
     if (good.length) addLog('success', `· 📷 Instagram прикреплён: ${good.map(r => `${r.accLabel} → ${r.igId}`).join(' · ')}`);
+  }
+
+  // v0.35.0: the "Instagram is not attached" window. State-driven (state.igModal) and drawn INSIDE the
+  // panel root, so it carries the theme variables and render() cannot wipe it. Plain text for the copy button.
+  function igModalSteps(kinds) {
+    const steps = [];
+    if (kinds.has('fallback')) steps.push('Ads Manager → кампания → адсет → <b>Placements</b>: включи <b>Instagram</b> (сейчас он снят — FB не принял объявления без IG-личности).');
+    steps.push('Объявление → <b>Identity → Instagram account</b>: выбери «Use Facebook Page» (или реальный IG) → <b>Publish</b>.');
+    return steps;
+  }
+  function igModalText() {
+    const m = state.igModal;
+    if (!m) return '';
+    const kinds = new Set(m.rows.map(r => r.kind));
+    const strip = s => s.replace(/<[^>]+>/g, '');
+    return [
+      'Instagram НЕ прикреплён — поставь руками.',
+      'Это первый залив с этой страницей на этом кабе: у профиля нет роли на странице и в кабе нет истории с Instagram — лаунчеру брать личность неоткуда.',
+      '',
+      ...m.rows.map(r => `• ${r.accLabel} (${r.accId})${r.campaignId ? ` · кампания ${r.campaignId}` : ''}${r.pageId ? ` · страница ${r.pageId}` : ''} — ${r.kind === 'fallback' ? `Instagram снят с плейсментов (${r.fbAdsets} адсет., ${r.fbAds} объяв.)` : r.kind === 'noident' ? `объявления без IG-личности (${r.ads})` : `FB выкинул IG ${r.igId} (${r.dropped})`}`),
+      '',
+      ...igModalSteps(kinds).map((s, i) => `${i + 1}. ${strip(s)}`),
+      'После этого следующий залив на этой странице в этом кабе возьмёт IG сам (из истории креативов каба).',
+    ].join('\n');
+  }
+  function igModalHtml() {
+    const m = state.igModal;
+    if (!m || !m.rows.length) return '';
+    const kinds = new Set(m.rows.map(r => r.kind));
+    const rowHtml = r => `
+      <div style="padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);margin-bottom:6px;font-size:12px">
+        <b>${esc(r.accLabel)}</b> <span style="color:var(--text-faint)">(${esc(r.accId)})${r.campaignId ? ` · кампания ${esc(r.campaignId)}` : ''}${r.pageId ? ` · страница ${esc(r.pageId)}` : ''}</span><br>
+        ${r.kind === 'fallback'
+          ? `<span style="color:var(--warn)">Instagram снят с плейсментов</span> — ${r.fbAdsets} адсет., ${r.fbAds} объяв. идут только на Facebook`
+          : r.kind === 'noident'
+            ? `<span style="color:var(--warn)">нет IG-личности</span> — ${r.ads} объяв. идут под именем Страницы, поле Instagram в Ads Manager пустое`
+            : `<span style="color:var(--warn)">FB выкинул IG ${esc(r.igId)}</span> в ${r.dropped} объяв.`}
+        ${r.noPageRole ? '<span style="color:var(--text-faint)"> · у профиля нет роли на странице</span>' : ''}
+      </div>`;
+    return `
+      <div id="fbl-ig-modal" style="position:absolute;top:0;left:0;right:0;bottom:0;z-index:60;background:rgba(0,0,0,.62);display:flex;align-items:center;justify-content:center;padding:24px">
+        <div style="max-width:660px;width:100%;max-height:92%;overflow:auto;background:var(--surface);border:1px solid var(--warn);border-radius:var(--r);padding:18px 20px">
+          <div style="font-size:16px;font-weight:700;color:var(--warn);margin-bottom:8px">📷 Instagram не прикреплён — поставь руками</div>
+          <div style="font-size:12px;color:var(--text-dim);line-height:1.5;margin-bottom:10px">
+            Кампании залиты и работают, но <b>без Instagram-личности</b>. Это <b>первый залив с этой страницей на этом кабе</b>: у профиля нет роли на странице и в кабе нет истории с Instagram — лаунчеру взять личность неоткуда.
+          </div>
+          ${m.rows.map(rowHtml).join('')}
+          <div style="font-size:12px;margin:10px 0 4px"><b>Что сделать:</b></div>
+          <ol style="margin:0 0 10px 18px;padding:0;font-size:12px;line-height:1.6;color:var(--text-dim)">${igModalSteps(kinds).map(s => `<li>${s}</li>`).join('')}</ol>
+          <div style="font-size:11px;color:var(--text-faint);margin-bottom:12px">После этого следующий залив на этой странице в этом кабе возьмёт IG сам (из истории креативов каба) и запомнит его по странице.</div>
+          <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button id="fbl-ig-modal-copy" style="padding:6px 12px">📋 Скопировать</button>
+            <button id="fbl-ig-modal-close" style="padding:6px 16px;background:var(--accent);color:var(--on-accent);border-color:var(--accent)">Понятно</button>
+          </div>
+        </div>
+      </div>`;
   }
 
   // ─── UI PANEL ───────────────────────────────────────────────────────────
@@ -4742,7 +4874,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.34.0</span></span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.35.0</span></span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -4937,7 +5069,12 @@
           <input type="checkbox" id="fbl-use-page-as-actor" ${state.usePageAsActor ? 'checked' : ''}>
           <span><b style="color:${state.usePageAsActor ? 'var(--warn)' : 'inherit'}">⛔ FB-only — БЕЗ Instagram</b> <span style="color:var(--text-faint)">— только вместе с «Instagram убран из Placements»: шлёт один page_id, instagram_user_id НЕ отправляется. С Instagram в плейсментах FB отвечает 1772103, поэтому галка тогда <b>не действует</b> (лестница IG работает как обычно). Не сохраняется в пресетах. ${state.usePageAsActor ? (igTargeted() ? '<b style="color:var(--warn)">⚠ включено, но Instagram в плейсментах — игнорируется</b>' : '<b style="color:var(--warn)">⚠ действует — IG выключен</b>') : ''}</span></span>
         </label>
-        ${!fbOnlyActive() ? `<div style="font-size:11px;color:var(--text-faint);margin-top:3px;padding-left:22px">лаунчер ищет IG страницы по лестнице (page IG → account actor → PBIA токеном страницы → история каба) и шлёт его явным <b>instagram_user_id</b> — так же, как залив ARIA. Нашёл → крутится в FB и IG под именем Страницы. Не нашёл → <b>use_page_actor_override</b>; если FB и это не примет (1772103) — каб останавливается с подсказкой.</div>` : ''}
+        ${!fbOnlyActive() ? `<div style="font-size:11px;color:var(--text-faint);margin-top:3px;padding-left:22px">лаунчер ищет IG страницы по лестнице (page IG → account actor → PBIA токеном страницы → история каба) и шлёт его явным <b>instagram_user_id</b> — так же, как залив ARIA. Нашёл → крутится в FB и IG под именем Страницы. Не нашёл → <b>use_page_actor_override</b>; если FB и это не примет (1772103) — адсет уходит на плейсменты Facebook (галка ниже) и в конце появляется окно «поставь Instagram руками».</div>` : ''}
+        ${!fbOnlyActive() ? `
+        <label style="display:flex;align-items:flex-start;gap:6px;margin-top:6px;cursor:pointer">
+          <input type="checkbox" id="fbl-ig-fallback" ${state.igFallbackFb ? 'checked' : ''} style="margin-top:2px;width:auto;flex:none">
+          <span><b>↪ Нет IG и FB отказал (1772103) → залить на плейсменты Facebook</b> <span style="color:var(--text-faint)">— залив пройдёт без Instagram (адсет переводится на Facebook-плейсменты), в конце появится окно «поставь Instagram руками». Снято — каб останавливается с подсказкой.</span></span>
+        </label>` : ''}
         <label style="margin-top:5px;${fbOnlyActive() ? 'opacity:.4;pointer-events:none' : ''}">Instagram Account ID <span style="color:var(--text-faint)">— empty = auto-fetch from Page's connected IG${isMulti ? ' · ⚠ same ID for all accounts' : ''}</span></label>
         <input type="text" id="fbl-ig-id" value="${esc(state.instagramOverride)}" placeholder="leave empty → launcher auto-detects from Page · or paste IG actor ID to override"${fbOnlyActive() ? ' disabled style="opacity:.4"' : ''}>
         ${(() => {
@@ -5414,6 +5551,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       }</div>
         </div>
       </div>
+      ${igModalHtml()}
     `;
 
     bindEvents();
@@ -5458,6 +5596,14 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       render();
     });
     document.getElementById('fbl-log-copy')?.addEventListener('click', copyJournal);
+    // v0.35.0: "Instagram not attached" window
+    document.getElementById('fbl-ig-modal-close')?.addEventListener('click', () => { state.igModal = null; render(); });
+    document.getElementById('fbl-ig-modal-copy')?.addEventListener('click', async e => {
+      const btn = e.currentTarget;
+      try { await navigator.clipboard.writeText(igModalText()); btn.textContent = '✓ Скопировано'; }
+      catch { btn.textContent = '⚠ не вышло — выдели текст вручную'; }
+    });
+    document.getElementById('fbl-ig-fallback')?.addEventListener('change', e => { state.igFallbackFb = e.target.checked; render(); });
     document.getElementById('fbl-csv')?.addEventListener('change', e => {
       const f = e.target.files?.[0];
       if (f) onCsvFile(f);
