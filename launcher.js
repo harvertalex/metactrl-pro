@@ -2889,11 +2889,6 @@
     };
     // v0.36.0: media picker shows both videos and images; selected value = "v:id" or "i:hash"
     const mediaPickerSel = r => r.videoId ? `v:${r.videoId}` : (r.imageHash ? `i:${r.imageHash}` : '');
-    const mediaPickerOpts = media.map(m => {
-      const val = m.type === 'video' ? `v:${m.id}` : `i:${m.id}`;
-      const icon = m.type === 'video' ? '🎬' : '🖼';
-      return `<option value="${esc(val)}" ${val === mediaPickerSel(r) ? 'selected' : ''}>${icon} ${esc(m.name)}</option>`;
-    }).join('');
     const rowHtml = (r, i) => {
       const curSel = mediaPickerSel(r);
       const uploads = media.filter(m => m.source === 'upload');
