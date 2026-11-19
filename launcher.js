@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.36.2 — Bookmarklet
+ * MetaLaunch PRO v0.36.3 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -692,7 +692,28 @@
   const esc = v => String(v ?? '').replace(/[&<>"']/g, m => ({
     '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
   }[m]));
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  // v0.36.2: Worker-based timer — immune to Chrome's background-tab throttling
+  // (setTimeout in a hidden tab → 1/sec, then 1/min after 5 min; Worker timers are exempt).
+  // Falls back to setTimeout when CSP blocks Blob Workers.
+  let _timerWorker = null;
+  let _twSeq = 0;
+  const _twCbs = new Map();
+  try {
+    const blob = new Blob([
+      'self.onmessage=function(e){setTimeout(function(){self.postMessage(e.data)},e.data.ms)};'
+    ], { type: 'application/javascript' });
+    _timerWorker = new Worker(URL.createObjectURL(blob));
+    _timerWorker.onmessage = e => { const cb = _twCbs.get(e.data.id); if (cb) { _twCbs.delete(e.data.id); cb(); } };
+  } catch (_) { /* CSP / sandbox — fall through to setTimeout */ }
+  const sleep = ms => new Promise(resolve => {
+    if (_timerWorker) {
+      const id = ++_twSeq;
+      _twCbs.set(id, resolve);
+      _timerWorker.postMessage({ id, ms });
+    } else {
+      setTimeout(resolve, ms);
+    }
+  });
   const stripPfx = v => String(v || '').replace(/^[a-z]+:/, '');
   // v0.26.0: jittered pacing — de-robotize fixed sleeps (FB reads even cadence as automation).
   const jitter = (base, spread = 0.5) => base + Math.floor(Math.random() * base * spread);
@@ -4985,7 +5006,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.36.2</span></span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.36.3</span></span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
