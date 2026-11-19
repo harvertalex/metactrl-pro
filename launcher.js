@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.35.0 — Bookmarklet
+ * MetaLaunch PRO v0.36.0 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -182,6 +182,12 @@
  *          (4) multi-account launch logs a ⚠ that the ONE pixel (step 4/CSV) is applied to ALL
  *              accounts — promoted_object and {pixel_id} alike.
  *          (5) collapsible "macros reference" under step 8 — all launcher tokens + FB macros.
+ *
+ * v0.36.0: (1) картинки в языковом режиме (6.1): загруженные image hash + ручной ввод, валидация (нельзя
+ *          мешать видео и картинки), feed_spec с SINGLE_IMAGE/images/image_label, пресеты, relink, план.
+ *          (2) память загруженных крео (localStorage fbl_media_memory_v1, до 200 записей): после загрузки
+ *          видео/картинки хеш и имя запоминаются, в дропдауне языков — optgroup «Ранее загруженные» рядом
+ *          с текущими. Автодетект типа: 32-hex → imageHash, иначе videoId.
  *
  * v0.35.0: первый залив с новой страницей на кабе, где IG взять неоткуда (нет роли на странице, нет истории):
  *          FB отвечает 1772103 → адсет сам переводится на плейсменты Facebook (POST /<adset> targeting —
@@ -616,10 +622,10 @@
     creativesError: '',
     // v0.33.0: multi-language ad — one ad per adset whose creative is chosen BY VIEWER LANGUAGE
     // (Meta "Multi-Language Ads": asset_feed_spec + optimization_type LANGUAGE). Link/CTA/URL tags
-    // stay shared (one offer for every language); per language: video + title + body.
+    // stay shared (one offer for every language); per language: video OR image + title + body.
     langMode: false,
     langAdName: '',           // '' → "LANG"
-    langRows: [],             // [{ key:'6', name:'English (US)', videoId:'', title:'', body:'' }] — videoId = PRIMARY cab's id (remapped per cab at launch)
+    langRows: [],             // [{ key:'6', name:'English (US)', videoId:'', imageHash:'', title:'', body:'' }] — videoId OR imageHash per language (PRIMARY cab's, remapped per cab at launch)
     langDefault: 0,           // index of the row that gets is_default (FB requires exactly one)
     langLocales: null,        // [{key,name}] from /search?type=adlocale — loaded on demand, once per session
     langLocalesBusy: false,
@@ -1310,6 +1316,29 @@
     }
   }
 
+  // ─── MEDIA MEMORY (localStorage, v0.36.0) ─────────────────────────────
+  // Remembers uploaded creative hashes/ids across sessions so the language-mode picker
+  // can offer them without re-uploading. Capped at 200 entries, LRU.
+  const MEDIA_MEM_KEY = 'fbl_media_memory_v1';
+  const MEDIA_MEM_MAX = 200;
+  function loadMediaMemory() { try { return JSON.parse(localStorage.getItem(MEDIA_MEM_KEY) || '[]') || []; } catch { return []; } }
+  function saveMediaMemory(arr) { try { localStorage.setItem(MEDIA_MEM_KEY, JSON.stringify(arr.slice(0, MEDIA_MEM_MAX))); } catch {} }
+  function rememberMedia(uploads) {
+    const mem = loadMediaMemory();
+    const existing = new Set(mem.map(m => m.id));
+    let added = 0;
+    for (const u of uploads) {
+      if (u.status !== 'done') continue;
+      const id = u.type === 'video' ? String(u.videoId || '') : String(u.imageHash || '');
+      if (!id || existing.has(id)) continue;
+      mem.unshift({ id, name: u.name || '', type: u.type, at: Date.now() });
+      existing.add(id);
+      added++;
+    }
+    if (added) saveMediaMemory(mem);
+  }
+  function clearMediaMemory() { try { localStorage.removeItem(MEDIA_MEM_KEY); } catch {} }
+
   // v0.7.0: single source of truth for what a preset persists (shared by manual + auto save).
   // Excludes creatives (need fresh hashes) and target accounts (chosen per session) by design.
   function collectSettings() {
@@ -1369,14 +1398,15 @@
       // via the "restore accounts" checkbox — a preset built for 5 cabs should not
       // silently retarget a session the operator opened for one).
       targetAccIds: state.targetAccIds.slice(),
-      // v0.33.1: language table (step 6.1). videoName = file name of the upload the row points at:
+      // v0.33.1: language table (step 6.1). videoName/imageName = file name of the upload the row points at:
       // uploads are wiped on preset load, so after a fresh upload the row re-links by this name.
       langMode: state.langMode,
       langAdName: state.langAdName,
       langDefault: state.langDefault,
       langRows: state.langRows.map(r => ({
-        key: r.key, name: r.name, videoId: r.videoId, title: r.title, body: r.body, link: r.link || '',
+        key: r.key, name: r.name, videoId: r.videoId, imageHash: r.imageHash || '', title: r.title, body: r.body, link: r.link || '',
         videoName: (state.uploads || []).find(u => u.type === 'video' && String(u.videoId) === String(r.videoId))?.name || r.videoName || '',
+        imageName: (state.uploads || []).find(u => u.type === 'image' && String(u.imageHash) === String(r.imageHash))?.name || r.imageName || '',
       })),
     };
   }
@@ -1500,8 +1530,9 @@
     state.langAdName = s.langAdName || '';
     state.langRows = Array.isArray(s.langRows)
       ? s.langRows.map(r => ({
-          key: String(r?.key ?? ''), name: String(r?.name ?? ''), videoId: String(r?.videoId ?? ''),
-          title: String(r?.title ?? ''), body: String(r?.body ?? ''), link: String(r?.link ?? ''), videoName: String(r?.videoName ?? ''),
+          key: String(r?.key ?? ''), name: String(r?.name ?? ''), videoId: String(r?.videoId ?? ''), imageHash: String(r?.imageHash ?? ''),
+          title: String(r?.title ?? ''), body: String(r?.body ?? ''), link: String(r?.link ?? ''),
+          videoName: String(r?.videoName ?? ''), imageName: String(r?.imageName ?? ''),
         }))
       : [];
     state.langDefault = Number.isInteger(s.langDefault) && s.langDefault >= 0 && s.langDefault < state.langRows.length ? s.langDefault : 0;
@@ -2026,21 +2057,28 @@
       state.creativesParsed = parseCreatives(json);
     }
     state.uploading = false;
-    // v0.33.1: language rows restored from a preset carry the file name of their video — point them at the fresh upload.
-    if (state.langRows.some(r => r.videoName)) {
+    // v0.33.1: language rows restored from a preset carry the file name of their media — point them at the fresh upload.
+    if (state.langRows.some(r => r.videoName || r.imageName)) {
       let relinked = 0;
       for (const r of state.langRows) {
-        if (!r.videoName) continue;
-        const u = [...state.uploads].reverse().find(x => x.type === 'video' && x.videoId && x.name === r.videoName);
-        if (u && String(u.videoId) !== String(r.videoId)) { r.videoId = String(u.videoId); relinked++; }
+        if (r.videoName) {
+          const u = [...state.uploads].reverse().find(x => x.type === 'video' && x.videoId && x.name === r.videoName);
+          if (u && String(u.videoId) !== String(r.videoId)) { r.videoId = String(u.videoId); relinked++; }
+        }
+        if (r.imageName) {
+          const u = [...state.uploads].reverse().find(x => x.type === 'image' && x.imageHash && x.name === r.imageName);
+          if (u && String(u.imageHash) !== String(r.imageHash)) { r.imageHash = String(u.imageHash); relinked++; }
+        }
       }
-      if (relinked) addLog('info', `🌐 Языки: ${relinked} видео подтянуто по имени файла из пресета.`);
+      if (relinked) addLog('info', `🌐 Языки: ${relinked} медиа подтянуто по имени файла из пресета.`);
     }
     const okCount = state.uploads.filter(u => u.status === 'done').length;
     const partialCount = state.uploads.filter(u => u.status === 'partial').length;
     const pairedSuffix = pairedCount ? ` · ${pairedCount} thumbnail${pairedCount > 1 ? 's' : ''} paired` : '';
     const accSuffix = accIds.length > 1 ? ` across ${accIds.length} accounts` : '';
     const partialSuffix = partialCount ? ` · ${partialCount} partial` : '';
+    // v0.36.0: remember successful uploads for the language-mode media picker (cross-session)
+    rememberMedia(state.uploads);
     // v0.27.0: goes to the LIVE FEED rail (was: top status bar, overwritten by the next message)
     logEvent(okCount ? (partialCount ? 'warning' : 'success') : 'error',
       `Upload done: ${okCount}/${files.length} fully successful${partialSuffix}${accSuffix}${pairedSuffix}.`);
@@ -2658,7 +2696,7 @@
     render();
   }
 
-  function newLangRow() { return { key: '', name: '', videoId: '', title: '', body: '', link: '' }; }
+  function newLangRow() { return { key: '', name: '', videoId: '', imageHash: '', title: '', body: '', link: '' }; }
 
   // v0.34.0: the shared destination (step 7 / CSV Link column) exists; language rows may override it.
   function langHasSharedLink() { return !!state.linkOverride || state.rows.some(r => r['Link']); }
@@ -2670,10 +2708,23 @@
     return !!(p && p.mode === 'ads' && p.items.length && p.items.every(it => it.link));
   }
 
-  // Videos uploaded in step 6 (primary cab's ids) — the per-language pick list.
-  function langVideoOptions() {
-    return (state.uploads || []).filter(u => u.type === 'video' && u.videoId).map(u => ({ id: String(u.videoId), name: u.name }));
+  // Media uploaded in step 6 (primary cab's ids) + remembered from past sessions — the per-language pick list.
+  // v0.36.0: images (hash) alongside videos (id). Current uploads first, then memory (deduplicated).
+  function langMediaOptions() {
+    const current = (state.uploads || [])
+      .filter(u => (u.type === 'video' && u.videoId) || (u.type === 'image' && u.imageHash))
+      .map(u => u.type === 'video'
+        ? { id: String(u.videoId), name: u.name, type: 'video', source: 'upload' }
+        : { id: String(u.imageHash), name: u.name, type: 'image', source: 'upload' });
+    const seen = new Set(current.map(m => m.id));
+    const mem = loadMediaMemory()
+      .filter(m => m.id && !seen.has(m.id))
+      .map(m => ({ id: m.id, name: m.name || m.id, type: m.type || 'video', source: 'memory' }));
+    return [...current, ...mem];
   }
+  // Which media id a lang row carries (video or image — one at a time).
+  function langRowMediaId(r) { return String(r.videoId || r.imageHash || '').trim(); }
+  function langRowMediaType(r) { return r.imageHash ? 'image' : 'video'; }
 
   // What is wrong with the language setup; [] = good to go.
   function langIssues() {
@@ -2682,16 +2733,20 @@
     const out = [];
     if (rows.length < 2) out.push('нужно минимум 2 языка');
     const seen = new Set();
+    const types = new Set();
     rows.forEach((r, i) => {
       const tag = `#${i + 1} ${r.name || 'язык не выбран'}`;
       if (!r.key) out.push(`${tag}: выбери язык`);
       else if (seen.has(r.key)) out.push(`${tag}: язык уже есть выше`);
       if (r.key) seen.add(r.key);
-      if (!/^\d{8,20}$/.test(String(r.videoId || '').trim())) out.push(`${tag}: нет видео — выбери загруженное или вставь ID`);
+      const mid = langRowMediaId(r);
+      if (!mid) out.push(`${tag}: нет медиа — выбери загруженное или вставь video ID / image hash`);
+      else types.add(langRowMediaType(r));
       if (!String(r.body || '').trim()) out.push(`${tag}: нет body (основной текст)`);
       const own = String(r.link || '').trim();
       if (own && !/^(https?:\/\/|\{)/i.test(own)) out.push(`${tag}: ссылка должна начинаться с http(s)://`);
     });
+    if (types.size > 1) out.push('нельзя мешать видео и картинки — все строки одного типа');
     if (rows.length && (state.langDefault < 0 || state.langDefault >= rows.length)) out.push('не выбран язык по умолчанию');
     return out;
   }
@@ -2701,10 +2756,11 @@
     if (!state.langMode) return null;
     const rows = state.langRows;
     const dflt = rows[state.langDefault] || rows[0] || {};
+    const isImg = rows.some(r => r.imageHash);
     return {
       name: (state.langAdName || '').trim() || 'LANG',
-      imageHash: '',
-      videoId: String(dflt.videoId || rows.find(r => r.videoId)?.videoId || '').trim(),
+      imageHash: isImg ? String(dflt.imageHash || rows.find(r => r.imageHash)?.imageHash || '').trim() : '',
+      videoId: isImg ? '' : String(dflt.videoId || rows.find(r => r.videoId)?.videoId || '').trim(),
       thumbnailHash: null, title: null, body: null, cta: null,
       lang: { rows: rows.map(r => ({ ...r })), defaultIdx: state.langDefault },
     };
@@ -2729,45 +2785,66 @@
   //    language); ✓ one link entry labelled with all languages; ✓ one rule per language, exactly
   //    ONE is_default (without it FB: #100/2490266); ✗ NO video_data anchor in object_story_spec —
   //    FB rejects it next to a LANGUAGE feed (#100/1443048), so identity is page(+IG) only.
-  // Returns { feed } or { error } (a language's video not uploaded to this cab).
+  // Returns { feed } or { error } (a language's media not uploaded to this cab).
   // v0.34.0: a language may carry its OWN link (row.link, tokens resolved by resolveLink); empty = `link`.
   // Languages that end up on the same URL share ONE link_urls entry (all their labels on it), so a table
   // without own links builds exactly what v0.33 built. Not checked on the live API (no token here):
   // several link_urls entries each tied to its languages by link_url_label — the standard asset-customization shape.
+  // v0.36.0: images (SINGLE_IMAGE + images array) alongside videos. All rows must be the same type.
   async function buildLangFeed(lang, link, cta, accId, resolveLink) {
     const rows = lang.rows;
+    const isImageMode = rows.some(r => r.imageHash);
     const labelOf = r => `lang_${r.key}`;
     const urlOf = r => { const own = String(r.link || '').trim(); return own ? (resolveLink ? resolveLink(own) : own) : link; };
     const noLink = rows.find(r => !urlOf(r));
     if (noLink) return { error: `ссылка (${noLink.name || noLink.key}) пуста: задай её в строке языка или общую в шаге 7` };
-    const videoLabels = new Map();   // this cab's video id → [labels]
-    for (const r of rows) {
-      const m = remapCreativeForAccount('', String(r.videoId).trim(), accId);
-      if (m.remapFailed) return { error: `видео "${m.remapFailed}" (${r.name}) не загружено в этот каб` };
-      const vid = m.videoId || String(r.videoId).trim();
-      if (!videoLabels.has(vid)) videoLabels.set(vid, []);
-      videoLabels.get(vid).push(labelOf(r));
-    }
-    const videos = [];
-    for (const [vid, labels] of videoLabels) {
-      const thumb = await videoThumbUrl(vid);
-      videos.push({ video_id: vid, ...(thumb ? { thumbnail_url: thumb } : {}), adlabels: labels.map(name => ({ name })) });
-    }
     const lab = name => ({ name });
+    let mediaArray;
+    let mediaKey;   // 'videos' or 'images' — top-level key in the feed
+    let ruleLabelKey;  // 'video_label' or 'image_label' — key in each rule
+    if (isImageMode) {
+      mediaKey = 'images';
+      ruleLabelKey = 'image_label';
+      const imageLabels = new Map();
+      for (const r of rows) {
+        const hash = String(r.imageHash).trim();
+        const m = remapCreativeForAccount(hash, '', accId);
+        if (m.remapFailed) return { error: `картинка "${m.remapFailed}" (${r.name}) не загружена в этот каб` };
+        const h = m.imageHash || hash;
+        if (!imageLabels.has(h)) imageLabels.set(h, []);
+        imageLabels.get(h).push(labelOf(r));
+      }
+      mediaArray = [...imageLabels].map(([hash, labels]) => ({ hash, adlabels: labels.map(name => ({ name })) }));
+    } else {
+      mediaKey = 'videos';
+      ruleLabelKey = 'video_label';
+      const videoLabels = new Map();
+      for (const r of rows) {
+        const m = remapCreativeForAccount('', String(r.videoId).trim(), accId);
+        if (m.remapFailed) return { error: `видео "${m.remapFailed}" (${r.name}) не загружено в этот каб` };
+        const vid = m.videoId || String(r.videoId).trim();
+        if (!videoLabels.has(vid)) videoLabels.set(vid, []);
+        videoLabels.get(vid).push(labelOf(r));
+      }
+      mediaArray = [];
+      for (const [vid, labels] of videoLabels) {
+        const thumb = await videoThumbUrl(vid);
+        mediaArray.push({ video_id: vid, ...(thumb ? { thumbnail_url: thumb } : {}), adlabels: labels.map(name => ({ name })) });
+      }
+    }
     const titles = rows.filter(r => String(r.title || '').trim())
       .map(r => ({ text: String(r.title).trim(), adlabels: [lab(labelOf(r))] }));
     const bodies = rows.filter(r => String(r.body || '').trim())
       .map(r => ({ text: String(r.body).trim(), adlabels: [lab(labelOf(r))] }));
-    // A rule names ONE label per asset type; the video that carries that label is the language's video.
     const rules = rows.map((r, i) => ({
       ...(i === lang.defaultIdx ? { is_default: true } : {}),
       customization_spec: { locales: [Number(r.key)] },
-      video_label: lab(labelOf(r)),
+      [ruleLabelKey]: lab(labelOf(r)),
       ...(String(r.title || '').trim() ? { title_label: lab(labelOf(r)) } : {}),
       ...(String(r.body || '').trim() ? { body_label: lab(labelOf(r)) } : {}),
       link_url_label: lab(labelOf(r)),
     }));
-    const byUrl = new Map();   // final URL → [language labels]
+    const byUrl = new Map();
     for (const r of rows) {
       const u = urlOf(r);
       if (!byUrl.has(u)) byUrl.set(u, []);
@@ -2775,10 +2852,10 @@
     }
     const linkUrls = [...byUrl].map(([url, labels]) => ({ website_url: url, adlabels: labels.map(lab) }));
     const feed = {
-      ad_formats: ['SINGLE_VIDEO'],
+      ad_formats: [isImageMode ? 'SINGLE_IMAGE' : 'SINGLE_VIDEO'],
       call_to_action_types: [cta],
       optimization_type: 'LANGUAGE',
-      videos,
+      [mediaKey]: mediaArray,
       ...(titles.length ? { titles } : {}),
       bodies,
       link_urls: linkUrls,
@@ -2795,11 +2872,12 @@
     const own = state.langRows.filter(r => String(r.link || '').trim()).length;
     const linkNote = own ? ` · ссылки: ${own} своих${own < state.langRows.length ? ` + ${state.langRows.length - own} общая` : ''}` : '';
     const copiesNote = adCopiesCount() > 1 ? ` × ${adCopiesCount()} копий` : '';
-    return `<span style="color:var(--good)">✓ ${state.langRows.length} языков · default: ${esc(dflt?.name || '?')} · 1 объявление${copiesNote} на адсет${linkNote}</span>`;
+    const mediaType = state.langRows.some(r => r.imageHash) ? '🖼 картинки' : '🎬 видео';
+    return `<span style="color:var(--good)">✓ ${state.langRows.length} языков · ${mediaType} · default: ${esc(dflt?.name || '?')} · 1 объявление${copiesNote} на адсет${linkNote}</span>`;
   }
 
   function renderLangBlock() {
-    const vids = langVideoOptions();
+    const media = langMediaOptions();
     const locs = state.langLocales;
     const inp = 'padding:5px 7px;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:11px;box-sizing:border-box;width:100%;font-family:inherit';
     const langOptions = (selKey, selName) => {
@@ -2809,15 +2887,36 @@
         + `<optgroup label="Частые">${locs.filter(l => LANG_POPULAR.test(l.name)).map(o).join('')}</optgroup>`
         + `<optgroup label="Все языки">${locs.filter(l => !LANG_POPULAR.test(l.name)).map(o).join('')}</optgroup>`;
     };
-    const rowHtml = (r, i) => `
+    // v0.36.0: media picker shows both videos and images; selected value = "v:id" or "i:hash"
+    const mediaPickerSel = r => r.videoId ? `v:${r.videoId}` : (r.imageHash ? `i:${r.imageHash}` : '');
+    const mediaPickerOpts = media.map(m => {
+      const val = m.type === 'video' ? `v:${m.id}` : `i:${m.id}`;
+      const icon = m.type === 'video' ? '🎬' : '🖼';
+      return `<option value="${esc(val)}" ${val === mediaPickerSel(r) ? 'selected' : ''}>${icon} ${esc(m.name)}</option>`;
+    }).join('');
+    const rowHtml = (r, i) => {
+      const curSel = mediaPickerSel(r);
+      const uploads = media.filter(m => m.source === 'upload');
+      const remembered = media.filter(m => m.source === 'memory');
+      const optLine = (m, sel) => {
+        const val = m.type === 'video' ? `v:${m.id}` : `i:${m.id}`;
+        const icon = m.type === 'video' ? '🎬' : '🖼';
+        return `<option value="${esc(val)}" ${val === sel ? 'selected' : ''}>${icon} ${esc(m.name)}</option>`;
+      };
+      let mediaOpts = '';
+      if (uploads.length) mediaOpts += `<optgroup label="Загруженные">${uploads.map(m => optLine(m, curSel)).join('')}</optgroup>`;
+      if (remembered.length) mediaOpts += `<optgroup label="Ранее загруженные">${remembered.map(m => optLine(m, curSel)).join('')}</optgroup>`;
+      const rawId = langRowMediaId(r);
+      const idPlaceholder = r.imageHash ? 'или image hash' : 'или video ID / image hash';
+      return `
       <div class="fbl-lang-row" data-i="${i}" style="padding:8px;background:var(--bg);border:1px solid ${i === state.langDefault ? 'var(--accent-dim)' : 'var(--border)'};border-radius:6px;margin-bottom:6px">
         <div style="display:grid;grid-template-columns:minmax(140px,1.1fr) minmax(140px,1.2fr) minmax(110px,.8fr) auto auto;gap:6px;align-items:center">
           <select data-lf="key" style="${inp}">${langOptions(r.key, r.name)}</select>
           <select data-lf="pick" style="${inp}">
-            <option value="">— видео из загруженных —</option>
-            ${vids.map(v => `<option value="${esc(v.id)}" ${v.id === r.videoId ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}
+            <option value="">— медиа из загруженных —</option>
+            ${mediaOpts}
           </select>
-          <input id="fbl-lang-vid-${i}" data-lf="videoId" placeholder="или video ID" value="${esc(r.videoId)}" style="${inp};font-family:var(--font-mono)">
+          <input id="fbl-lang-mid-${i}" data-lf="mediaId" placeholder="${esc(idPlaceholder)}" value="${esc(rawId)}" style="${inp};font-family:var(--font-mono)">
           <label title="Языковая версия по умолчанию: её видят все, чей язык не входит в список" style="display:flex;align-items:center;gap:4px;font-size:11px;white-space:nowrap;cursor:pointer">
             <input type="radio" name="fbl-lang-default" data-lf="default" ${i === state.langDefault ? 'checked' : ''}> default
           </label>
@@ -2827,15 +2926,16 @@
         <input id="fbl-lang-title-${i}" data-lf="title" placeholder="Title (заголовок) — по желанию" value="${esc(r.title)}" style="${inp};margin-top:6px">
         <textarea id="fbl-lang-body-${i}" data-lf="body" placeholder="Body (основной текст) *" style="${inp};margin-top:6px;min-height:46px;resize:vertical">${esc(r.body)}</textarea>
       </div>`;
+    };
     return `
       <div class="field" style="${state.langMode ? 'border-left-color:var(--accent)' : ''}">
         <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">
           <input type="checkbox" id="fbl-lang-mode" ${state.langMode ? 'checked' : ''} style="margin-top:2px;width:auto;flex:none">
-          <span>6.1 🌐 Залив по языкам <span style="color:var(--text-faint)">— одно объявление: под каждый язык своё видео, title и body. Кнопка и метки — общие (шаг 7); ссылка — общая (шаг 7) или своя на язык (поле в строке). FB показывает креатив по языку зрителя.</span></span>
+          <span>6.1 🌐 Залив по языкам <span style="color:var(--text-faint)">— одно объявление: под каждый язык своё видео или картинку, title и body. Кнопка и метки — общие (шаг 7); ссылка — общая (шаг 7) или своя на язык (поле в строке). FB показывает креатив по языку зрителя.</span></span>
         </label>
         ${state.langMode ? `
         <div id="fbl-lang-rows" style="margin-top:8px">
-          <div style="font-size:10px;color:var(--text-faint);margin-bottom:6px">Пока режим включён, JSON креативов из шага 6 не используется: на каждый адсет уходит 1 объявление из строк ниже. Видео берутся из загруженных в шаге 6 (или вставь video ID).</div>
+          <div style="font-size:10px;color:var(--text-faint);margin-bottom:6px">Пока режим включён, JSON креативов из шага 6 не используется: на каждый адсет уходит 1 объявление из строк ниже. Медиа берутся из загруженных в шаге 6 (или вставь video ID / image hash).</div>
           <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
             <input id="fbl-lang-adname" data-lf="adname" placeholder="Имя объявления (пусто = LANG)" value="${esc(state.langAdName)}" style="${inp};max-width:260px">
             ${state.langLocalesBusy ? '<span style="font-size:11px;color:var(--text-faint)">⏳ загружаю список языков…</span>' : ''}
@@ -2844,7 +2944,7 @@
           ${state.langRows.map(rowHtml).join('')}
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <button data-lf="add">＋ Добавить язык</button>
-            ${vids.length ? '' : '<span style="font-size:11px;color:var(--warn)">загруженных видео нет — загрузи файлы в шаге 6 или вставь video ID</span>'}
+            ${media.length ? '' : '<span style="font-size:11px;color:var(--warn)">загруженных медиа нет — загрузи файлы в шаге 6 или вставь video ID / image hash</span>'}
           </div>
           <div id="fbl-lang-status" style="font-size:11px;margin-top:8px">${langStatusHtml()}</div>
           <div style="font-size:10px;color:var(--text-faint);margin-top:4px">Зрителю с языком вне списка показывается версия «default». Язык «All» (например Portuguese (All)) покрывает все регионы языка.</div>
@@ -4821,7 +4921,7 @@
         ${plan.adsMode && plan.adCopies > 1 ? `<div style="color:var(--good)">🔁 копии: каждый креатив × <b>${plan.adCopies}</b> → до <b>${plan.maxAdsPerAdset}</b> объявлений в адсете (структура 1-${plan.adsetCount}-${plan.maxAdsPerAdset})${plan.maxAdsPerAdset > 50 ? ' <b style="color:var(--crit)">⚠ FB: максимум 50 в адсете</b>' : ''}</div>` : ''}
         <div>Pixel: <b style="color:${pixelValid && pixelInAccount ? 'var(--good)' : 'var(--crit)'}">${esc(effPixel || 'MISSING')}</b> ${state.pixelOverride ? '<span style="color:var(--text-faint)">(override)</span>' : '<span style="color:var(--text-faint)">(from CSV)</span>'} ${!pixelValid && effPixel ? '<span style="color:var(--crit)">⚠ invalid format</span>' : ''} ${pixelValid && state.pixelsList.length && !pixelInAccount ? '<span style="color:var(--crit)">⚠ not in this account</span>' : ''}</div>
         ${plan.adsMode ? (state.langMode
-          ? `<div style="color:var(--good)">🌐 языки: каждый адсет получает 1 объявление «${esc(plan.adsModeItems[0].name)}» · ${state.langRows.length} языков (asset_feed_spec, CSV Ad Name/Image Hash/Video ID игнорируются)</div>`
+          ? `<div style="color:var(--good)">🌐 языки: каждый адсет получает 1 объявление «${esc(plan.adsModeItems[0].name)}» · ${state.langRows.length} языков · ${state.langRows.some(r => r.imageHash) ? '🖼 картинки' : '🎬 видео'} (asset_feed_spec, CSV Ad Name/Image Hash/Video ID игнорируются)</div>`
           : `<div style="color:var(--good)">⚡ ads-mode: each adset gets ${plan.adsModeItems.length} new ads from creatives JSON (CSV Ad Name/Image Hash/Video ID ignored)</div>`) : ''}
         ${plan.sacList.length ? `<div style="color:var(--warn)">SAC: <b>${esc(plan.sacList[0])}</b> (region-targeting disabled)</div>` : ''}
       </div>` : '';
@@ -4874,7 +4974,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.35.0</span></span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.36.0</span></span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
@@ -5999,7 +6099,12 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
         if (!r) return;
         if (f === 'title') r.title = e.target.value;
         else if (f === 'body') r.body = e.target.value;
-        else if (f === 'videoId') r.videoId = e.target.value.trim();
+        else if (f === 'mediaId') {
+          // v0.36.0: manual input — detect type: 32-hex = image hash, numeric = video ID
+          const v = e.target.value.trim();
+          if (/^[0-9a-f]{32}$/i.test(v)) { r.imageHash = v; r.videoId = ''; }
+          else { r.videoId = v; r.imageHash = ''; }
+        }
         else if (f === 'link') r.link = e.target.value.trim();
         else return;
         refreshStatus();
@@ -6015,7 +6120,10 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
           r.key = e.target.value;
           r.name = l ? l.name : '';
         } else if (f === 'pick') {
-          if (e.target.value) r.videoId = e.target.value;
+          // v0.36.0: value = "v:<videoId>" or "i:<imageHash>"
+          const pv = e.target.value;
+          if (pv.startsWith('v:')) { r.videoId = pv.slice(2); r.imageHash = ''; }
+          else if (pv.startsWith('i:')) { r.imageHash = pv.slice(2); r.videoId = ''; }
         } else if (f === 'default') {
           state.langDefault = i;
         } else return;
@@ -6024,7 +6132,7 @@ Single:     abc123 (applied to all ads)' style="width:100%;min-height:90px;paddi
       // Leaving the block (not moving between its own fields) refreshes the LAUNCH button reason.
       langBox.addEventListener('focusout', e => {
         if (e.relatedTarget && langBox.contains(e.relatedTarget)) return;
-        if (['title', 'body', 'videoId', 'link'].includes(e.target.dataset?.lf)) render();
+        if (['title', 'body', 'mediaId', 'link'].includes(e.target.dataset?.lf)) render();
       });
       langBox.addEventListener('click', e => {
         const b = e.target.closest('button[data-lf]');
