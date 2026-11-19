@@ -1,5 +1,5 @@
 /* ===========================================================================
- * MetaLaunch PRO v0.36.1 — Bookmarklet
+ * MetaLaunch PRO v0.36.2 — Bookmarklet
  *
  * Builds & launches FB Ads Manager campaigns — in-panel or from CSV — through Marketing API (no bulk-upload).
  * Supports: multi-adset (1×M×N), CBO/ABO budget, Special Ad Categories (Financial, etc.),
@@ -2832,16 +2832,31 @@
         mediaArray.push({ video_id: vid, ...(thumb ? { thumbnail_url: thumb } : {}), adlabels: labels.map(name => ({ name })) });
       }
     }
-    const titles = rows.filter(r => String(r.title || '').trim())
-      .map(r => ({ text: String(r.title).trim(), adlabels: [lab(labelOf(r))] }));
-    const bodies = rows.filter(r => String(r.body || '').trim())
-      .map(r => ({ text: String(r.body).trim(), adlabels: [lab(labelOf(r))] }));
+    // v0.36.2: AM requires every asset type (titles, bodies, descriptions) to have an entry per
+    // language, and every rule to reference the same set of label keys — otherwise the Manage
+    // Languages editor doesn't render. Fallback: default language's text when a row is empty.
+    const dfltRow = rows[lang.defaultIdx] || rows[0] || {};
+    const dfltTitle = String(dfltRow.title || '').trim();
+    const dfltBody = String(dfltRow.body || '').trim();
+    const titles = rows.map(r => ({
+      text: String(r.title || '').trim() || dfltTitle || ' ',
+      adlabels: [lab(labelOf(r))],
+    }));
+    const bodies = rows.map(r => ({
+      text: String(r.body || '').trim() || dfltBody || ' ',
+      adlabels: [lab(labelOf(r))],
+    }));
+    const descriptions = rows.map(r => ({
+      text: String(r.description || '').trim() || ' ',
+      adlabels: [lab(labelOf(r))],
+    }));
     const rules = rows.map((r, i) => ({
       ...(i === lang.defaultIdx ? { is_default: true } : {}),
       customization_spec: { locales: [Number(r.key)] },
       [ruleLabelKey]: lab(labelOf(r)),
-      ...(String(r.title || '').trim() ? { title_label: lab(labelOf(r)) } : {}),
-      ...(String(r.body || '').trim() ? { body_label: lab(labelOf(r)) } : {}),
+      title_label: lab(labelOf(r)),
+      body_label: lab(labelOf(r)),
+      description_label: lab(labelOf(r)),
       link_url_label: lab(labelOf(r)),
     }));
     const byUrl = new Map();
@@ -2856,8 +2871,9 @@
       call_to_action_types: [cta],
       optimization_type: 'LANGUAGE',
       [mediaKey]: mediaArray,
-      ...(titles.length ? { titles } : {}),
+      titles,
       bodies,
+      descriptions,
       link_urls: linkUrls,
       asset_customization_rules: rules,
     };
@@ -4969,7 +4985,7 @@
     const railStatusWord = ledClass === 'err' ? 'ALERT' : ledClass === 'warn' ? 'STANDBY' : 'ONLINE';
     panel.innerHTML = `
       <h2>
-        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.36.1</span></span>
+        <span class="fbl-title"><span class="fbl-led ${ledClass}"></span>MetaLaunch PRO <span style="color:var(--text-faint);font-weight:400">// v0.36.2</span></span>
         <button class="close" id="fbl-close" title="Close">×</button>
       </h2>
       <div class="fbl-cols">
